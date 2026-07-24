@@ -468,6 +468,7 @@
     {
         Store.OnChanged += HandleStateChanged;
         Nav.LocationChanged += OnLocationChanged;
+        ToolsApi.Changed += HandleToolsChanged;
         PortalLoad.OnReadyChanged += HandleReadyChanged;
         UpdateStatus.StatusChanged += HandleStateChanged;
         ExtensionFeatures.OnChanged += HandleStateChanged;
@@ -995,6 +996,7 @@
     {
         Store.OnChanged -= HandleStateChanged;
         Nav.LocationChanged -= OnLocationChanged;
+        ToolsApi.Changed -= HandleToolsChanged;
         PortalLoad.OnReadyChanged -= HandleReadyChanged;
         UpdateStatus.StatusChanged -= HandleStateChanged;
         ExtensionFeatures.OnChanged -= HandleStateChanged;
@@ -1061,6 +1063,15 @@
                 .ToList();
         }
     }
+
+    // The management UI (#2235) mutates tools through the same ToolsApiClient the nav reads from,
+    // so a save/delete raises Changed and the Tools nav section repaints immediately rather than
+    // waiting for a full page reload.
+    private void HandleToolsChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadToolsAsync();
+        StateHasChanged();
+    });
 
     private bool IsToolActive(string toolId)
     {
