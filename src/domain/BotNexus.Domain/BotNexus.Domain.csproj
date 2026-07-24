@@ -4,4 +4,12 @@
     <PackageReference Include="Vogen" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The dependency-free conversation/channel wire enums live in BotNexus.Domain.Wire so the
+         Blazor WebAssembly client can share this exact declaration without referencing this
+         assembly, which pulls Vogen.SharedTypes into the browser payload at runtime. See #2329.
+         Types here keep using them as if they were local: same namespace, no using churn. -->
+    <ProjectReference Include="..\BotNexus.Domain.Wire\BotNexus.Domain.Wire.csproj" />
+  </ItemGroup>
+
 </Project>
