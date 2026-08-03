@@ -5,6 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] - 2026-08-03
+
+### ✨ Features
+
+- **gateway:** Make ask_user a durable resumable checkpoint (#2290)
+- **#2636:** Emit trailguide from init via shared defaults (#2704)
+- **extensions:** Add plugin manifest and marketplace JSON Schema with validating parser (#2708)
+- **#2692:** Hide internal conversations from the activity dashboard (#2721)
+
+### 🐛 Bug Fixes
+
+- **#2712:** Serialise the mobile chat timeline snapshot seam (#2713)
+- **#2631:** Revert #2678, drop ChannelKey.Observer signalr literal (#2702)
+- **subagent:** Apply model/apiProvider overrides to the child descriptor (#2660)
+- **#2677:** Promote one shared subagentstatus terminal predicate (#2693)
+- **#2650:** Add an explicit write grant for sub-agent paths (#2719)
+- **#2608:** Skip indexing sessions whose store location was reclaimed (#2698)
+- **#2707:** Make wasm build-output fence deterministic (#2711)
+- **#2671:** Validate cron failure-alert target at every authoring seam (#2697)
+- **#2670:** Bound cron scheduler phase 2 concurrency (#2720)
+- **#2649:** Validate agent apiProvider against the model registry (#2661)
+- **#2632:** Sandbox test harnesses against ambient git redirect (#2694)
+- **#2706:** Adopt tri-state inheritance in extension config merger (#2715)
+- **#2691:** State loopback/private-range refusal in web_fetch description (#2716)
+- **#2522:** Plan compaction cuts in the trigger token units (#2717)
+- **#2690:** Name the wrong input shape in edit diagnostics (#2718)
+- **#2705:** Preserve explicit nulls across whole-document writes (#2710)
+- **#2731:** Contain channel background-service faults at the channel boundary (#2737)
+- **#2491:** Start the e2e fixture past the assistant collision (#2738)
+
+### 📖 Documentation
+
+- Daily documentation grooming 2026-08-02 (#2730)
+
+### 🔨 Refactor
+
+- **#2614:** Route both transports through one tool-audit sink (#2714)
+
+### 🧪 Testing
+
+- **#2701:** Fence [ConfigField] coverage across the config graph (#2703)
+
+## [0.41.0] - 2026-08-01
+
+### ✨ Features
+
+- **#2619:** Surface conversation pin state on the activity dashboard (#2663)
+- **#2613:** Carry the tool timeline through the blocking boundary (#2695)
+- **#2122:** Add webhook section, collapsible groups and header counts (#2696)
+
+### 🐛 Bug Fixes
+
+- **scripts:** Classify cancelled and timed-out CI checks as stuck (#2659)
+- **#2633:** Observe spawn failures and stop paging on healthy faults (#2664)
+- **#2666:** Exclude bin/obj from traversal project globs (#2667)
+- **#2665:** Serialise gateway host tests against ConfigPath env mutation (#2668)
+- **#2669:** Redact credential query parameters in provider request URL logs (#2673)
+- **#2631:** Make the portal an unconditional fan-out sink (#2678)
+- **#2485:** Warn on model input-modality narrowing (#2679)
+
+### 📖 Documentation
+
+- Daily documentation grooming 2026-08-01 (#2676)
+
+### 🧪 Testing
+
+- **#2651:** Pin fixture git identity and fence mutating git in tests (#2662)
+
+## [0.40.0] - 2026-08-01
+
+### ✨ Features
+
+- **#2121:** Carry the minting source id on conversation provenance (#2609)
+- **#2557:** Add opt-in cron job failure alerts (#2594)
+- **config:** Additive bundled-agent startup reconciliation (#2635) (#2642)
+- **#2634:** Add cron job one-shot disposition and expiry instant (#2652)
+
+### 🐛 Bug Fixes
+
+- **#2591:** Stop the portal service worker pinning a stale bundle (#2593)
+- Reject unbalanced brackets in config key paths (#2622)
+- **#2606:** Document satellite Capabilities as display-only, add fence (#2620)
+- **#2131:** Retry conversation saves in todo and ask_user tools (#2584)
+- **#2462:** Gate cron command jobs through an authorization seam (#2599)
+- **#2447:** Surface channel startup health for degraded adapters (#2600)
+- **#2624:** Reconnect desktop portal indefinitely after terminal close (#2626)
+- **#2625:** Make mobile reconnect actually recover after a restart (#2629)
+- **gateway:** Enforce sub-agent maxTurns and report TurnsUsed (#2657)
+- **razor:** Disambiguate @section variable expressions from directive (#2630)
+
+### 📖 Documentation
+
+- Daily documentation grooming 2026-07-31 (#2612)
+
+### 🧪 Testing
+
+- **architecture:** Fence Razor reserved directive keywords used as bare dotted expressions (#2655)
+
+### 🔧 CI/Build
+
+- **#2513:** Bound every workflow job with timeout-minutes (#2583)
+
 ## [0.39.0] - 2026-07-31
 
 ### ✨ Features
@@ -3558,6 +3660,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session log for loop alignment & UI fix
 - Log session-switching design review orchestration, decisions, and session metadata
 
+[0.42.0]: https://github.com/sytone/botnexus/compare/v0.41.0...v0.42.0
+[0.41.0]: https://github.com/sytone/botnexus/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/sytone/botnexus/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/sytone/botnexus/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/sytone/botnexus/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/sytone/botnexus/compare/v0.37.0...v0.38.0
