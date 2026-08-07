@@ -45,14 +45,18 @@ param(
     [string]$Configuration = 'Debug',
     [switch]$All,
     [switch]$NoBuild,
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    # #2825: when set, each project emits a TRX here so the remote runner can parse real
+    # counters. Omitted for local runs, which read pass/fail from the exit code alone.
+    [string]$ResultsDirectory
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot | Split-Path -Parent | Split-Path -Parent
-$slnxPath = Join-Path $repoRoot 'BotNexus.slnx'
+$slnxPath = Join-Path $repoRoot 'dirs.proj'
 $firewallHelper = Join-Path $PSScriptRoot 'Ensure-TesthostFirewallRules.ps1'
 
 function Invoke-FirewallAction {
@@ -95,17 +99,14 @@ $alwaysRunPatterns = @(
     '\.Scenarios\.Tests'
 )
 
-# Enumerate every test project in the solution (used for -All and safety-net).
+# Enumerate every test project (used for -All and safety-net).
+# #2842: discovered from disk to match tests/dirs.proj rather than parsing BotNexus.slnx,
+# which was a second hand-maintained spelling of the same set.
 function Get-AllSolutionTestProjects {
-    [xml]$slnxDoc = Get-Content $slnxPath -Raw
-    $projects = @()
-    foreach ($node in $slnxDoc.SelectNodes('//Project[@Path]')) {
-        $path = $node.Path -replace '\\', '/'
-        if ($path -match '\.Tests\.csproj$') {
-            $projects += (Join-Path $repoRoot ($path -replace '/', [IO.Path]::DirectorySeparatorChar))
-        }
-    }
-    return $projects
+    return @(Get-ChildItem -Path (Join-Path $repoRoot 'tests') -Filter '*.Tests.csproj' -Recurse -File |
+        Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+        Select-Object -ExpandProperty FullName |
+        Sort-Object)
 }
 
 if ($All) {
@@ -170,16 +171,9 @@ if ($affectedProjects.Count -eq 0) {
 $affectedTestProjects = @($affectedProjects | Where-Object { $_ -match '\.Tests[/\\]' -or $_ -match '\.Tests\.csproj$' })
 
 # --- Step 4: Always include safety-net projects ---
-# Find all test projects in the solution matching safety-net patterns
-[xml]$slnx = Get-Content $slnxPath -Raw
-$allTestProjects = @()
-$projectNodes = $slnx.SelectNodes('//Project[@Path]')
-foreach ($node in $projectNodes) {
-    $path = $node.Path -replace '\\', '/'
-    if ($path -match '\.Tests\.csproj$') {
-        $allTestProjects += (Join-Path $repoRoot ($path -replace '/', [IO.Path]::DirectorySeparatorChar))
-    }
-}
+# Find all test projects matching safety-net patterns (#2842: reuse the single discovery
+# function rather than re-parsing the graph a second way).
+$allTestProjects = @(Get-AllSolutionTestProjects)
 
 $safetyNetProjects = @()
 foreach ($proj in $allTestProjects) {
@@ -223,7 +217,15 @@ try {
     foreach ($proj in $projectsToTest) {
         $name = [IO.Path]::GetFileNameWithoutExtension($proj)
         Write-Host "Testing: $name" -ForegroundColor White
-        dotnet test $proj --nologo --tl:off -c $Configuration $buildFlag
+        # #2825: emit a TRX per project when a results directory is supplied. Without a
+        # logger the runner's Get-RunnerTestResult finds no TRX and reports zeroed counters
+        # with failureReason 'missing-test-results' even for a suite that visibly ran and
+        # passed - a gate that cannot report what it executed is not a gate.
+        $loggerArgs = @()
+        if (-not [string]::IsNullOrWhiteSpace($ResultsDirectory)) {
+            $loggerArgs = @('--logger', "trx;LogFilePrefix=$name", '--results-directory', $ResultsDirectory)
+        }
+        dotnet test $proj --nologo --tl:off -c $Configuration $buildFlag @loggerArgs
         if ($LASTEXITCODE -ne 0) { $failed = $true }
     }
 }
