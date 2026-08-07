@@ -93,18 +93,27 @@ All planning items (features, bugs, improvements, refactors) are tracked as **Gi
 
 4. **Do not skip or disable tests** to make the suite pass. If a test is failing, the production code or the test itself must be fixed — not removed.
 
-5. **Do not use `--no-verify`** for code changes. The pre-commit hook verifies an exact-content strict Azure receipt or starts strict Azure validation itself. Strict mode includes the full build, impacted tests, mandatory architecture/scenario safety nets, and strict Playwright coverage; do not run `test-impacted.ps1` again after it passes.
+5. **Do not use `--no-verify`** for code changes. There is deliberately no pre-commit hook - commit-time local validation is banned, and `scripts/repo/install-hooks.ps1` activates only the `pre-push` `core.bare` guard (#1602). `--no-verify` therefore skips that guard, not a test gate. Run `scripts/repo/Validate-PreCommit.ps1` for the final candidate instead.
 
-6. **Do not run local `dotnet build` or `dotnet test` as the normal validation gate**, and do not run them at all on a host with a live gateway - that is the orphan-process leak #2158 exists to close. Remote validation avoids worktree output collisions and development-host saturation. For focused diagnosis only, local commands may be used deliberately. If remote infrastructure is genuinely unavailable, `Validate-PreCommit.ps1 -ValidationMode local` (or the `-LocalFallback` alias) is the sole supported local gate; it serializes validation for the worktree and may use `--no-build` internally after its single build. State the fallback explicitly whenever you use it.
+6. **Local `dotnet build` is permitted and expected; local test execution is not.** Compile the projects you changed before spending a remote gate - `dotnet build` starts no test host and no gateway process, so it cannot leak, and it catches in about a second the compile errors that otherwise cost a full remote run. Never run `dotnet test`, `test-impacted.ps1`, or `Validate-PreCommit.ps1 -LocalFallback` on a host with a live gateway: a test host boots real gateway processes that survive their parent, claim scheduled jobs from the shared cron store, and starve the live gateway - that is the orphan-process leak #2158 exists to close. All test execution is remote and authoritative: `scripts/repo/Invoke-AzureBuildTest.ps1 -Mode core -WorktreePath <worktree>`. If the remote infrastructure is genuinely unavailable, `Validate-PreCommit.ps1 -ValidationMode local` (or the `-LocalFallback` alias) is the sole supported local gate; state that fallback explicitly whenever you use it.
 
-7. **If you introduce new behaviour**, add corresponding tests first (see rule 1).
+7. **Documentation-only changes do not run the test gate.** If a change touches nothing but `*.md`, `docs/**`, or `mkdocs.yml`, the required validation is the documentation build, not the ~12-minute remote test suite:
 
-8. **If you delete a class or service**, you MUST rewrite its tests for the replacement — not delete them.
+   ```powershell
+   npm ci          # first time only
+   npm run docs:build
+   ```
+
+   This is the same command `deploy-docs.yml` runs, it completes in about 20 seconds, and it is a real gate rather than a renderer - a broken relative link fails it with `[vitepress] N dead link(s) found.` and exit 1. CI agrees: `ci-build-test.yml` lists `docs/**` and `**/*.md` under `paths-ignore`, so a docs-only PR does not trigger the test workflow at all. Running the remote gate on such a change proves nothing about the diff and costs a container run. If a change touches docs **and** code, it is a code change - run the remote gate.
+
+8. **If you introduce new behaviour**, add corresponding tests first (see rule 1).
+
+9. **If you delete a class or service**, you MUST rewrite its tests for the replacement — not delete them.
    - Old class deleted → old test file deleted AND new test file created for the replacement
    - Tests are never net-deleted; they are migrated
    - A refactor that reduces test coverage is a regression
 
-9. **Component tests (bUnit) are mandatory** for all Blazor components. Every `.razor` component must have a corresponding test covering:
+10. **Component tests (bUnit) are mandatory** for all Blazor components. Every `.razor` component must have a corresponding test covering:
    - Rendering in default/empty state
    - Rendering with data
    - User interactions (clicks, input)
@@ -192,10 +201,10 @@ Use the selected strict repository gate for normal candidate validation:
 scripts/repo/Validate-PreCommit.ps1
 ```
 
-A hand-run `dotnet build` is diagnostic-only. Local strict validation is globally serialized; select remote mode explicitly when required:
+A hand-run `dotnet build` is encouraged before validating - it is the cheapest way to catch a compile error, and it never starts a test host. It is not itself a validation gate. Remote is the default (#2158); select local explicitly only when the remote infrastructure is unavailable:
 
 ```shell
-$env:BOTNEXUS_VALIDATION_MODE = 'remote'
+$env:BOTNEXUS_VALIDATION_MODE = 'local'
 scripts/repo/Validate-PreCommit.ps1
 ```
 
