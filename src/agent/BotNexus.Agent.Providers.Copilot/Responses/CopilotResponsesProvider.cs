@@ -84,7 +84,8 @@ public sealed class CopilotResponsesProvider : IApiProvider
     /// <inheritdoc />
     public LlmStream StreamSimple(LlmModel model, Context context, SimpleStreamOptions? options = null)
     {
-        var apiKey = options?.ApiKey ?? EnvironmentApiKeys.GetApiKey(model.Provider) ?? "";
+        var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, _logger);
+        var apiKey = credential.Value;
         var reasoning = ModelRegistry.SupportsExtraHigh(model) ? options?.Reasoning : SimpleOptionsHelper.ClampReasoning(options?.Reasoning);
         var responsesOptions = new CopilotResponsesOptions
         {
@@ -124,7 +125,8 @@ public sealed class CopilotResponsesProvider : IApiProvider
         try
         {
             await using var socket = _webSocketFactory();
-            var apiKey = options?.ApiKey ?? EnvironmentApiKeys.GetApiKey(model.Provider) ?? "";
+            var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, _logger);
+        var apiKey = credential.Value;
             if (string.IsNullOrWhiteSpace(apiKey))
                 throw new InvalidOperationException($"No API key for {model.Provider}. Set credentials before using model '{model.Id}'.");
 

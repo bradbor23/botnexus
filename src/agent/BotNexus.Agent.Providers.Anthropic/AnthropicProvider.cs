@@ -96,7 +96,8 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
 
     public LlmStream StreamSimple(LlmModel model, Context context, SimpleStreamOptions? options = null)
     {
-        var apiKey = options?.ApiKey ?? EnvironmentApiKeys.GetApiKey(model.Provider) ?? "";
+        var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, null);
+        var apiKey = credential.Value;
         var baseOptions = SimpleOptionsHelper.BuildBaseOptions(model, options, apiKey);
 
         var anthropicOpts = new AnthropicOptions
@@ -168,7 +169,8 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
         CancellationToken ct)
     {
         var anthropicOpts = options as AnthropicOptions;
-        var apiKey = options?.ApiKey ?? EnvironmentApiKeys.GetApiKey(model.Provider) ?? "";
+        var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, null);
+        var apiKey = credential.Value;
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new InvalidOperationException(
