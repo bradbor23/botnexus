@@ -215,7 +215,7 @@ public sealed class CronTool(
         try
         {
             var expr = Cronos.CronExpression.Parse(schedule, Cronos.CronFormat.Standard);
-            nextRunAt = expr.GetNextOccurrence(now, tz);
+            nextRunAt = expr.NextRun(now, tz);
         }
         catch { /* invalid schedule — will be caught by scheduler */ }
 
@@ -393,7 +393,7 @@ public sealed class CronTool(
             try
             {
                 var expr = Cronos.CronExpression.Parse(newSchedule, Cronos.CronFormat.Standard);
-                nextRunAt = expr.GetNextOccurrence(DateTimeOffset.UtcNow, tz);
+                nextRunAt = expr.NextRun(DateTimeOffset.UtcNow, tz);
             }
             catch { /* invalid schedule — will be caught by scheduler */ }
 

@@ -272,8 +272,9 @@ public sealed class CronScheduler(
             if (!TryGetSchedule(job, out var expression))
                 continue;
 
-            var tz = CronTimeZoneResolver.Resolve(job.TimeZone, _logger);
-            var computedNext = expression.GetNextOccurrence(now, tz);
+            var tz = CronTimeZoneResolver.Resolve(job.TimeZone, _logger, job.Id);
+            // #2810: transition policy lives in CronExpressionExtensions, never inline here.
+            var computedNext = expression.NextRun(now, tz);
 
             if (job.NextRunAt is null)
             {
@@ -325,13 +326,13 @@ public sealed class CronScheduler(
             async (entry, _) =>
             {
                 var (job, expression) = entry;
-                var tz = CronTimeZoneResolver.Resolve(job.TimeZone, _logger);
+                var tz = CronTimeZoneResolver.Resolve(job.TimeZone, _logger, job.Id);
                 await RunActionAsync(job, CronTriggerType.Scheduled, now, ct).ConfigureAwait(false);
 
                 // #2133: reschedule via the narrow next_run_at write. RunActionAsync already
                 // persisted the run's terminal LastRun* bookkeeping and any conversation pin
                 // through their own narrow writes, so no whole-record round-trip is needed here.
-                await _cronStore.SetNextRunAtAsync(job.Id, expression.GetNextOccurrence(now, tz), ct).ConfigureAwait(false);
+                await _cronStore.SetNextRunAtAsync(job.Id, expression.NextRun(now, tz), ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
     }
 
