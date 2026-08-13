@@ -142,28 +142,19 @@ diagnostics. Both preconditions return `404 Not Found` with a plain-text reason:
 
 ### `GET /api/agents/{agentId}/sessions/{sessionId}/context`
 
-`200 OK`, with a token-usage summary.
-
-> [!WARNING]
-> **`contextWindowTokens` is a hardcoded placeholder — do not budget against it.**
-> `AgentsController.BuildContextResponse` declares `const int contextWindowTokens = 128000`
-> and never consults the resolved model. The value is `128000` for every agent, on every
-> model, always. `usagePercent` is derived from it and is therefore equally unreliable:
-> against a 200k-window model it over-reports usage, and against a 32k-window model it
-> under-reports it by a factor of four — silently, with no error.
->
-> Treat `totalEstimatedTokens` and the per-section counts as the only load-bearing numbers
-> here, and obtain the real context window from the model configuration instead.
-> Returning the resolved model's actual window is tracked as
-> [#3091](https://github.com/Sytone/botnexus/issues/3091).
+`200 OK`, with a token-usage summary. `contextWindowTokens` is the context window of the model
+the session is actually bound to (after the conversation > agent override stack), and
+`usagePercent` is computed against it. When the window cannot be resolved - for example the
+handle exposes no model binding - both fields are `null` rather than a placeholder value, so a
+consumer can tell "unknown" apart from a real number (#3091).
 
 ```json
 {
   "agentId": "farnsworth",
   "sessionId": "sess-123",
   "totalEstimatedTokens": 24310,
-  "contextWindowTokens": 128000,
-  "usagePercent": 19.0,
+  "contextWindowTokens": 200000,
+  "usagePercent": 12.2,
   "sections": {
     "systemPrompt": { "tokens": 4120, "chars": 16480 },
     "toolDefinitions": { "tokens": 8600, "toolCount": 42 },

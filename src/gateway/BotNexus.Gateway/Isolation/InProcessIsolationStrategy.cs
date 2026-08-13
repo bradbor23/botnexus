@@ -557,7 +557,11 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
             tools,
             extensionResourcesToDispose,
             _serviceProvider.GetService<IActivityTracker>(),
-            toolWriteAhead)
+            toolWriteAhead,
+            // #3091: the diagnostics endpoint must report the window this run is ACTUALLY bound to.
+            // Resolved from the same effectiveModel/model pair that configures the run below, so the
+            // reported window cannot drift from the executed one (same single-derivation rule as #2796).
+            ContextWindowResolver.Resolve(effectiveModel.ContextWindow, model))
         {
             RenderedSystemPrompt = resumeSystemPrompt
         };
@@ -820,6 +824,10 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     // without the gateway DI graph. (#1320)
     private readonly IActivityTracker? _activityTracker;
 
+    // #3091: the resolved context window for this run, or null when it could not be established.
+    // Never defaulted to a literal - see ContextWindowResolver.
+    private readonly int? _contextWindowTokens;
+
     /// <summary>
     /// The fail-closed tool-audit write-ahead this handle's run writes through (#2615). The handle
     /// is the single choke point every execution path crosses, so it is also the only place that
@@ -836,13 +844,15 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
         IReadOnlyList<IAgentTool>? tools = null,
         IReadOnlyList<object>? resourcesToDispose = null,
         IActivityTracker? activityTracker = null,
-        ToolAuditWriteAhead? toolWriteAhead = null)
+        ToolAuditWriteAhead? toolWriteAhead = null,
+        int? contextWindowTokens = null)
     {
         _agent = agent;
         AgentId = agentId;
         SessionId = sessionId;
         _logger = logger;
         _activityTracker = activityTracker;
+        _contextWindowTokens = contextWindowTokens;
         _toolWriteAhead = toolWriteAhead;
         _disposableResources = (tools ?? [])
             .Where(static tool => tool is IAsyncDisposable || tool is IDisposable)
@@ -893,6 +903,9 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
 
         return _toolsByName.TryGetValue(toolName, out var tool) ? tool : null;
     }
+
+    /// <inheritdoc />
+    public int? GetContextWindowTokens() => _contextWindowTokens;
 
     /// <inheritdoc />
     public ContextDiagnostics? GetContextDiagnostics()
