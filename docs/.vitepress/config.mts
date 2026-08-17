@@ -159,6 +159,7 @@ export default defineConfig({
           { text: 'Agent Execution', link: '/development/agent-execution' },
           { text: 'Message Flow', link: '/development/message-flow' },
           { text: 'LLM Request Lifecycle', link: '/development/llm-request-lifecycle' },
+          { text: 'Normalized LLM Event Audit', link: '/development/normalized-llm-event-audit' },
           { text: 'Prompt Pipeline', link: '/development/prompt-pipeline' },
           { text: 'Session Stores', link: '/development/session-stores' },
           { text: 'Workspace and Memory', link: '/development/workspace-and-memory' },
