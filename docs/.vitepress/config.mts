@@ -209,6 +209,7 @@ export default defineConfig({
           { text: 'Cron Session Targets', link: '/features/cron-session-targets' },
           { text: 'Dev-Mode Origin Guard', link: '/features/dev-origin-guard' },
           { text: 'Portal Boot Diagnostics', link: '/features/portal-boot-diagnostics' },
+          { text: 'Portal Plugins Page', link: '/features/portal-plugins-page' },
           { text: 'AGENTS.md Conventions', link: '/features/agents-md-conventions' },
           { text: 'Model-Specific Instruction Files', link: '/features/model-specific-instruction-files' },
           { text: 'Agent 365 Observability', link: '/features/agent365-observability' },
