@@ -194,6 +194,7 @@ export default defineConfig({
           { text: 'Source Generator Survey', link: '/development/source-generator-survey' },
           { text: 'Hub Event Inventory Generator', link: '/development/hub-event-inventory-generator' },
           { text: 'Tool Schema Generator Spike', link: '/development/tool-schema-generator-spike' },
+          { text: 'Portal Surface Parity', link: '/development/portal-surface-parity' },
           { text: 'Seam-Test Reviewer Checklist', link: '/seam-test-reviewer-checklist' },
         ],
       },
