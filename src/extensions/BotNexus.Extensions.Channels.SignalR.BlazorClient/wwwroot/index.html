@@ -15,7 +15,11 @@
     <title>BotNexus</title>
     <base href="/" />
     <link rel="preload" id="webassembly" />
-    <link rel="stylesheet" href="css/app.css?v=ds3" />
+    <!-- Preload the latin subset: it is needed for the very first paint, and discovering it
+         only after app.css parses would guarantee a visible swap. latin-ext is deliberately
+         NOT preloaded - it is fetched on demand via unicode-range. -->
+    <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="css/app.css?v=ds4" />
     <script>
         // Applied BEFORE first paint and before Blazor boots. The WASM runtime takes seconds to
         // start; without this a light-theme user would stare at a fully dark portal until it did,

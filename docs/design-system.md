@@ -119,6 +119,37 @@ Seven roles. Reference these, never a raw font-size.
 Line-heights sit on a 4px grid. Sizes are in `rem` so an OS text-size preference
 still scales them — the practical web equivalent of HIG's Dynamic Type.
 
+### Typeface
+
+**Inter**, self-hosted, weights 400–700 from a single variable file per subset.
+
+The portal previously used the platform stack (San Francisco on macOS, Segoe UI
+on Windows). That is what HIG and Fluent each prescribe for their own platform,
+and it costs nothing — but it also means the product looks materially different
+depending on where it is opened, and different again from its sibling projects.
+Inter renders identically everywhere, which was judged the more valuable
+property here.
+
+Self-hosted rather than loaded from the Google Fonts CDN: the portal is reachable
+on a LAN and cached offline by the service worker, so text must not depend on an
+internet round-trip to render.
+
+Three details that matter:
+
+- **`font-display: swap`.** Text paints immediately in the fallback and reflows
+  when Inter arrives. The alternative (`block`) hides text for up to three
+  seconds, which is a worse failure than a brief metric shift.
+- **`unicode-range` subsetting.** latin (48 KB) covers the common path;
+  latin-ext (85 KB) is fetched only if a page actually renders a glyph from it.
+- **The latin subset is preloaded** in `index.html`. It is needed for the first
+  paint, and discovering it only after `app.css` parses would guarantee a
+  visible swap. latin-ext is deliberately *not* preloaded.
+
+The platform stack remains behind Inter in `--font-sans`, so text stays legible
+during the swap and if the woff2 fails entirely. `--font-mono` is unchanged.
+
+Inter is licensed under the SIL Open Font License 1.1.
+
 ### Shape
 
 Two radii. `--radius-sm` **6px** for buttons, inputs, badges, small controls;
@@ -301,6 +332,7 @@ fingerprints its own `_framework` assets but has no equivalent for
   `prefers-reduced-transparency`
 - Light/dark toggle in the top bar and in Settings, persisted per browser and
   applied before first paint
+- Inter self-hosted as the UI typeface, subset and preloaded
 
 **Verified:** `src/dirs.proj` builds with 0 warnings / 0 errors; the gateway
 boots with 0 errors and serves the tokenised stylesheet.
