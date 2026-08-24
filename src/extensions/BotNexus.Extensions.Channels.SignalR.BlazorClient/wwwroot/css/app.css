@@ -5433,6 +5433,36 @@ h3.conversation-title.editable:hover {
 }
 .banner-settings-btn:hover { background: var(--hover-bg, var(--color-wash)); }
 
+/* Theme toggle. Mirrors .banner-settings-btn, and takes over the auto margin that previously sat
+   on it so the two group together at the right end of the bar rather than splitting the free
+   space between them (two auto margins would each absorb half and leave a gap). */
+.banner-theme-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--color-ink-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    /* Fluent's 32px pointer minimum - the glyph alone gave a ~24px target. */
+    min-width: var(--hit-pointer);
+    min-height: var(--hit-pointer);
+    border-radius: var(--radius-sm);
+    /* Force text-style (monochrome) rendering so the sun/moon glyph inherits `color`
+       instead of rendering as a boxed colour emoji. */
+    font-variant-emoji: text;
+    -webkit-font-feature-settings: normal;
+    transition: background var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard);
+}
+
+.banner-theme-btn:hover {
+    background: var(--color-wash);
+    color: var(--color-ink);
+}
+
+.banner-theme-btn + .banner-settings-btn { margin-left: 0; }
+
 /* ── Modal Panel Shared ────────────────────────────────────────── */
 .portal-settings-overlay,
 .session-debug-overlay {

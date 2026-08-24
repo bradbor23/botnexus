@@ -199,8 +199,28 @@ the only theme this portal ever had, and an existing user must not be repainted
 by upgrading. Only tokens are redefined — no component rule is duplicated, and
 no `dark:`-style variant classes exist anywhere.
 
-Light is currently **structural only**: the token set is complete and correct,
-but no toggle UI ships yet. Adding one is a small, self-contained follow-up.
+### Switching
+
+A toggle sits in the top bar (☀ / ☾), and `Settings → Colour theme` offers the
+same choice explicitly. Both go through `IPortalPreferencesService.SetThemeAsync`,
+which mirrors the existing density preference rather than introducing a second
+mechanism — same `PortalTheme.Normalize` guard, same localStorage blob
+(`botnexus.portal.prefs`), same `OnChanged` notification.
+
+**Dark is the absence of the attribute, not `data-theme="dark"`.** Dark lives on
+`:root`, so expressing it as an attribute would mean the pre-paint script had to
+write something on the default path. Light sets the attribute; dark removes it.
+
+A synchronous inline script in `index.html` applies the stored theme **before
+first paint**, reading the same localStorage blob. Without it a light-theme user
+would stare at a fully dark portal for the seconds the WASM runtime takes to
+boot, then watch it flip. The script is deliberately placed before Blazor's own
+and guarded by try/catch: unparseable or unavailable storage falls through to
+the dark default.
+
+`SetThemeAsync` applies the DOM attribute *before* persisting, so the swap is
+instant even where localStorage is unavailable (private browsing, quota) — the
+theme still changes for the session rather than appearing to do nothing.
 
 ---
 
@@ -279,14 +299,15 @@ fingerprints its own `_framework` assets but has no equivalent for
 - Ad-hoc shadows 7 → 0; two shadows removed from flat content
 - Global `:focus-visible`, `prefers-reduced-motion`,
   `prefers-reduced-transparency`
+- Light/dark toggle in the top bar and in Settings, persisted per browser and
+  applied before first paint
 
 **Verified:** `src/dirs.proj` builds with 0 warnings / 0 errors; the gateway
 boots with 0 errors and serves the tokenised stylesheet.
 
 **Next**
 
-1. Theme toggle UI plus a no-flash inline script, to make light reachable.
-2. Migrate the 75 remaining `var(--radius)` call sites onto `--radius-sm` /
+1. Migrate the 75 remaining `var(--radius)` call sites onto `--radius-sm` /
    `--radius-lg` explicitly, then retire the legacy alias.
 3. Apply the seven type roles to markup — currently defined but not yet adopted.
    This is the largest remaining piece and the one that most affects how the

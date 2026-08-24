@@ -43,6 +43,11 @@
                 <AgentIdentity AgentId="@bannerAgentId" />
             }
 
+            <button class="banner-theme-btn"
+                    @onclick="ToggleTheme"
+                    title="@(IsLightTheme ? "Switch to dark theme" : "Switch to light theme")"
+                    aria-label="@(IsLightTheme ? "Switch to dark theme" : "Switch to light theme")"
+                    data-testid="banner-theme-btn">@(IsLightTheme ? "\u263E" : "\u2600")</button>
             <button class="banner-settings-btn" @onclick="OpenSettings" title="Portal settings" data-testid="banner-settings-btn">&#x2699;</button>
             @if (Prefs.Current.DebugModeEnabled)
             {
@@ -190,6 +195,12 @@
     /// <c>--density-*</c> token set for the whole portal (#2441).
     /// </summary>
     private string DensityAttribute => PortalDensity.Normalize(Prefs.Current.Density);
+
+    /// <summary>True when the light theme is active, driving the toggle's icon and label.</summary>
+    private bool IsLightTheme => PortalTheme.Normalize(Prefs.Current.Theme) == PortalTheme.Light;
+
+    /// <summary>Flips between the two themes and persists the choice.</summary>
+    private Task ToggleTheme() => Prefs.SetThemeAsync(PortalTheme.Toggle(Prefs.Current.Theme));
 
     private ConversationActivityFilter _activityFilter = ConversationActivityFilter.None;
     private const string ActivityFilterKey = "botnexus-conversation-activity-filter";
@@ -786,6 +797,10 @@
                 _activityFilter = storedFilter;
             _isMobile = await JS.InvokeAsync<bool>("chatScroll.isMobileView");
             await Prefs.LoadAsync();
+            // Re-apply after load: the pre-paint script in index.html already set the attribute
+            // from the same stored value, but that script is the only thing that ran before this
+            // point, and re-applying keeps a single owner of the DOM state once Blazor is live.
+            await JS.InvokeVoidAsync("portalPrefs.applyTheme", PortalTheme.Normalize(Prefs.Current.Theme));
             // Re-render immediately after mobile detection so layout responds without waiting for gateway load.
             StateHasChanged();
 
