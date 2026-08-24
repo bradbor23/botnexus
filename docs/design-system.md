@@ -204,22 +204,56 @@ but no toggle UI ships yet. Adding one is a small, self-contained follow-up.
 
 ---
 
-## Deployment note
+## Deploying a CSS change
 
-The portal is served from the **installed extension**, not the build tree:
+Two facts make this less obvious than it looks, and getting either wrong
+produces the same symptom: the change is live on the server and invisible in
+the browser.
 
-```
-~/.botnexus/extensions/botnexus-signalr/blazor/css/app.css
-```
+**1. The portal is served from the installed extension, not the build tree.**
+Rebuilding updates `src/extensions/…SignalR/bin/Release/net10.0/blazor/` but
+not `~/.botnexus/extensions/botnexus-signalr/blazor/`.
 
-Rebuilding the solution updates
-`src/extensions/…SignalR/bin/Release/net10.0/blazor/` but **not** the installed
-copy, so a CSS change appears to have no effect until it is deployed there. This
-cost real debugging time; check the served bytes before suspecting a cache:
+**2. A service worker sits in front of it.** `service-worker.js` is
+network-first for the shell and cache-first for fingerprinted `/_framework/`
+assets, and `service-worker-assets.js` carries an integrity hash for every
+file it caches — `css/app.css` included.
+
+So **never hand-copy an individual file into the extension directory.** Doing
+that leaves the asset manifest holding the hash of the *previous* file and its
+`Manifest version` unchanged, which is precisely how the worker decides whether
+a new build exists. It concludes nothing changed and keeps serving its cache —
+through a hard reload, a fresh tab, `cache: no-store`, and query-string
+cache-busting alike, because a service worker intercepts all of them. The
+worker's own source comment puts it well: *"The cache was not merely stale, it
+was stale FOREVER."*
+
+Rebuild, then deploy the whole output:
 
 ```bash
-curl -s http://<host>:5005/css/app.css | grep -c color-canvas
+dotnet build src/extensions/BotNexus.Extensions.Channels.SignalR -c Release
+rsync -a --delete \
+  src/extensions/BotNexus.Extensions.Channels.SignalR/bin/Release/net10.0/blazor/ \
+  ~/.botnexus/extensions/botnexus-signalr/blazor/
 ```
+
+Verify all three moved together — a mismatch between them is the bug:
+
+```bash
+curl -s http://<host>:5005/ | grep -o 'app.css[^">]*'                  # versioned href
+curl -s http://<host>:5005/service-worker.js | grep -o 'Manifest version: [^ ]*'
+curl -s 'http://<host>:5005/css/app.css?v=ds1' | grep -c color-canvas
+```
+
+A changed `Manifest version` is the signal that reaches the browser. Expect the
+client to need two reloads: one to install the new worker, one for it to take
+control. If a client is genuinely wedged, DevTools → Application → Service
+Workers → Unregister.
+
+Because `index.html` references the stylesheet at a stable path, the href also
+carries a `?v=` token — bump it whenever `app.css` changes materially. Blazor
+fingerprints its own `_framework` assets but has no equivalent for
+`index.html` in standalone WASM.
 
 ---
 
