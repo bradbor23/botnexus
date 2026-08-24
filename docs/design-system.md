@@ -265,6 +265,16 @@ fingerprints its own `_framework` assets but has no equivalent for
   elevation, material, motion, focus
 - Light theme token set
 - All 34 previously-undeclared tokens now declared and theming correctly
+- **Every colour in every component rule flows through a token** — 133 literal
+  values migrated, 0 remain
+- **144 dead `var(--x, #hex)` fallbacks removed.** Now that every token is
+  declared, an inline fallback only hides a future typo: it paints a hardcoded
+  colour instead of failing visibly. Removing them is what makes the rule "no
+  raw hex in a component rule" enforceable rather than aspirational.
+- White-on-accent contrast fixed: `#fff` on the cyan accent measured ~2:1,
+  under the 4.5:1 minimum. Those 13 call sites now use `--color-on-accent`
+  (~8.5:1). White is retained via `--color-on-solid` where the fill is a
+  mid-to-dark status or category colour and white is correct.
 - Hardcoded radii 62 → 18 (and 15 distinct → 8, of which 4 are deliberate)
 - Ad-hoc shadows 7 → 0; two shadows removed from flat content
 - Global `:focus-visible`, `prefers-reduced-motion`,
@@ -279,6 +289,8 @@ boots with 0 errors and serves the tokenised stylesheet.
 2. Migrate the 75 remaining `var(--radius)` call sites onto `--radius-sm` /
    `--radius-lg` explicitly, then retire the legacy alias.
 3. Apply the seven type roles to markup — currently defined but not yet adopted.
+   This is the largest remaining piece and the one that most affects how the
+   portal reads.
 4. Retire the legacy colour aliases once no rule references them.
 5. Real `Dialog` / `Toast` components using `.material-overlay`.
 6. Command palette (`Ctrl/Cmd+K`).

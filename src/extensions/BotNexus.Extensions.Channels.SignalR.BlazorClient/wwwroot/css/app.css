@@ -221,6 +221,36 @@
     --accent-purple-bg: var(--cat-purple-bg);
     --accent-muted: var(--cat-muted);
 
+    /* ── 12. Fills, washes and scrims ──────────────────────────────────── */
+    /* Text or a knob sitting on a SATURATED fill — status pills, category
+       badges. Distinct from --color-on-accent because the accent is a light
+       cyan needing dark text, while status and category fills are mid-to-dark
+       and need light text. One token cannot serve both. */
+    --color-on-solid: #ffffff;
+
+    /* Iframe canvases hosting third-party HTML (tool output, embedded docs).
+       Deliberately NOT themed: the content inside assumes a white page, and
+       darkening the frame would leave black-on-black text. */
+    --color-embed-surface: #ffffff;
+
+    /* Scrims sit BEHIND floating chrome and dim the page. */
+    --color-scrim: rgba(0, 0, 0, 0.60);
+    --color-scrim-soft: rgba(0, 0, 0, 0.30);
+
+    /* Neutral washes: hover and selected states that must not read as status.
+       Expressed as translucent white on dark so they compose over any surface
+       step; the light theme flips them to translucent black. */
+    --color-wash: rgba(255, 255, 255, 0.06);
+    --color-wash-soft: rgba(255, 255, 255, 0.03);
+
+    /* Tinted washes, for a row or panel that carries a meaning. */
+    --color-accent-wash-soft: rgba(0, 180, 216, 0.06);
+    --color-accent-wash-strong: rgba(0, 180, 216, 0.22);
+    --color-success-wash: rgba(63, 185, 80, 0.14);
+    --color-warning-wash: rgba(210, 153, 34, 0.14);
+    --color-danger-wash: rgba(248, 81, 73, 0.14);
+    --color-info-wash: rgba(88, 166, 255, 0.14);
+
     /* ── 9. Back-compatibility aliases ─────────────────────────────────── */
     /* The pre-token names, remapped onto the semantic roles above, so the
        rest of this stylesheet keeps working while component families migrate
@@ -283,6 +313,19 @@
     --color-info: #0969da;
     --color-info-bg: #ddf0ff;
     --color-info-text: #0a4f9e;
+
+    --color-on-solid: #ffffff;
+    --color-embed-surface: #ffffff;
+    --color-scrim: rgba(16, 22, 29, 0.45);
+    --color-scrim-soft: rgba(16, 22, 29, 0.22);
+    --color-wash: rgba(16, 22, 29, 0.05);
+    --color-wash-soft: rgba(16, 22, 29, 0.03);
+    --color-accent-wash-soft: rgba(11, 127, 153, 0.05);
+    --color-accent-wash-strong: rgba(11, 127, 153, 0.18);
+    --color-success-wash: rgba(26, 127, 55, 0.12);
+    --color-warning-wash: rgba(154, 103, 0, 0.12);
+    --color-danger-wash: rgba(207, 34, 46, 0.12);
+    --color-info-wash: rgba(9, 105, 218, 0.12);
 
     /* Category palette, darkened so each still reads against a white surface. */
     --cat-live: #1a7f52;
@@ -573,7 +616,7 @@ html, body, #app {
     align-items: center;
     gap: 12px;
     padding: 8px 20px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--color-wash-soft);
     border-left: 3px solid var(--accent);
     font-size: 0.82rem;
 }
@@ -602,7 +645,7 @@ html, body, #app {
 }
 
 .announcement-dismiss:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-wash);
     color: var(--text-primary);
 }
 
@@ -633,7 +676,7 @@ html, body, #app {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--color-scrim);
     z-index: 99;
 }
 
@@ -739,7 +782,7 @@ html, body, #app {
 
 /* Hover state for clickable sub-agent items */
 .agent-session-item[style*="cursor: pointer"]:hover:not(.active) {
-    background: rgba(15, 52, 96, 0.3);
+    background: var(--color-surface-2);
     color: var(--text-primary);
 }
 
@@ -937,7 +980,7 @@ html, body, #app {
     padding: 0 5px;
     border-radius: var(--radius-pill);
     background: var(--accent);
-    color: #fff;
+    color: var(--color-on-accent);
     font-size: 0.7rem;
     font-weight: 700;
     line-height: 1;
@@ -962,9 +1005,9 @@ html, body, #app {
 }
 
 .restart-btn:hover:not(:disabled) {
-    background: rgba(255, 80, 80, 0.1);
-    border-color: #f55;
-    color: #f88;
+    background: var(--color-danger-wash);
+    border-color: var(--color-danger);
+    color: var(--color-danger-text);
 }
 
 .restart-btn:disabled {
@@ -1162,17 +1205,17 @@ html, body, #app {
 
 .agent-panel-status.idle {
     color: var(--text-secondary);
-    background: rgba(108, 108, 128, 0.12);
+    background: var(--color-wash);
 }
 
 .agent-panel-status.running {
     color: var(--accent);
-    background: rgba(0, 180, 216, 0.12);
+    background: var(--color-accent-wash);
 }
 
 .agent-panel-status.offline {
     color: var(--error);
-    background: rgba(231, 76, 60, 0.12);
+    background: var(--color-danger-wash);
 }
 
 .agent-tab-bar,
@@ -1268,7 +1311,7 @@ html, body, #app {
     width: 100%;
     height: 100%;
     border: 0;
-    background: #fff;
+    background: var(--color-embed-surface);
 }
 
 /* Per-conversation Todo panel (#1464 step 5) */
@@ -1308,16 +1351,16 @@ html, body, #app {
     align-items: baseline;
     gap: 0.45rem;
     padding: 0.5rem 0.6rem;
-    border: 1px solid #d97706;
+    border: 1px solid var(--color-warning);
     border-radius: var(--radius);
-    background: rgba(217, 119, 6, 0.08);
+    background: var(--color-warning-wash);
     color: var(--text-primary);
     font-size: 0.8rem;
 }
 
 .todo-closeout-icon {
     flex: 0 0 auto;
-    color: #d97706;
+    color: var(--color-warning);
     font-size: 0.95rem;
     line-height: 1;
 }
@@ -1374,11 +1417,11 @@ html, body, #app {
 }
 
 .todo-item.todo-status-done .todo-item-box {
-    color: #16a34a;
+    color: var(--color-success);
 }
 
 .todo-item.todo-status-in_progress .todo-item-box {
-    color: #d97706;
+    color: var(--color-warning);
 }
 
 .todo-item.todo-status-cancelled .todo-item-text {
@@ -1421,8 +1464,8 @@ html, body, #app {
 }
 
 .workspace-state.workspace-state-error {
-    border-color: rgba(231, 76, 60, 0.5);
-    color: #f3b3ad;
+    border-color: var(--color-danger);
+    color: var(--color-danger-text);
 }
 
 .workspace-tree-list {
@@ -1460,7 +1503,7 @@ html, body, #app {
 }
 
 .workspace-tree-row:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-wash-soft);
 }
 
 .workspace-tree-row:focus-visible {
@@ -1469,8 +1512,8 @@ html, body, #app {
 }
 
 .workspace-tree-file.selected {
-    background: rgba(0, 180, 216, 0.15);
-    color: #8fe8ff;
+    background: var(--color-accent-wash);
+    color: var(--color-accent-hover);
 }
 
 .workspace-tree-chevron {
@@ -1509,8 +1552,8 @@ html, body, #app {
 }
 
 .workspace-tree-delete:hover {
-    background: rgba(255, 90, 90, 0.12);
-    color: #ff8e8e;
+    background: var(--color-danger-wash);
+    color: var(--color-danger-text);
 }
 
 .workspace-tree-delete:focus-visible {
@@ -1652,7 +1695,7 @@ html, body, #app {
 }
 
 .panel-splitter.dragging {
-    background: rgba(0, 180, 216, 0.06);
+    background: var(--color-accent-wash-soft);
 }
 
 .reports-list {
@@ -1680,7 +1723,7 @@ html, body, #app {
 }
 
 .reports-list-row:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-wash-soft);
 }
 
 .reports-list-row:focus-visible {
@@ -1689,7 +1732,7 @@ html, body, #app {
 }
 
 .reports-list-row.selected {
-    background: rgba(0, 180, 216, 0.15);
+    background: var(--color-accent-wash);
 }
 
 .reports-list-name {
@@ -1770,7 +1813,7 @@ html, body, #app {
 .streaming-badge {
     font-size: 0.7rem;
     color: var(--accent);
-    background: rgba(0, 180, 216, 0.12);
+    background: var(--color-accent-wash);
     padding: 0.15rem 0.5rem;
     border-radius: var(--radius);
     animation: pulse 1s ease-in-out infinite;
@@ -1815,7 +1858,7 @@ html, body, #app {
 }
 
 .message.error {
-    background: rgba(231, 76, 60, 0.15);
+    background: var(--color-danger-wash);
     align-self: flex-start;
     border: 1px solid var(--error);
     color: var(--error);
@@ -2045,7 +2088,7 @@ html, body, #app {
     border: none;
     border-radius: var(--radius);
     background: var(--accent);
-    color: #fff;
+    color: var(--color-on-accent);
     font-weight: 600;
     font-size: 0.9rem;
     cursor: pointer;
@@ -2072,7 +2115,7 @@ html, body, #app {
     right: 0;
     padding: 0.6rem 1.25rem;
     background: var(--error);
-    color: white;
+    color: var(--color-on-solid);
     font-size: 0.85rem;
     z-index: 1000;
 }
@@ -2165,7 +2208,7 @@ html, body, #app {
 }
 
 .reset-btn:hover {
-    background: rgba(231, 76, 60, 0.15);
+    background: var(--color-danger-wash);
     border-color: var(--error);
     color: var(--error);
 }
@@ -2175,7 +2218,7 @@ html, body, #app {
 .reset-confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2222,14 +2265,14 @@ html, body, #app {
     border: none;
     border-radius: var(--radius);
     background: var(--error);
-    color: #fff;
+    color: var(--color-on-solid);
     font-weight: 600;
     cursor: pointer;
     transition: background 0.15s;
 }
 
 .confirm-btn:hover {
-    background: #c0392b;
+    background: var(--color-danger);
 }
 
 /* ── Tool call display ──────────────────────────────────────────────── */
@@ -2343,7 +2386,7 @@ html, body, #app {
 .tool-content {
     font-family: var(--font-mono);
     font-size: 0.8rem;
-    background: rgba(0, 0, 0, 0.25);
+    background: var(--color-scrim-soft);
     padding: 0.5rem 0.75rem;
     border-radius: var(--radius-sm);
     overflow-x: auto;
@@ -2388,7 +2431,7 @@ html, body, #app {
 .tool-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2442,7 +2485,7 @@ html, body, #app {
     font-size: 0.85rem;
     line-height: 1.45;
     color: var(--text-secondary);
-    background: rgba(0, 0, 0, 0.25);
+    background: var(--color-scrim-soft);
     margin: 0;
     padding: 1rem;
     overflow: auto;
@@ -2457,7 +2500,7 @@ html, body, #app {
     padding: 0.6rem 1rem;
     border: 1px solid var(--accent);
     border-radius: var(--radius);
-    background: rgba(0, 180, 216, 0.12);
+    background: var(--color-accent-wash);
     color: var(--accent);
     font-weight: 600;
     font-size: 0.85rem;
@@ -2468,7 +2511,7 @@ html, body, #app {
 }
 
 .steer-btn:hover:not(:disabled) {
-    background: rgba(0, 180, 216, 0.25);
+    background: var(--color-accent-wash-strong);
 }
 
 .steer-btn:disabled {
@@ -2478,10 +2521,10 @@ html, body, #app {
 
 .interrupt-steer-btn {
     padding: 0.6rem 0.85rem;
-    border: 1px solid var(--warning, #e67e22);
+    border: 1px solid var(--warning);
     border-radius: var(--radius);
-    background: rgba(230, 126, 34, 0.12);
-    color: var(--warning, #e67e22);
+    background: var(--color-warning-wash);
+    color: var(--warning);
     font-weight: 600;
     font-size: 0.85rem;
     cursor: pointer;
@@ -2491,7 +2534,7 @@ html, body, #app {
 }
 
 .interrupt-steer-btn:hover:not(:disabled) {
-    background: rgba(230, 126, 34, 0.25);
+    background: var(--color-warning-wash);
 }
 
 .interrupt-steer-btn:disabled {
@@ -2500,10 +2543,10 @@ html, body, #app {
 }
 .followup-btn {
     padding: 0.6rem 0.85rem;
-    border: 1px solid var(--success, #2e9e5b);
+    border: 1px solid var(--success);
     border-radius: var(--radius);
-    background: rgba(46, 158, 91, 0.12);
-    color: var(--success, #2e9e5b);
+    background: var(--color-success-wash);
+    color: var(--success);
     font-weight: 600;
     font-size: 0.85rem;
     cursor: pointer;
@@ -2513,7 +2556,7 @@ html, body, #app {
 }
 
 .followup-btn:hover:not(:disabled) {
-    background: rgba(46, 158, 91, 0.25);
+    background: var(--color-success-wash);
 }
 
 .followup-btn:disabled {
@@ -2524,7 +2567,7 @@ html, body, #app {
     padding: 0.6rem 0.85rem;
     border: 1px solid var(--error);
     border-radius: var(--radius);
-    background: rgba(231, 76, 60, 0.12);
+    background: var(--color-danger-wash);
     color: var(--error);
     font-weight: 600;
     font-size: 0.85rem;
@@ -2535,7 +2578,7 @@ html, body, #app {
 }
 
 .abort-btn:hover {
-    background: rgba(231, 76, 60, 0.25);
+    background: var(--color-danger-wash);
 }
 
 /* ── History loading spinner ────────────────────────────────────────── */
@@ -2668,14 +2711,14 @@ html, body, #app {
 
 .msg-content code {
     font-family: var(--font-mono);
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--color-scrim-soft);
     padding: 0.15em 0.4em;
     border-radius: 3px;
     font-size: 0.9em;
 }
 
 .msg-content pre {
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--color-scrim-soft);
     padding: 0.75rem 1rem;
     border-radius: var(--radius-sm);
     overflow-x: auto;
@@ -2742,7 +2785,7 @@ html, body, #app {
 }
 
 .msg-content th {
-    background: rgba(0, 0, 0, 0.2);
+    background: var(--color-scrim-soft);
     font-weight: 600;
 }
 
@@ -2950,15 +2993,15 @@ html, body, #app {
 .thinking-block {
     align-self: flex-start;
     max-width: 85%;
-    background: rgba(108, 108, 128, 0.08);
-    border: 1px solid rgba(108, 108, 128, 0.2);
+    background: var(--color-wash);
+    border: 1px solid var(--color-hairline);
     border-radius: var(--radius);
     padding: 0.5rem 0.75rem;
     margin-bottom: -0.25rem;
 }
 
 .thinking-block.live {
-    border-color: rgba(0, 180, 216, 0.3);
+    border-color: var(--color-accent-ring);
     animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -3009,7 +3052,7 @@ details[open] > .thinking-summary::before {
     font-size: 0.78rem;
     color: var(--text-muted);
     padding: 0.3rem 0.75rem;
-    background: rgba(108, 108, 128, 0.08);
+    background: var(--color-wash);
     border-radius: var(--radius);
     max-width: 80%;
 }
@@ -3101,7 +3144,7 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-header-action.archive:hover {
-    color: var(--error, #e55);
+    color: var(--error);
 }
 
 .new-chat-btn {
@@ -3158,7 +3201,7 @@ details[open] > .thinking-summary::before {
 .config-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3265,7 +3308,7 @@ details[open] > .thinking-summary::before {
 
 .config-error {
     padding: 0.5rem 0.75rem;
-    background: rgba(231, 76, 60, 0.15);
+    background: var(--color-danger-wash);
     border: 1px solid var(--error);
     border-radius: var(--radius);
     color: var(--error);
@@ -3285,7 +3328,7 @@ details[open] > .thinking-summary::before {
     border: none;
     border-radius: var(--radius);
     background: var(--accent);
-    color: #fff;
+    color: var(--color-on-accent);
     font-weight: 600;
     cursor: pointer;
     transition: background 0.15s;
@@ -3314,7 +3357,7 @@ details[open] > .thinking-summary::before {
 }
 
 .config-copy-btn:hover {
-    background: var(--bg-hover, rgba(127, 127, 127, 0.15));
+    background: var(--bg-hover);
 }
 
 /* ── Copy toast ─────────────────────────────────────────────────────── */
@@ -3326,7 +3369,7 @@ details[open] > .thinking-summary::before {
     transform: translateX(-50%);
     padding: 0.4rem 1rem;
     background: var(--success);
-    color: #fff;
+    color: var(--color-on-solid);
     border-radius: var(--radius);
     font-size: 0.8rem;
     font-weight: 600;
@@ -3553,7 +3596,7 @@ details[open] > .thinking-summary::before {
 .toolbar-btn.primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--color-on-accent);
     font-weight: 600;
 }
 
@@ -3608,14 +3651,14 @@ details[open] > .thinking-summary::before {
     gap: 0.5rem;
     padding: 0.75rem 1rem;
     cursor: pointer;
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-wash-soft);
     border-bottom: 1px solid var(--border);
     user-select: none;
     transition: background 0.15s;
 }
 
 .pcfg-section-header:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-wash-soft);
 }
 
 .pcfg-section-header h3 {
@@ -3730,7 +3773,7 @@ details[open] > .thinking-summary::before {
 
 .pcfg-toggle input:checked + .pcfg-toggle-slider::before {
     transform: translateX(16px);
-    background: #fff;
+    background: var(--color-on-solid);
 }
 
 /* Nested sub-section */
@@ -3796,7 +3839,7 @@ details[open] > .thinking-summary::before {
 }
 
 .pcfg-list-remove:hover {
-    background: rgba(231, 76, 60, 0.15);
+    background: var(--color-danger-wash);
 }
 
 .pcfg-list-add,
@@ -3838,7 +3881,7 @@ details[open] > .thinking-summary::before {
 
 /* Dictionary entry */
 .pcfg-entry {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-wash-soft);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
@@ -3850,7 +3893,7 @@ details[open] > .thinking-summary::before {
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--color-wash-soft);
     border-bottom: 1px solid var(--border);
 }
 
@@ -3863,13 +3906,13 @@ details[open] > .thinking-summary::before {
 .pcfg-entry-id {
     font-weight: 400;
     font-size: 0.75rem;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     margin-left: 0.35rem;
     user-select: all;
 }
 
 .pcfg-entry-id code {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.72rem;
 }
 
@@ -3884,7 +3927,7 @@ details[open] > .thinking-summary::before {
 }
 
 .pcfg-entry-delete:hover {
-    background: rgba(231, 76, 60, 0.15);
+    background: var(--color-danger-wash);
 }
 
 .pcfg-entry-fields {
@@ -3903,7 +3946,7 @@ details[open] > .thinking-summary::before {
 .validation-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3940,12 +3983,12 @@ details[open] > .thinking-summary::before {
 }
 
 .validation-item.error {
-    background: rgba(231, 76, 60, 0.1);
+    background: var(--color-danger-wash);
     color: var(--error);
 }
 
 .validation-item.warning {
-    background: rgba(243, 156, 18, 0.1);
+    background: var(--color-warning-wash);
     color: var(--warning);
 }
 
@@ -4018,8 +4061,8 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
 }
 
-.agents-status.success { background: rgba(57, 197, 114, 0.15); color: var(--accent); }
-.agents-status.error   { background: rgba(255, 90, 90, 0.15);  color: #ff5a5a; }
+.agents-status.success { background: var(--color-success-wash); color: var(--accent); }
+.agents-status.error   { background: var(--color-danger-wash);  color: var(--color-danger-text); }
 
 .agents-error,
 .agents-empty {
@@ -4050,7 +4093,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-table th {
-    background: var(--bg-tertiary, #1e2027);
+    background: var(--bg-tertiary);
     font-weight: 600;
     font-size: 0.75rem;
     text-transform: uppercase;
@@ -4059,7 +4102,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-table tbody tr:last-child td { border-bottom: none; }
-.agents-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.agents-table tbody tr:hover { background: var(--color-wash-soft); }
 
 .agents-id { font-family: monospace; font-size: 0.8rem; color: var(--text-muted); }
 
@@ -4071,8 +4114,8 @@ details[open] > .thinking-summary::before {
     font-weight: 600;
 }
 
-.badge-enabled  { background: rgba(57, 197, 114, 0.15); color: var(--accent); }
-.badge-disabled { background: rgba(120,120,120,0.15);   color: var(--text-muted); }
+.badge-enabled  { background: var(--color-success-wash); color: var(--accent); }
+.badge-disabled { background: var(--color-wash);   color: var(--text-muted); }
 
 .agents-actions { text-align: right; white-space: nowrap; }
 .agents-btn-edit,
@@ -4086,9 +4129,9 @@ details[open] > .thinking-summary::before {
     font-size: 1rem;
     transition: background 0.15s;
 }
-.agents-btn-edit:hover   { background: rgba(255,255,255,0.08); }
-.agents-btn-clone:hover  { background: rgba(255,255,255,0.08); }
-.agents-btn-delete:hover { background: rgba(255, 90, 90, 0.15); }
+.agents-btn-edit:hover   { background: var(--color-wash); }
+.agents-btn-clone:hover  { background: var(--color-wash); }
+.agents-btn-delete:hover { background: var(--color-danger-wash); }
 
 /* Cron job modals (Cron Jobs page) — larger modal shell shared by detail + edit */
 .cron-modal {
@@ -4134,7 +4177,7 @@ details[open] > .thinking-summary::before {
     padding: 0.25rem 0.5rem;
     border-radius: var(--radius);
 }
-.cron-modal-close:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.cron-modal-close:hover { background: var(--color-wash); color: var(--text-primary); }
 .cron-modal-body {
     padding: 1.25rem;
     overflow-y: auto;
@@ -4181,15 +4224,15 @@ details[open] > .thinking-summary::before {
 }
 .cron-detail-pre {
     white-space: pre-wrap;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.82rem;
-    background: var(--bg-tertiary, #1e2027);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 0.5rem 0.6rem;
 }
 .cron-detail-error {
-    color: #ff8080;
+    color: var(--color-danger-text);
     font-size: 0.82rem;
     word-break: break-word;
 }
@@ -4211,15 +4254,15 @@ details[open] > .thinking-summary::before {
     text-transform: uppercase;
     letter-spacing: 0.02em;
 }
-.cron-run-status-ok { background: rgba(90, 200, 120, 0.18); color: #5ac878; }
-.cron-run-status-error { background: rgba(255, 90, 90, 0.18); color: #ff5a5a; }
-.cron-run-status-warn { background: rgba(230, 180, 60, 0.18); color: #e6b43c; }
-.cron-run-status-running { background: rgba(90, 150, 230, 0.18); color: #5a96e6; }
-.cron-run-status-neutral { background: rgba(255,255,255,0.08); color: var(--text-muted); }
-.badge-system { background: rgba(150, 120, 230, 0.18); color: #9678e6; }
+.cron-run-status-ok { background: var(--color-success-wash); color: var(--color-success-text); }
+.cron-run-status-error { background: var(--color-danger-wash); color: var(--color-danger-text); }
+.cron-run-status-warn { background: var(--color-warning-wash); color: var(--color-warning-text); }
+.cron-run-status-running { background: var(--color-info-wash); color: var(--color-info-text); }
+.cron-run-status-neutral { background: var(--color-wash); color: var(--text-muted); }
+.badge-system { background: var(--cat-purple-bg); color: var(--cat-purple); }
 
 .cron-job-row-clickable { cursor: pointer; }
-.cron-job-row-clickable:hover { background: rgba(255,255,255,0.04); }
+.cron-job-row-clickable:hover { background: var(--color-wash-soft); }
 
 /* Cron edit fields (grid + single-column) */
 .cron-edit-grid {
@@ -4243,7 +4286,7 @@ details[open] > .thinking-summary::before {
 .cron-edit-field textarea {
     width: 100%;
     box-sizing: border-box;
-    background: var(--bg-tertiary, #1e2027);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
@@ -4303,7 +4346,7 @@ details[open] > .thinking-summary::before {
     color: var(--text-muted);
 }
 
-.required { color: #ff5a5a; }
+.required { color: var(--color-danger-text); }
 
 .agents-form-grid .cfg-input,
 .agents-form-grid .cfg-textarea {
@@ -4311,7 +4354,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-form-error {
-    color: #ff5a5a;
+    color: var(--color-danger-text);
     font-size: 0.85rem;
     margin-bottom: 0.75rem;
 }
@@ -4331,13 +4374,13 @@ details[open] > .thinking-summary::before {
 .agents-field-error {
     display: block;
     font-size: 0.75rem;
-    color: #ff5a5a;
+    color: var(--color-danger-text);
     margin-top: 0.2rem;
 }
 
 .cfg-input.field-error,
 .cfg-textarea.field-error {
-    border-color: #ff5a5a;
+    border-color: var(--color-danger-text);
 }
 
 .agents-dirty-indicator {
@@ -4350,7 +4393,7 @@ details[open] > .thinking-summary::before {
 .agents-confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -4383,13 +4426,13 @@ details[open] > .thinking-summary::before {
 }
 
 .toolbar-btn.danger {
-    background: rgba(255, 90, 90, 0.15);
-    color: #ff5a5a;
-    border-color: rgba(255, 90, 90, 0.3);
+    background: var(--color-danger-wash);
+    color: var(--color-danger-text);
+    border-color: var(--color-danger);
 }
 
 .toolbar-btn.danger:hover {
-    background: rgba(255, 90, 90, 0.25);
+    background: var(--color-danger-wash);
 }
 
 .sr-only {
@@ -4410,7 +4453,7 @@ details[open] > .thinking-summary::before {
     align-items: center;
     gap: 0.75rem;
     padding: 0.625rem 1rem;
-    background: rgba(15, 52, 96, 0.4); /* Muted --bg-surface with transparency */
+    background: var(--color-surface-2); /* Muted --bg-surface with transparency */
     border-bottom: 1px solid var(--border);
     border-left: 3px solid var(--warning); /* Visual accent to reinforce read-only */
     font-size: 0.85rem;
@@ -4431,13 +4474,13 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius-sm);
     font-size: 0.75rem;
     font-weight: 500;
-    background: rgba(0, 180, 216, 0.12); /* Same pattern as streaming-badge */
+    background: var(--color-accent-wash); /* Same pattern as streaming-badge */
     color: var(--accent);
 }
 
 /* Status variants for visual distinction */
 .read-only-status.completed {
-    background: rgba(46, 204, 113, 0.12);
+    background: var(--color-success-wash);
     color: var(--success);
 }
 
@@ -4456,9 +4499,9 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius-pill);
     font-size: 0.68rem;
     font-weight: 500;
-    background: rgba(120, 120, 180, 0.12);
+    background: var(--color-wash);
     color: var(--text-secondary);
-    border: 1px solid rgba(120, 120, 180, 0.2);
+    border: 1px solid var(--color-hairline);
     margin-left: 0.4rem;
     vertical-align: middle;
     white-space: nowrap;
@@ -4542,7 +4585,7 @@ details[open] > .thinking-summary::before {
 .conversation-new-btn:hover {
     color: var(--accent);
     border-color: var(--accent);
-    background: rgba(0, 180, 216, 0.08);
+    background: var(--color-accent-wash-soft);
 }
 
 .conversation-new-btn-icon {
@@ -4591,13 +4634,13 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-list-item:hover .conversation-list-item-btn {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-wash-soft);
     color: var(--text-primary);
 }
 
 .conversation-list-item-btn.active {
     border-left-color: var(--accent);
-    background: rgba(0, 180, 216, 0.07);
+    background: var(--color-accent-wash-soft);
     color: var(--text-primary);
 }
 
@@ -4674,7 +4717,7 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-archive-btn:hover {
-    color: var(--error, #e55);
+    color: var(--error);
 }
 
 .conversation-pin-btn {
@@ -4744,8 +4787,8 @@ details[open] > .thinking-summary::before {
     min-width: 10rem;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated, var(--bg-secondary, #222));
-    border: 1px solid var(--border, #444);
+    background: var(--bg-elevated, var(--bg-secondary));
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0.2rem;
     box-shadow: var(--shadow-raised);
@@ -4756,14 +4799,14 @@ details[open] > .thinking-summary::before {
     border: none;
     cursor: pointer;
     text-align: left;
-    color: var(--text, #ddd);
+    color: var(--text);
     font-size: 0.75rem;
     padding: 0.25rem 0.4rem;
     border-radius: var(--radius-sm);
 }
 
 .conversation-section-menu-item:hover {
-    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    background: var(--bg-hover, var(--color-wash));
 }
 
 .conversation-section-menu-item.active {
@@ -4789,7 +4832,7 @@ details[open] > .thinking-summary::before {
     padding: var(--density-group-pad-y) var(--density-nav-pad-x);
     font-size: var(--density-font-xs);
     font-weight: 600;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.03em;
     border: none;
@@ -4803,7 +4846,7 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-group-header-toggle:hover {
-    color: var(--text, #ccc);
+    color: var(--text);
 }
 
 .group-chevron {
@@ -4824,8 +4867,8 @@ details[open] > .thinking-summary::before {
     height: 1.1rem;
     padding: 0 0.3rem;
     border-radius: var(--radius-pill);
-    background: var(--surface-hover, #333);
-    color: var(--text-muted, #888);
+    background: var(--surface-hover);
+    color: var(--text-muted);
     font-size: 0.6rem;
     font-weight: 600;
 }
@@ -4853,9 +4896,9 @@ details[open] > .thinking-summary::before {
     font-size: 0.65rem;
     font-weight: 600;
     line-height: 1.2;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     background: none;
-    border: 1px solid var(--border, #333);
+    border: 1px solid var(--border);
     border-radius: var(--radius-pill);
     cursor: pointer;
     text-transform: uppercase;
@@ -4865,14 +4908,14 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-filter-btn:hover {
-    color: var(--text, #ccc);
-    border-color: var(--accent, #00b4d8);
+    color: var(--text);
+    border-color: var(--accent);
 }
 
 .conversation-filter-btn.active {
-    color: var(--accent, #00b4d8);
-    border-color: var(--accent, #00b4d8);
-    background: rgba(0, 180, 216, 0.08);
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--color-accent-wash-soft);
 }
 
 /* ── Session Boundary Divider ─────────────────────────────────────────────── */
@@ -5007,8 +5050,8 @@ h3.conversation-title.editable:hover {
     gap: 0.125rem;
     padding: 0.75rem 0.5rem;
     overflow-y: auto;
-    border-right: 1px solid var(--border, #333);
-    background: var(--bg-secondary, transparent);
+    border-right: 1px solid var(--border);
+    background: var(--bg-secondary);
 }
 
 .config-sidebar-item {
@@ -5019,7 +5062,7 @@ h3.conversation-title.editable:hover {
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
-    color: var(--text, inherit);
+    color: var(--text);
     font-size: 0.875rem;
     cursor: pointer;
     white-space: nowrap;
@@ -5028,12 +5071,12 @@ h3.conversation-title.editable:hover {
 }
 
 .config-sidebar-item:hover {
-    background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+    background: var(--bg-hover);
 }
 
 .config-sidebar-item.active {
-    background: var(--accent, #3b82f6);
-    color: var(--accent-fg, #fff);
+    background: var(--accent);
+    color: var(--accent-fg);
     font-weight: 600;
 }
 
@@ -5043,38 +5086,38 @@ h3.conversation-title.editable:hover {
     flex-direction: row;
     gap: 0.25rem;
     padding: 0.5rem 0.75rem 0;
-    border-bottom: 1px solid var(--border, #333);
+    border-bottom: 1px solid var(--border);
 }
 
 .activity-subnav-item {
     padding: 0.35rem 0.7rem;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-    color: var(--text, inherit);
+    color: var(--text);
     font-size: 0.875rem;
     text-decoration: none;
     white-space: nowrap;
 }
 
 .activity-subnav-item:hover {
-    background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+    background: var(--bg-hover);
 }
 
 .activity-subnav-item.active {
-    background: var(--accent, #3b82f6);
-    color: var(--accent-fg, #fff);
+    background: var(--accent);
+    color: var(--accent-fg);
     font-weight: 600;
 }
 
 .activity-subnav-notice {
     padding: 0.4rem 0.75rem;
     font-size: 0.8125rem;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
 }
 
 /* #2898: an unmeasured cost value. Muted and italic so "not measured" is visibly a STATEMENT
    ABOUT THE MEASUREMENT rather than a value - it must never be mistaken for a small number. */
 .activity-cost-unmeasured {
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-style: italic;
 }
 
@@ -5113,7 +5156,7 @@ h3.conversation-title.editable:hover {
     height: 100%;
     min-height: 200px;
     font-size: 1rem;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
 }
 
 .portal-load-spinner {
@@ -5138,15 +5181,15 @@ h3.conversation-title.editable:hover {
 }
 
 .portal-load-error {
-    color: var(--color-error, #e55);
+    color: var(--color-error);
     font-weight: 500;
 }
 
 /* ── Auto-update badge ─────────────────────────────────────────── */
 .update-badge {
     padding: 0.25rem 0.5rem;
-    background: var(--accent, #4a9eff);
-    color: white;
+    background: var(--accent);
+    color: var(--color-on-accent);
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.75rem;
@@ -5155,14 +5198,14 @@ h3.conversation-title.editable:hover {
 }
 
 .update-badge.update-badge-in-progress {
-    background: var(--text-muted, #888);
+    background: var(--text-muted);
     cursor: default;
 }
 
 .update-confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--color-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -5194,15 +5237,15 @@ h3.conversation-title.editable:hover {
     padding: 0.4rem 1rem;
     border: none;
     border-radius: var(--radius);
-    background: var(--accent, #4a9eff);
-    color: white;
+    background: var(--accent);
+    color: var(--color-on-accent);
     cursor: pointer;
     font-weight: 500;
     transition: background 0.15s;
 }
 
 .update-confirm-btn:disabled {
-    background: var(--text-muted, #888);
+    background: var(--text-muted);
     cursor: default;
 }
 
@@ -5212,7 +5255,7 @@ h3.conversation-title.editable:hover {
     width: min(100%, 72rem);
     margin: 1rem auto 3rem;
     padding-top: 1.5rem;
-    border-top: 1px solid var(--border, #333);
+    border-top: 1px solid var(--border);
 }
 
 .home-agent-roster-heading {
@@ -5270,8 +5313,8 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card {
-    background: var(--surface, #1e1e1e);
-    border: 1px solid var(--border, #333);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 1rem 1.25rem;
     cursor: pointer;
@@ -5280,11 +5323,11 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card:hover {
-    border-color: var(--accent, #4a90d9);
+    border-color: var(--accent);
 }
 
 .agent-card--active {
-    border-color: var(--accent, #4a90d9);
+    border-color: var(--accent);
 }
 
 .agent-card-header {
@@ -5321,7 +5364,7 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card-status.status-active {
-    color: var(--status-green, #4caf50);
+    color: var(--status-green);
 }
 
 .agent-card-status.status-idle {
@@ -5329,8 +5372,8 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card-unread-badge {
-    background: var(--accent, #4a90d9);
-    color: #fff;
+    background: var(--accent);
+    color: var(--color-on-accent);
     border-radius: var(--radius-pill);
     font-size: 0.7rem;
     font-weight: 700;
@@ -5378,7 +5421,7 @@ h3.conversation-title.editable:hover {
     margin-left: auto;
     background: none;
     border: none;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-size: 1rem;
     cursor: pointer;
     padding: 4px 8px;
@@ -5388,14 +5431,14 @@ h3.conversation-title.editable:hover {
     font-variant-emoji: text;
     -webkit-font-feature-settings: normal;
 }
-.banner-settings-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); }
+.banner-settings-btn:hover { background: var(--hover-bg, var(--color-wash)); }
 
 /* ── Modal Panel Shared ────────────────────────────────────────── */
 .portal-settings-overlay,
 .session-debug-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--color-scrim);
     z-index: 2000;
     display: flex;
     align-items: center;
@@ -5404,8 +5447,8 @@ h3.conversation-title.editable:hover {
 }
 .portal-settings-panel,
 .session-debug-panel {
-    background: var(--panel-bg, #1e1e2e);
-    border: 1px solid var(--border, #333);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     width: 90vw;
     max-width: 720px;
@@ -5425,17 +5468,17 @@ h3.conversation-title.editable:hover {
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border, #333);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 .portal-settings-close {
     background: none;
     border: none;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-size: 1.2rem;
     cursor: pointer;
 }
-.portal-settings-close:hover { color: var(--text, #eee); }
+.portal-settings-close:hover { color: var(--text); }
 .portal-settings-body {
     padding: 1.5rem;
     overflow-y: auto;
@@ -5449,7 +5492,7 @@ h3.conversation-title.editable:hover {
 }
 .portal-settings-hint {
     font-size: 0.8rem;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     padding-bottom: 0.75rem;
 }
 
@@ -5463,7 +5506,7 @@ h3.conversation-title.editable:hover {
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border, #333);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 .session-debug-title {
@@ -5474,16 +5517,16 @@ h3.conversation-title.editable:hover {
 .session-debug-close {
     background: none;
     border: none;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-size: 1.2rem;
     cursor: pointer;
 }
-.session-debug-close:hover { color: var(--text, #eee); }
+.session-debug-close:hover { color: var(--text); }
 .session-debug-tabs {
     display: flex;
     gap: 0;
     padding: 0 1.5rem;
-    border-bottom: 1px solid var(--border, #333);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     overflow-x: auto;
 }
@@ -5491,26 +5534,26 @@ h3.conversation-title.editable:hover {
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     padding: 0.6rem 1rem;
     cursor: pointer;
     font-size: 0.85rem;
     white-space: nowrap;
     transition: color 0.15s, border-color 0.15s;
 }
-.session-debug-tab:hover { color: var(--text, #eee); }
+.session-debug-tab:hover { color: var(--text); }
 .session-debug-tab.active {
-    color: var(--accent, #7c5cff);
-    border-bottom-color: var(--accent, #7c5cff);
+    color: var(--accent);
+    border-bottom-color: var(--accent);
 }
 .session-debug-loading,
 .session-debug-empty,
 .session-debug-error {
     padding: 1.5rem;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     text-align: center;
 }
-.session-debug-error { color: var(--danger, #f66); }
+.session-debug-error { color: var(--danger); }
 .session-debug-table {
     width: 100%;
     border-collapse: collapse;
@@ -5520,10 +5563,10 @@ h3.conversation-title.editable:hover {
 .session-debug-table td {
     padding: 0.4rem 0.75rem;
     text-align: left;
-    border-bottom: 1px solid var(--border, #333);
+    border-bottom: 1px solid var(--border);
 }
 .session-debug-table th {
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-weight: 500;
     white-space: nowrap;
     width: 1%;
@@ -5534,7 +5577,7 @@ h3.conversation-title.editable:hover {
 .session-debug-meta {
     padding: 0.5rem 1.5rem;
     font-size: 0.8rem;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -5547,7 +5590,7 @@ h3.conversation-title.editable:hover {
     padding: 2px 4px;
     border-radius: var(--radius-sm);
 }
-.session-debug-copy-btn:hover { background: var(--hover-bg, rgba(255,255,255,0.08)); }
+.session-debug-copy-btn:hover { background: var(--hover-bg, var(--color-wash)); }
 .session-debug-system-prompt {
     margin: 0;
     padding: 1rem 1.5rem;
@@ -5575,29 +5618,29 @@ h3.conversation-title.editable:hover {
     gap: 0.5rem;
     padding: 0.75rem 0;
     font-size: 0.8rem;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     flex-wrap: wrap;
 }
 .session-debug-page-size {
-    background: var(--input-bg, #2a2a3a);
-    border: 1px solid var(--border, #333);
-    color: var(--text, #eee);
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     border-radius: var(--radius-sm);
     padding: 2px 4px;
     font-size: 0.8rem;
 }
 .session-debug-pager-btn {
     background: none;
-    border: 1px solid var(--border, #333);
-    color: var(--text-muted, #999);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
     border-radius: var(--radius-sm);
     padding: 3px 8px;
     cursor: pointer;
     font-size: 0.8rem;
 }
 .session-debug-pager-btn:hover:not(:disabled) {
-    color: var(--text, #eee);
-    border-color: var(--text-muted, #999);
+    color: var(--text);
+    border-color: var(--text-muted);
 }
 .session-debug-pager-btn:disabled {
     opacity: 0.4;
@@ -5609,18 +5652,18 @@ h3.conversation-title.editable:hover {
     gap: 0.5rem;
 }
 .session-debug-entry {
-    border: 1px solid var(--border, #333);
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0.5rem 0.75rem;
     font-size: 0.8rem;
 }
 .session-debug-entry.compaction-boundary {
-    border-color: var(--warning, #f5a623);
-    background: rgba(245, 166, 35, 0.05);
+    border-color: var(--warning);
+    background: var(--color-warning-wash);
 }
 .session-debug-entry.crash-sentinel {
-    border-color: var(--danger, #f66);
-    background: rgba(255, 102, 102, 0.05);
+    border-color: var(--danger);
+    background: var(--color-danger-wash);
 }
 .session-debug-entry.historical {
     opacity: 0.7;
@@ -5636,23 +5679,23 @@ h3.conversation-title.editable:hover {
     font-size: 0.75rem;
 }
 .entry-timestamp {
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-size: 0.75rem;
 }
 .entry-flag {
     font-size: 0.7rem;
     padding: 1px 5px;
     border-radius: var(--radius-sm);
-    background: var(--warning, #f5a623);
-    color: #000;
+    background: var(--warning);
+    color: var(--color-on-accent);
 }
 .entry-flag-sentinel {
-    background: var(--danger, #f66);
-    color: #fff;
+    background: var(--danger);
+    color: var(--color-on-solid);
 }
 .entry-content-details summary {
     cursor: pointer;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
     font-size: 0.8rem;
 }
 .entry-content-full {
@@ -5710,7 +5753,7 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-detail-id {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.9rem;
     color: var(--text-muted);
     background: var(--bg-surface);
@@ -5812,7 +5855,7 @@ h3.conversation-title.editable:hover {
 .agent-danger-zone {
     margin: 1rem;
     padding: 0.75rem 1rem;
-    border: 1px solid var(--danger, #e53e3e);
+    border: 1px solid var(--danger);
     border-radius: var(--radius);
     display: flex;
     align-items: center;
@@ -5857,9 +5900,9 @@ h3.conversation-title.editable:hover {
     gap: 4px;
     padding: 6px 12px;
     margin: 0 0 4px 0;
-    border: 1px solid var(--border-subtle, #333);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    background: var(--surface-raised, #1a1a2e);
+    background: var(--surface-raised);
     font-size: 0.82rem;
     max-height: 120px;
     overflow-y: auto;
@@ -5871,7 +5914,7 @@ h3.conversation-title.editable:hover {
     gap: 6px;
     padding: 3px 6px;
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken, #12121f);
+    background: var(--surface-sunken);
 }
 
 .steering-queue-icon {
@@ -5894,13 +5937,13 @@ h3.conversation-title.editable:hover {
 }
 
 .steering-queue-badge.steer {
-    background: var(--accent-blue-bg, #1e3a5f);
-    color: var(--accent-blue, #60a5fa);
+    background: var(--accent-blue-bg);
+    color: var(--accent-blue);
 }
 
 .steering-queue-badge.followup {
-    background: var(--accent-purple-bg, #2d1b4e);
-    color: var(--accent-purple, #a78bfa);
+    background: var(--accent-purple-bg);
+    color: var(--accent-purple);
 }
 
 .steering-queue-text {
@@ -5908,7 +5951,7 @@ h3.conversation-title.editable:hover {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-muted, #999);
+    color: var(--text-muted);
 }
 /* ── Window Controls Overlay (installed PWA on Windows/desktop) ──────── */
 /* When the app runs as an installed PWA with window-controls-overlay,
@@ -5965,7 +6008,7 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-dashboard-subtitle {
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     font-size: 0.9rem;
 }
 
@@ -5982,9 +6025,9 @@ h3.conversation-title.editable:hover {
     gap: 0.15rem;
     padding: 0.6rem 1rem;
     min-width: 6rem;
-    border: 1px solid var(--border-color, #444);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: var(--surface-2, #2a2a2a);
+    background: var(--surface-2);
 }
 
 .activity-summary-value {
@@ -6005,24 +6048,24 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-summary-stat--action:hover {
-    border-color: var(--accent, #3a6ea5);
+    border-color: var(--accent);
 }
 
 .activity-summary-stat--action.active {
-    background: var(--accent, #3a6ea5);
-    border-color: var(--accent, #3a6ea5);
-    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--color-on-accent);
 }
 
 .activity-summary-stat--action.active .activity-summary-label {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--color-on-accent);
 }
 
 .activity-summary-label {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
 }
 
 .activity-filter-bar {
@@ -6036,18 +6079,18 @@ h3.conversation-title.editable:hover {
 .activity-filter-btn,
 .activity-filter-select {
     padding: 0.35rem 0.6rem;
-    border: 1px solid var(--border-color, #444);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: var(--surface-2, #2a2a2a);
+    background: var(--surface-2);
     color: inherit;
     font-size: 0.85rem;
     cursor: pointer;
 }
 
 .activity-filter-btn.active {
-    background: var(--accent, #3a6ea5);
-    border-color: var(--accent, #3a6ea5);
-    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--color-on-accent);
 }
 
 .activity-loading,
@@ -6055,11 +6098,11 @@ h3.conversation-title.editable:hover {
 .activity-empty {
     padding: 2rem;
     text-align: center;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
 }
 
 .activity-error {
-    color: var(--danger, #c0392b);
+    color: var(--danger, var(--color-danger));
 }
 
 /* #2528: the table lives inside a scroller so content can never be clipped-and-unreachable.
@@ -6096,8 +6139,8 @@ h3.conversation-title.editable:hover {
 .activity-table thead th {
     text-align: left;
     padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border-color, #444);
-    color: var(--text-muted, #888);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-muted);
     font-weight: 600;
 }
 
@@ -6108,13 +6151,13 @@ h3.conversation-title.editable:hover {
 
 .activity-row:hover,
 .activity-row:focus {
-    background: var(--surface-2, #2a2a2a);
+    background: var(--surface-2);
     outline: none;
 }
 
 .activity-row td {
     padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid var(--border-color-subtle, #333);
+    border-bottom: 1px solid var(--border-color-subtle);
     vertical-align: middle;
     /* #2528: every row is exactly one line tall regardless of title length. */
     white-space: nowrap;
@@ -6153,18 +6196,18 @@ h3.conversation-title.editable:hover {
     padding: 0.1rem 0.45rem;
     margin: 0.1rem 0.2rem 0.1rem 0;
     border-radius: var(--radius-pill);
-    background: var(--surface-3, #383838);
+    background: var(--surface-3);
     font-size: 0.75rem;
 }
 
 /* #2857: role treatment on the agent chip. A left border rather than a background swap, so a
    roled chip stays visually a chip and unroled chips are pixel-identical to before. */
 .activity-agent-chip--initiator {
-    border-left: 3px solid var(--accent, #6ea8fe);
+    border-left: 3px solid var(--accent);
 }
 
 .activity-agent-chip--target {
-    border-left: 3px solid var(--accent-muted, #4a5a70);
+    border-left: 3px solid var(--accent-muted);
 }
 
 /* The role word rides inside the chip at reduced emphasis: present for scanning, never competing
@@ -6185,7 +6228,7 @@ h3.conversation-title.editable:hover {
     /* Mirrors .activity-badge: a variable-length id must never shrink or displace the title. */
     flex: 0 0 auto;
     margin-left: 0.3rem;
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+    font-family: var(--font-mono);
     font-size: 0.68rem;
     opacity: 0.75;
 }
@@ -6203,21 +6246,21 @@ h3.conversation-title.editable:hover {
     margin-left: 0.3rem;
     border-radius: 50%;
     vertical-align: middle;
-    background: var(--text-muted, #888);
+    background: var(--text-muted);
 }
 
 .activity-cron-health--ok {
-    background: var(--success, #3fb950);
+    background: var(--success);
 }
 
 .activity-cron-health--failed {
-    background: var(--danger, #f85149);
+    background: var(--danger);
 }
 
 /* Unknown is deliberately NOT green. An unrecognised status from a newer gateway means "we cannot
    tell", and rendering that as healthy is exactly the silent-failure this feature exists to end. */
 .activity-cron-health--unknown {
-    background: var(--text-muted, #888);
+    background: var(--text-muted);
     opacity: 0.6;
 }
 
@@ -6249,8 +6292,8 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-badge-cron {
-    background: var(--accent-muted, #4a5a70);
-    color: #fff;
+    background: var(--accent-muted);
+    color: var(--color-on-solid);
 }
 
 /*
@@ -6261,23 +6304,23 @@ h3.conversation-title.editable:hover {
  * renders no badge at all, so the palette only ever appears on rows that carry real signal.
  */
 .activity-badge-webhook {
-    background: var(--accent-webhook, #6b5a8a);
-    color: #fff;
+    background: var(--accent-webhook);
+    color: var(--color-on-solid);
 }
 
 .activity-badge-subagent {
-    background: var(--accent-subagent, #3f6b57);
-    color: #fff;
+    background: var(--accent-subagent);
+    color: var(--color-on-solid);
 }
 
 .activity-badge-a2a {
-    background: var(--accent-a2a, #7a5c3a);
-    color: #fff;
+    background: var(--accent-a2a);
+    color: var(--color-on-solid);
 }
 
 .activity-badge-agent {
-    background: var(--accent-agent, #5a5a6b);
-    color: #fff;
+    background: var(--accent-agent);
+    color: var(--color-on-solid);
 }
 
 .activity-status {
@@ -6286,7 +6329,7 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-status-archived {
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
 }
 
 .activity-row-cron {
@@ -6301,28 +6344,28 @@ h3.conversation-title.editable:hover {
  * entirely untouched, keeping the marks that do appear meaningful.
  */
 .activity-badge-pinned {
-    background: var(--accent-pinned, #8a6b2f);
-    color: #fff;
+    background: var(--accent-pinned);
+    color: var(--color-on-solid);
 }
 
 /* #2692: read-only marker for InspectableReadOnly rows. Muted/outlined rather than a
    colour-shouting fill, because it reports a capability limit, not urgency. */
 .activity-badge-readonly {
     background: transparent;
-    color: var(--text-muted, #8b93a1);
-    border: 1px solid var(--text-muted, #8b93a1);
+    color: var(--text-muted);
+    border: 1px solid var(--text-muted);
 }
 
 .activity-row-pinned {
-    box-shadow: inset 3px 0 0 var(--accent-pinned, #8a6b2f);
+    box-shadow: inset 3px 0 0 var(--accent-pinned);
 }
 
 /* #1888: live marker. The only PRESENT-TENSE signal on the row, so it gets the one
    animated treatment on the page - motion reads as "happening now" in a way no static
    colour does, and nothing else here moves, so it cannot be mistaken for decoration. */
 .activity-badge-live {
-    background: var(--accent-live, #1f7a4d);
-    color: #fff;
+    background: var(--accent-live);
+    color: var(--color-on-solid);
 }
 
 .activity-badge-live::before {
@@ -6349,17 +6392,17 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-row-live {
-    box-shadow: inset 3px 0 0 var(--accent-live, #1f7a4d);
+    box-shadow: inset 3px 0 0 var(--accent-live);
 }
 
 /* A pinned row that is ALSO live shows both rails rather than one silently winning. */
 .activity-row-pinned.activity-row-live {
-    box-shadow: inset 3px 0 0 var(--accent-live, #1f7a4d),
-                inset 6px 0 0 var(--accent-pinned, #8a6b2f);
+    box-shadow: inset 3px 0 0 var(--accent-live),
+                inset 6px 0 0 var(--accent-pinned);
 }
 
 .activity-summary-stat--live .activity-summary-value {
-    color: var(--accent-live, #1f7a4d);
+    color: var(--accent-live);
 }
 
 
@@ -6426,7 +6469,7 @@ h3.conversation-title.editable:hover {
 }
 .cron-rich-select-option:last-child { border-bottom: 0; }
 .cron-rich-select-option:hover,
-.cron-rich-select-option.selected { background: rgba(255, 255, 255, 0.06); }
+.cron-rich-select-option.selected { background: var(--color-wash); }
 .cron-selector-option-main,
 .cron-selector-option-meta {
     display: flex;
@@ -6450,7 +6493,7 @@ h3.conversation-title.editable:hover {
 .cron-selector-option-meta span {
     padding: 0.15rem 0.45rem;
     border-radius: var(--radius-pill);
-    background: rgba(255,255,255,0.08);
+    background: var(--color-wash);
     color: var(--text-muted);
     font-size: 0.72rem;
 }
@@ -6489,7 +6532,7 @@ h3.conversation-title.editable:hover {
 .cron-static-props {
     padding: 0.85rem;
     margin: 0 0 1rem;
-    background: var(--bg-tertiary, #1e2027);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
 }
@@ -6560,7 +6603,7 @@ h3.conversation-title.editable:hover {
 
 .section-add-btn {
     background: none;
-    border: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.15));
+    border: 1px solid var(--sidebar-border);
     border-radius: var(--radius-sm);
     color: inherit;
     cursor: pointer;
@@ -6569,7 +6612,7 @@ h3.conversation-title.editable:hover {
 }
 
 .section-add-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--color-wash);
 }
 
 .conversation-section-header {
@@ -6621,8 +6664,8 @@ h3.conversation-title.editable:hover {
 
 .section-name-input {
     flex: 1 1 auto;
-    background: rgba(0, 0, 0, 0.2);
-    border: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.2));
+    background: var(--color-scrim-soft);
+    border: 1px solid var(--sidebar-border);
     border-radius: var(--radius-sm);
     color: inherit;
     font-size: 0.8rem;
@@ -6638,7 +6681,7 @@ h3.conversation-title.editable:hover {
 .section-save-btn,
 .section-cancel-btn {
     background: none;
-    border: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.15));
+    border: 1px solid var(--sidebar-border);
     border-radius: var(--radius-sm);
     color: inherit;
     cursor: pointer;
@@ -6709,7 +6752,7 @@ h3.conversation-title.editable:hover {
     width: 100%;
     height: 100%;
     border: 0;
-    background: #fff;
+    background: var(--color-embed-surface);
 }
 
 .tool-host-frame-overlay {
@@ -6747,7 +6790,7 @@ h3.conversation-title.editable:hover {
     padding: 0.55rem 1.1rem;
     border-radius: var(--radius);
     background: var(--accent);
-    color: #fff;
+    color: var(--color-on-accent);
     text-decoration: none;
     font-weight: 600;
 }
@@ -6799,8 +6842,8 @@ h3.conversation-title.editable:hover {
 .tools-form-input {
     padding: 0.4rem 0.55rem;
     border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color, #444);
-    background: var(--input-bg, #1b1b1b);
+    border: 1px solid var(--border-color);
+    background: var(--input-bg);
     color: inherit;
     font: inherit;
     min-width: 0;
@@ -6809,7 +6852,7 @@ h3.conversation-title.editable:hover {
 .tools-form-errors {
     margin: 0 0 0.5rem 0;
     padding-left: 1.1rem;
-    color: var(--error-color, #e06c75);
+    color: var(--error-color);
     font-size: 0.85rem;
 }
 
@@ -6827,7 +6870,7 @@ h3.conversation-title.editable:hover {
     align-items: center;
     gap: 0.75rem;
     padding: 0.55rem 0.75rem;
-    border: 1px solid var(--border-color, #333);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
 }
 
@@ -6957,8 +7000,8 @@ h3.conversation-title.editable:hover {
 .home-error {
     padding: 0.6rem 0.8rem;
     border-radius: var(--radius-sm);
-    background: rgba(220, 60, 60, 0.12);
-    border: 1px solid rgba(220, 60, 60, 0.4);
+    background: var(--color-danger-wash);
+    border: 1px solid var(--color-danger);
 }
 
 .banner-home-link {
