@@ -21,6 +21,12 @@
       "blurb": "What an agent is, how to define one, and every configuration option."
     },
     {
+      "id": "secrets-and-locations",
+      "file": "secrets-and-locations.md",
+      "title": "Servers & credentials",
+      "blurb": "Registering a server, where its credential lives, and what an agent can do with it."
+    },
+    {
       "id": "skills",
       "file": "skills.md",
       "title": "Skills",
@@ -38,10 +44,26 @@
       "title": "Channels",
       "blurb": "Reaching agents from the portal, Telegram or Service Bus.",
       "children": [
-        { "id": "channels-signalr", "file": "channels/signalr.md", "title": "SignalR (the portal)" },
-        { "id": "channels-telegram", "file": "channels/telegram.md", "title": "Telegram" },
-        { "id": "channels-service-bus", "file": "channels/service-bus.md", "title": "Azure Service Bus" },
-        { "id": "channels-envelope", "file": "channels/service-bus-envelope.md", "title": "Service Bus envelope" }
+        {
+          "id": "channels-signalr",
+          "file": "channels/signalr.md",
+          "title": "SignalR (the portal)"
+        },
+        {
+          "id": "channels-telegram",
+          "file": "channels/telegram.md",
+          "title": "Telegram"
+        },
+        {
+          "id": "channels-service-bus",
+          "file": "channels/service-bus.md",
+          "title": "Azure Service Bus"
+        },
+        {
+          "id": "channels-envelope",
+          "file": "channels/service-bus-envelope.md",
+          "title": "Service Bus envelope"
+        }
       ]
     },
     {
