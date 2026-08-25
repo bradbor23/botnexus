@@ -119,6 +119,24 @@ Seven roles. Reference these, never a raw font-size.
 Line-heights sit on a 4px grid. Sizes are in `rem` so an OS text-size preference
 still scales them — the practical web equivalent of HIG's Dynamic Type.
 
+**The scale is applied in CSS, not by adding `.t-*` classes to markup.** The
+portal had 250 raw `font-size` declarations across **37 distinct values**;
+adding classes to 14,830 lines of `.razor` would have left all 250 in place to
+fight them on specificity — two competing systems instead of one — for no gain,
+since every component already carries a class. Mapping the declarations onto the
+role tokens collapsed 37 values to 7 in a single reviewable diff.
+
+Rules that also set a monospace family take `--text-mono` rather than the
+size-matched role, so intent survives even though mono and label are both 13px.
+
+Seven `em`-based sizes are left alone: they are relative to their parent by
+design, and pinning them to a fixed rem would break the nesting they exist for.
+
+`font-size` only. The roles pair a size with a leading, but line-height is still
+per-component: this portal's chrome is dense and density-tuned, and changing both
+dimensions at once would make any resulting layout break impossible to attribute.
+Leading is a follow-up.
+
 ### Typeface
 
 **Inter**, self-hosted, weights 400–700 from a single variable file per subset.
@@ -192,6 +210,31 @@ under `prefers-reduced-transparency`.
 Entering decelerates (`--ease-enter`), exiting accelerates (`--ease-exit`).
 Anything past ~200ms on UI chrome reads as sluggish, not smooth.
 `prefers-reduced-motion` is honoured globally.
+
+### Contrast
+
+**Both themes are verified against WCAG AA (4.5:1 for body text, 3:1 for large).**
+This is checked by measurement, not by eye — picking values by eye is exactly how
+the first cut of the light theme shipped five failures.
+
+Four token corrections came out of that audit:
+
+| Token | Was | Now | Why |
+|---|---|---|---|
+| `--color-ink-faint` (dark) | `#6b7885` | `#818c97` | failed on all three dark surfaces (3.51–4.19) |
+| `--color-ink-faint` (light) | `#6e7c8a` | `#626e7b` | failed on all three light surfaces (3.80–4.27) |
+| `--color-accent` (light) | `#0b7f99` | `#0a7790` | failed as text on canvas (4.37) and surface-2 (4.14) |
+| `--color-danger-fill` | *(new)* | `#ce433d` dark | white on `#f85149` was only 3.35:1 |
+
+`--color-danger-fill` exists because a **solid danger button** carrying
+`--color-on-solid` needs a darker red than the same colour used as an 8px dot or
+a 1px border, where text contrast does not apply. `--color-danger` stays bright
+for those.
+
+When auditing, composite translucent backgrounds over what sits behind them. A
+naive walk that returns `rgba(…, 0.05)` as the background compares a colour
+against a 5% tint of itself and reports 1:1 — a false failure that will send you
+chasing a bug that is not there.
 
 ### Focus
 
@@ -333,6 +376,9 @@ fingerprints its own `_framework` assets but has no equivalent for
 - Light/dark toggle in the top bar and in Settings, persisted per browser and
   applied before first paint
 - Inter self-hosted as the UI typeface, subset and preloaded
+- Type scale applied: 250 raw font-sizes across 37 values collapsed onto the
+  seven roles (7 relative `em` values left by design)
+- Both themes verified WCAG AA by measurement; four token corrections applied
 
 **Verified:** `src/dirs.proj` builds with 0 warnings / 0 errors; the gateway
 boots with 0 errors and serves the tokenised stylesheet.
@@ -341,9 +387,8 @@ boots with 0 errors and serves the tokenised stylesheet.
 
 1. Migrate the 75 remaining `var(--radius)` call sites onto `--radius-sm` /
    `--radius-lg` explicitly, then retire the legacy alias.
-3. Apply the seven type roles to markup — currently defined but not yet adopted.
-   This is the largest remaining piece and the one that most affects how the
-   portal reads.
+3. Line-height: pair each role's leading with its size, once the size change has
+   been shaken out in daily use.
 4. Retire the legacy colour aliases once no rule references them.
 5. Real `Dialog` / `Toast` components using `.material-overlay`.
 6. Command palette (`Ctrl/Cmd+K`).

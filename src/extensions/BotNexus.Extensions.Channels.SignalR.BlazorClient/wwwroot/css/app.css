@@ -82,7 +82,9 @@
        never read as text-text-*. */
     --color-ink: #e6edf3;
     --color-ink-muted: #9aa7b4;
-    --color-ink-faint: #6b7885;
+    /* Lightened from #6b7885: that failed WCAG AA on all three dark surfaces (3.51-4.19).
+       Verified >= 4.6:1 against canvas, surface and surface-2. */
+    --color-ink-faint: #818c97;
 
     /* ONE saturated colour. Primary actions, focus rings and the active nav
        item only — never decoration, never a section heading. BotNexus's
@@ -109,6 +111,11 @@
     --color-warning-text: #e3b341;
 
     --color-danger: #f85149;
+    /* A SOLID danger button carrying --color-on-solid needs a darker red than the dot/border
+       value: white on #f85149 is only 3.35:1. This clears 4.6:1 while staying recognisably the
+       same red. --color-danger stays bright where it is a 1px border or an 8px dot and
+       contrast against text does not apply. */
+    --color-danger-fill: #ce433d;
     --color-danger-bg: #2c1315;
     --color-danger-text: #ff7b72;
 
@@ -330,13 +337,16 @@
 
     --color-ink: #10161d;
     --color-ink-muted: #4d5a67;
-    --color-ink-faint: #6e7c8a;
+    /* Darkened from #6e7c8a: that failed AA on all three light surfaces (3.80-4.27). */
+    --color-ink-faint: #626e7b;
 
-    --color-accent: #0b7f99;
-    --color-accent-hover: #096a80;
+    /* Darkened from #0b7f99: failed AA as text on canvas (4.37) and surface-2 (4.14).
+       Also improves white-on-accent for filled buttons, 4.66 -> 5.18. */
+    --color-accent: #0a7790;
+    --color-accent-hover: #086274;
     --color-on-accent: #ffffff;
-    --color-accent-ring: rgba(11, 127, 153, 0.40);
-    --color-accent-wash: rgba(11, 127, 153, 0.08);
+    --color-accent-ring: rgba(10, 119, 144, 0.40);
+    --color-accent-wash: rgba(10, 119, 144, 0.08);
 
     --color-success: #1a7f37;
     --color-success-bg: #dcfce7;
@@ -347,6 +357,7 @@
     --color-warning-text: #7d5300;
 
     --color-danger: #cf222e;
+    --color-danger-fill: #cf222e;
     --color-danger-bg: #fbe3e4;
     --color-danger-text: #a40e26;
 
@@ -360,8 +371,8 @@
     --color-scrim-soft: rgba(16, 22, 29, 0.22);
     --color-wash: rgba(16, 22, 29, 0.05);
     --color-wash-soft: rgba(16, 22, 29, 0.03);
-    --color-accent-wash-soft: rgba(11, 127, 153, 0.05);
-    --color-accent-wash-strong: rgba(11, 127, 153, 0.18);
+    --color-accent-wash-soft: rgba(10, 119, 144, 0.05);
+    --color-accent-wash-strong: rgba(10, 119, 144, 0.18);
     --color-success-wash: rgba(26, 127, 55, 0.12);
     --color-warning-wash: rgba(154, 103, 0, 0.12);
     --color-danger-wash: rgba(207, 34, 46, 0.12);
@@ -595,7 +606,7 @@ html, body, #app {
 }
 
 .banner-logo {
-    font-size: 1.2rem;
+    font-size: var(--text-title);
     line-height: 1;
     flex-shrink: 0;
 }
@@ -658,7 +669,7 @@ html, body, #app {
     padding: 8px 20px;
     background: var(--color-wash-soft);
     border-left: 3px solid var(--accent);
-    font-size: 0.82rem;
+    font-size: var(--text-label);
 }
 
 .announcement-item.warning {
@@ -681,7 +692,7 @@ html, body, #app {
     cursor: pointer;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .announcement-dismiss:hover {
@@ -785,7 +796,7 @@ html, body, #app {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
 }
 
@@ -809,7 +820,7 @@ html, body, #app {
     padding: 5px 8px;
     border-radius: var(--radius);
     cursor: default;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-secondary);
     transition: background 0.15s ease, color 0.15s ease;
 }
@@ -848,7 +859,7 @@ html, body, #app {
 }
 
 .agent-list h3 {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-muted);
@@ -856,7 +867,7 @@ html, body, #app {
 }
 
 .connection-status {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     padding: 0.25rem 0.5rem;
     border-radius: var(--radius);
     margin-bottom: 0.5rem;
@@ -892,19 +903,19 @@ html, body, #app {
 }
 
 .agent-name {
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     font-weight: 500;
 }
 
 .agent-id {
-    font-size: 0.7rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
 }
 
 .text-muted {
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 /* ── Agent tabs (Phase 3 multi-session) ────────────────────────────── */
@@ -936,7 +947,7 @@ html, body, #app {
 }
 
 .agent-expand {
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     width: 0.8rem;
     flex-shrink: 0;
@@ -944,7 +955,7 @@ html, body, #app {
 
 .agent-node-header .agent-name {
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -978,7 +989,7 @@ html, body, #app {
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--text-label);
     text-align: left;
     transition: background 0.15s;
 }
@@ -995,17 +1006,17 @@ html, body, #app {
 
 .channel-item.sub-agent {
     color: var(--text-muted);
-    font-size: 0.73rem;
+    font-size: var(--text-caption);
 }
 
 .channel-icon {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     flex-shrink: 0;
 }
 
 .session-id-mini {
     font-family: var(--font-mono);
-    font-size: 0.6rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     opacity: 0.6;
     margin-left: auto;
@@ -1021,7 +1032,7 @@ html, body, #app {
     border-radius: var(--radius-pill);
     background: var(--accent);
     color: var(--color-on-accent);
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     font-weight: 700;
     line-height: 1;
 }
@@ -1039,7 +1050,7 @@ html, body, #app {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     cursor: pointer;
     transition: all 0.15s;
 }
@@ -1057,7 +1068,7 @@ html, body, #app {
 
 .agent-streaming-dot {
     color: var(--accent);
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     animation: pulse 1s ease-in-out infinite;
 }
 
@@ -1073,7 +1084,7 @@ html, body, #app {
 }
 
 .connection-dot {
-    font-size: 0.6rem;
+    font-size: var(--text-caption);
     line-height: 1;
 }
 
@@ -1103,7 +1114,7 @@ html, body, #app {
 }
 
 .connection-indicator-dot .connection-dot {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
 }
 
 .connection-indicator.status-connected .connection-dot { color: var(--success); }
@@ -1159,7 +1170,7 @@ html, body, #app {
     align-items: center;
     justify-content: center;
     background: var(--bg-surface);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     line-height: 1;
     flex-shrink: 0;
     /* Multi-codepoint ZWJ emoji and combining marks must not push the circle out of
@@ -1305,7 +1316,7 @@ html, body, #app {
 }
 
 .agent-tab-icon {
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     line-height: 1;
 }
 
@@ -1342,7 +1353,7 @@ html, body, #app {
     border: 1px dashed var(--border);
     border-radius: var(--radius);
     color: var(--text-secondary);
-    font-size: 0.83rem;
+    font-size: var(--text-label);
 }
 
 .canvas-frame {
@@ -1373,11 +1384,11 @@ html, body, #app {
     border: 1px dashed var(--border);
     border-radius: var(--radius);
     color: var(--text-secondary);
-    font-size: 0.83rem;
+    font-size: var(--text-label);
 }
 
 .todo-progress {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-secondary);
 }
 
@@ -1395,13 +1406,13 @@ html, body, #app {
     border-radius: var(--radius);
     background: var(--color-warning-wash);
     color: var(--text-primary);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 
 .todo-closeout-icon {
     flex: 0 0 auto;
     color: var(--color-warning);
-    font-size: 0.95rem;
+    font-size: var(--text-body);
     line-height: 1;
 }
 
@@ -1427,12 +1438,12 @@ html, body, #app {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--bg-secondary, var(--bg-primary));
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .todo-item-box {
     flex: 0 0 auto;
-    font-size: 1rem;
+    font-size: var(--text-heading);
     line-height: 1;
 }
 
@@ -1445,7 +1456,7 @@ html, body, #app {
 
 .todo-item-status-label {
     flex: 0 0 auto;
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.02em;
     color: var(--text-secondary);
@@ -1499,7 +1510,7 @@ html, body, #app {
     padding: 0.75rem;
     border: 1px dashed var(--border);
     border-radius: var(--radius);
-    font-size: 0.83rem;
+    font-size: var(--text-label);
     color: var(--text-secondary);
 }
 
@@ -1628,7 +1639,7 @@ html, body, #app {
 }
 
 .workspace-file-header h3 {
-    font-size: 0.84rem;
+    font-size: var(--text-mono);
     font-family: var(--font-mono);
     color: var(--text-secondary);
     white-space: nowrap;
@@ -1639,7 +1650,7 @@ html, body, #app {
 .workspace-file-truncation {
     margin-top: 0.45rem;
     color: var(--warning);
-    font-size: 0.78rem;
+    font-size: var(--text-label);
 }
 
 .workspace-file-content {
@@ -1649,7 +1660,7 @@ html, body, #app {
     padding: 0.85rem;
     overflow: auto;
     font-family: var(--font-mono);
-    font-size: 0.82rem;
+    font-size: var(--text-mono);
     line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -1668,7 +1679,7 @@ html, body, #app {
     background: var(--bg-primary);
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 0.82rem;
+    font-size: var(--text-mono);
     line-height: 1.45;
     tab-size: 4;
     white-space: pre;
@@ -1785,13 +1796,13 @@ html, body, #app {
 
 .reports-list-meta {
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: var(--text-label);
 }
 
 .report-render-notice {
     margin-top: 0.45rem;
     color: var(--warning);
-    font-size: 0.78rem;
+    font-size: var(--text-label);
 }
 
 .report-content {
@@ -1800,7 +1811,7 @@ html, body, #app {
     margin: 0;
     padding: 0.85rem;
     overflow: auto;
-    font-size: 0.86rem;
+    font-size: var(--text-body);
     line-height: 1.5;
     overflow-wrap: anywhere;
     word-break: break-word;
@@ -1814,7 +1825,7 @@ html, body, #app {
     justify-content: center;
     height: 100%;
     color: var(--text-muted);
-    font-size: 0.95rem;
+    font-size: var(--text-body);
 }
 
 /* ── Chat panel ─────────────────────────────────────────────────────── */
@@ -1851,7 +1862,7 @@ html, body, #app {
 
 
 .streaming-badge {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     color: var(--accent);
     background: var(--color-accent-wash);
     padding: 0.15rem 0.5rem;
@@ -1893,7 +1904,7 @@ html, body, #app {
     background: transparent;
     align-self: flex-start;
     border: 1px dashed var(--border);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     color: var(--text-secondary);
 }
 
@@ -1924,14 +1935,14 @@ html, body, #app {
 }
 
 .message-role {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
 }
 
 .message-time {
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     opacity: 0.7;
 }
@@ -1941,7 +1952,7 @@ html, body, #app {
     align-items: center;
     gap: 0.4rem;
     padding: 0.15rem 0;
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     opacity: 0.7;
     flex-wrap: wrap;
@@ -1956,7 +1967,7 @@ html, body, #app {
     border-radius: var(--radius-sm);
     background: var(--bg-secondary);
     color: var(--text-secondary);
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     line-height: 1;
     padding: 0.15rem 0.3rem;
     cursor: pointer;
@@ -1979,7 +1990,7 @@ html, body, #app {
 
 .message-tool {
     margin-top: 0.35rem;
-    font-size: 0.8rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
 }
@@ -2027,13 +2038,13 @@ html, body, #app {
 }
 
 .ask-user-title {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-weight: 600;
     color: var(--text-primary);
 }
 
 .ask-user-timeout {
-    font-size: 0.75rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
 }
@@ -2056,7 +2067,7 @@ html, body, #app {
     align-items: flex-start;
     gap: 0.45rem;
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .ask-user-choice input {
@@ -2076,13 +2087,13 @@ html, body, #app {
     color: var(--text-primary);
     padding: 0.6rem 0.75rem;
     font-family: var(--font-sans);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     resize: vertical;
 }
 
 .ask-user-error {
     color: var(--error);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 
 .ask-user-actions {
@@ -2099,7 +2110,7 @@ html, body, #app {
     background: var(--bg-input);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     resize: none;
     min-height: 40px;
     max-height: 120px;
@@ -2110,7 +2121,7 @@ html, body, #app {
 /* Prevent iOS Safari auto-zoom on input focus — must be >= 16px */
 @media (max-width: 768px) {
     .chat-input {
-        font-size: 16px;
+        font-size: var(--text-heading);
     }
 }
 
@@ -2130,7 +2141,7 @@ html, body, #app {
     background: var(--accent);
     color: var(--color-on-accent);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: background 0.15s;
     align-self: flex-end;
@@ -2154,9 +2165,9 @@ html, body, #app {
     left: 0;
     right: 0;
     padding: 0.6rem 1.25rem;
-    background: var(--error);
+    background: var(--color-danger-fill);
     color: var(--color-on-solid);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     z-index: 1000;
 }
 
@@ -2229,7 +2240,7 @@ html, body, #app {
 }
 
 .session-id {
-    font-size: 0.7rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
     user-select: all;
@@ -2242,7 +2253,7 @@ html, body, #app {
     border-radius: var(--radius);
     background: transparent;
     color: var(--text-secondary);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -2304,7 +2315,7 @@ html, body, #app {
     padding: 0.4rem 1rem;
     border: none;
     border-radius: var(--radius);
-    background: var(--error);
+    background: var(--color-danger-fill);
     color: var(--color-on-solid);
     font-weight: 600;
     cursor: pointer;
@@ -2344,25 +2355,25 @@ html, body, #app {
 }
 
 .tool-icon {
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     flex-shrink: 0;
 }
 
 .tool-name {
     font-family: var(--font-mono);
     font-weight: 500;
-    font-size: 0.85rem;
+    font-size: var(--text-mono);
 }
 
 .tool-duration {
-    font-size: 0.7rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
     margin-left: auto;
 }
 
 .tool-expand {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     flex-shrink: 0;
     width: 1rem;
@@ -2379,7 +2390,7 @@ html, body, #app {
 }
 
 .tool-section-label {
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
@@ -2403,7 +2414,7 @@ html, body, #app {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-muted);
-    font-size: 0.6rem;
+    font-size: var(--text-caption);
     line-height: 1;
     padding: 0.1rem 0.25rem;
     cursor: pointer;
@@ -2425,7 +2436,7 @@ html, body, #app {
 
 .tool-content {
     font-family: var(--font-mono);
-    font-size: 0.8rem;
+    font-size: var(--text-mono);
     background: var(--color-scrim-soft);
     padding: 0.5rem 0.75rem;
     border-radius: var(--radius-sm);
@@ -2449,7 +2460,7 @@ html, body, #app {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     line-height: 1;
     padding: 0.1rem 0.25rem;
     cursor: pointer;
@@ -2508,7 +2519,7 @@ html, body, #app {
     border: none;
     background: transparent;
     color: var(--text-muted);
-    font-size: 1rem;
+    font-size: var(--text-heading);
     line-height: 1;
     cursor: pointer;
     padding: 0.2rem 0.4rem;
@@ -2522,7 +2533,7 @@ html, body, #app {
 
 .tool-modal-content {
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: var(--text-mono);
     line-height: 1.45;
     color: var(--text-secondary);
     background: var(--color-scrim-soft);
@@ -2543,7 +2554,7 @@ html, body, #app {
     background: var(--color-accent-wash);
     color: var(--accent);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: background 0.15s;
     align-self: flex-end;
@@ -2566,7 +2577,7 @@ html, body, #app {
     background: var(--color-warning-wash);
     color: var(--warning);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: background 0.15s;
     align-self: flex-end;
@@ -2588,7 +2599,7 @@ html, body, #app {
     background: var(--color-success-wash);
     color: var(--success);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: background 0.15s;
     align-self: flex-end;
@@ -2610,7 +2621,7 @@ html, body, #app {
     background: var(--color-danger-wash);
     color: var(--error);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: background 0.15s;
     align-self: flex-end;
@@ -2630,7 +2641,7 @@ html, body, #app {
     gap: 0.5rem;
     padding: 1rem;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 /* #1691: scroll-up load-more affordance pinned above the message list. */
@@ -2641,7 +2652,7 @@ html, body, #app {
     gap: 0.5rem;
     padding: 0.5rem 1rem;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .history-load-more .load-more-btn {
@@ -2650,7 +2661,7 @@ html, body, #app {
     border-radius: var(--radius-pill);
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     padding: 0.25rem 0.75rem;
 }
 
@@ -2675,7 +2686,7 @@ html, body, #app {
     border-radius: var(--radius-pill);
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     padding: 0.25rem 0.75rem;
 }
 
@@ -2701,7 +2712,7 @@ html, body, #app {
     justify-content: center;
     padding: 2rem 1rem;
     color: var(--text-muted);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     text-align: center;
 }
 
@@ -2781,7 +2792,7 @@ html, body, #app {
     border-radius: var(--radius-sm);
     background: var(--bg-secondary);
     color: var(--text-secondary);
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     line-height: 1;
     padding: 0.2rem 0.35rem;
     cursor: pointer;
@@ -3047,7 +3058,7 @@ html, body, #app {
 
 .thinking-summary {
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     font-style: italic;
     user-select: none;
@@ -3063,7 +3074,7 @@ html, body, #app {
 
 .thinking-summary::before {
     content: "▸";
-    font-size: 0.6rem;
+    font-size: var(--text-caption);
     transition: transform 0.15s;
 }
 
@@ -3073,7 +3084,7 @@ details[open] > .thinking-summary::before {
 
 .thinking-content {
     margin-top: 0.4rem;
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     font-style: italic;
     line-height: 1.5;
@@ -3089,7 +3100,7 @@ details[open] > .thinking-summary::before {
 .system-message {
     align-self: center;
     text-align: center;
-    font-size: 0.78rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     padding: 0.3rem 0.75rem;
     background: var(--color-wash);
@@ -3122,7 +3133,7 @@ details[open] > .thinking-summary::before {
     height: 32px;
     cursor: pointer;
     line-height: 1;
-    font-size: 1rem;
+    font-size: var(--text-heading);
 }
 
 .chat-header-overflow-trigger:hover {
@@ -3160,7 +3171,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     background: transparent;
     color: var(--text-secondary);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
     transition: all 0.15s;
     line-height: 1;
@@ -3214,7 +3225,7 @@ details[open] > .thinking-summary::before {
     color: var(--text-primary);
     cursor: pointer;
     text-align: left;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     transition: background 0.1s;
 }
 
@@ -3232,7 +3243,7 @@ details[open] > .thinking-summary::before {
 
 .command-desc {
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: var(--text-label);
 }
 
 
@@ -3269,7 +3280,7 @@ details[open] > .thinking-summary::before {
 
 .config-header h3 {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--text-heading);
     font-weight: 600;
 }
 
@@ -3277,7 +3288,7 @@ details[open] > .thinking-summary::before {
     background: transparent;
     border: none;
     color: var(--text-muted);
-    font-size: 1.1rem;
+    font-size: var(--text-title);
     cursor: pointer;
     padding: 0.2rem 0.4rem;
     border-radius: var(--radius);
@@ -3296,7 +3307,7 @@ details[open] > .thinking-summary::before {
     gap: 0.5rem;
     padding: 2rem;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .config-body {
@@ -3313,20 +3324,20 @@ details[open] > .thinking-summary::before {
 }
 
 .config-field label {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
 }
 
 .config-value {
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     color: var(--text-primary);
 }
 
 .config-value.mono {
     font-family: var(--font-mono);
-    font-size: 0.8rem;
+    font-size: var(--text-mono);
     word-break: break-all;
 }
 
@@ -3336,7 +3347,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     background: var(--bg-input);
     color: var(--text-primary);
-    font-size: 0.85rem;
+    font-size: var(--text-mono);
     font-family: var(--font-mono);
     cursor: pointer;
 }
@@ -3352,7 +3363,7 @@ details[open] > .thinking-summary::before {
     border: 1px solid var(--error);
     border-radius: var(--radius);
     color: var(--error);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 
 .config-actions {
@@ -3411,7 +3422,7 @@ details[open] > .thinking-summary::before {
     background: var(--success);
     color: var(--color-on-solid);
     border-radius: var(--radius);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-weight: 600;
     z-index: 200;
     animation: fadeInOut 1.5s ease-in-out;
@@ -3448,7 +3459,7 @@ details[open] > .thinking-summary::before {
 /* ── Sub-agent items in sidebar ─────────────────────────────────────── */
 
 .sub-agent-name {
-    font-size: 0.73rem;
+    font-size: var(--text-caption);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3457,7 +3468,7 @@ details[open] > .thinking-summary::before {
 }
 
 .sub-agent-archetype {
-    font-size: 0.6rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     opacity: 0.6;
     margin-left: auto;
@@ -3594,7 +3605,7 @@ details[open] > .thinking-summary::before {
 
 .platform-config-toolbar h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: var(--text-title);
     font-weight: 600;
 }
 
@@ -3605,7 +3616,7 @@ details[open] > .thinking-summary::before {
 }
 
 .platform-config-status {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     margin-right: 0.25rem;
 }
 
@@ -3618,7 +3629,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     background: transparent;
     color: var(--text-primary);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
 }
@@ -3666,7 +3677,7 @@ details[open] > .thinking-summary::before {
 }
 
 .pcfg-top-field label {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     min-width: 120px;
     flex-shrink: 0;
@@ -3703,13 +3714,13 @@ details[open] > .thinking-summary::before {
 
 .pcfg-section-header h3 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: var(--text-body);
     font-weight: 600;
     white-space: nowrap;
 }
 
 .pcfg-section-desc {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     flex: 1;
     overflow: hidden;
@@ -3718,7 +3729,7 @@ details[open] > .thinking-summary::before {
 }
 
 .pcfg-collapse-icon {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     color: var(--text-secondary);
     width: 14px;
     text-align: center;
@@ -3741,7 +3752,7 @@ details[open] > .thinking-summary::before {
 
 .pcfg-field > label {
     min-width: 160px;
-    font-size: 0.78rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     flex-shrink: 0;
     text-transform: uppercase;
@@ -3759,7 +3770,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     background: var(--bg-input);
     color: var(--text-primary);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     font-family: var(--font-sans);
     transition: border-color 0.15s;
 }
@@ -3827,7 +3838,7 @@ details[open] > .thinking-summary::before {
 }
 
 .pcfg-nested h4 {
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     color: var(--text-primary);
     margin: 0;
     font-weight: 600;
@@ -3859,7 +3870,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     background: var(--bg-input);
     color: var(--text-primary);
-    font-size: 0.82rem;
+    font-size: var(--text-label);
 }
 
 .pcfg-list-item input:focus {
@@ -3872,7 +3883,7 @@ details[open] > .thinking-summary::before {
     border: none;
     color: var(--error);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     padding: 0.2rem 0.4rem;
     border-radius: var(--radius);
     transition: background 0.15s;
@@ -3888,7 +3899,7 @@ details[open] > .thinking-summary::before {
     border: 1px dashed var(--border);
     border-radius: var(--radius);
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: var(--text-label);
     padding: 0.25rem 0.6rem;
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s;
@@ -3911,7 +3922,7 @@ details[open] > .thinking-summary::before {
 
 .pcfg-dict-header h4 {
     margin: 0;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     font-weight: 600;
 }
 
@@ -3939,13 +3950,13 @@ details[open] > .thinking-summary::before {
 
 .pcfg-entry-name {
     font-weight: 600;
-    font-size: 0.88rem;
+    font-size: var(--text-body);
     color: var(--accent);
 }
 
 .pcfg-entry-id {
     font-weight: 400;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     margin-left: 0.35rem;
     user-select: all;
@@ -3953,14 +3964,14 @@ details[open] > .thinking-summary::before {
 
 .pcfg-entry-id code {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: var(--text-mono);
 }
 
 .pcfg-entry-delete {
     background: transparent;
     border: none;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     padding: 0.15rem 0.3rem;
     border-radius: var(--radius);
     transition: background 0.15s;
@@ -4006,7 +4017,7 @@ details[open] > .thinking-summary::before {
 
 .validation-dialog h3 {
     margin: 0 0 0.75rem 0;
-    font-size: 1rem;
+    font-size: var(--text-heading);
 }
 
 .validation-list {
@@ -4017,7 +4028,7 @@ details[open] > .thinking-summary::before {
 }
 
 .validation-item {
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     padding: 0.3rem 0.5rem;
     border-radius: var(--radius);
 }
@@ -4086,7 +4097,7 @@ details[open] > .thinking-summary::before {
 
 .agents-toolbar h2 {
     margin: 0;
-    font-size: 1.25rem;
+    font-size: var(--text-title);
 }
 
 .agents-toolbar-actions {
@@ -4096,7 +4107,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-status {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     padding: 0.25rem 0.6rem;
     border-radius: var(--radius);
 }
@@ -4122,7 +4133,7 @@ details[open] > .thinking-summary::before {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
-    font-size: 0.875rem;
+    font-size: var(--text-body);
 }
 
 .agents-table th,
@@ -4135,7 +4146,7 @@ details[open] > .thinking-summary::before {
 .agents-table th {
     background: var(--bg-tertiary);
     font-weight: 600;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
@@ -4144,13 +4155,13 @@ details[open] > .thinking-summary::before {
 .agents-table tbody tr:last-child td { border-bottom: none; }
 .agents-table tbody tr:hover { background: var(--color-wash-soft); }
 
-.agents-id { font-family: monospace; font-size: 0.8rem; color: var(--text-muted); }
+.agents-id { font-family: monospace; font-size: var(--text-mono); color: var(--text-muted); }
 
 .agents-badge {
     display: inline-block;
     padding: 0.15rem 0.55rem;
     border-radius: var(--radius-pill);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     font-weight: 600;
 }
 
@@ -4166,7 +4177,7 @@ details[open] > .thinking-summary::before {
     cursor: pointer;
     padding: 0.25rem 0.4rem;
     border-radius: var(--radius);
-    font-size: 1rem;
+    font-size: var(--text-heading);
     transition: background 0.15s;
 }
 .agents-btn-edit:hover   { background: var(--color-wash); }
@@ -4197,7 +4208,7 @@ details[open] > .thinking-summary::before {
 }
 .cron-modal-header h3 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: var(--text-title);
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -4212,7 +4223,7 @@ details[open] > .thinking-summary::before {
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 1.1rem;
+    font-size: var(--text-title);
     cursor: pointer;
     padding: 0.25rem 0.5rem;
     border-radius: var(--radius);
@@ -4234,7 +4245,7 @@ details[open] > .thinking-summary::before {
 .cron-detail-section:last-child { margin-bottom: 0; }
 .cron-detail-section h4 {
     margin: 0 0 0.75rem;
-    font-size: 0.95rem;
+    font-size: var(--text-body);
     color: var(--text-primary);
 }
 .cron-detail-section-head {
@@ -4252,20 +4263,20 @@ details[open] > .thinking-summary::before {
     margin: 0;
 }
 .cron-detail-props dt {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-weight: 600;
     color: var(--text-muted);
 }
 .cron-detail-props dd {
     margin: 0;
-    font-size: 0.88rem;
+    font-size: var(--text-body);
     color: var(--text-primary);
     word-break: break-word;
 }
 .cron-detail-pre {
     white-space: pre-wrap;
     font-family: var(--font-mono);
-    font-size: 0.82rem;
+    font-size: var(--text-mono);
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -4273,11 +4284,11 @@ details[open] > .thinking-summary::before {
 }
 .cron-detail-error {
     color: var(--color-danger-text);
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     word-break: break-word;
 }
 .cron-detail-empty {
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     color: var(--text-muted);
     font-style: italic;
     padding: 0.5rem 0;
@@ -4289,7 +4300,7 @@ details[open] > .thinking-summary::before {
     display: inline-block;
     padding: 0.05rem 0.45rem;
     border-radius: var(--radius-pill);
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.02em;
@@ -4317,7 +4328,7 @@ details[open] > .thinking-summary::before {
     margin-bottom: 0.85rem;
 }
 .cron-edit-field > label {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-weight: 600;
     color: var(--text-muted);
 }
@@ -4331,7 +4342,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius);
     color: var(--text-primary);
     padding: 0.45rem 0.6rem;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     font-family: inherit;
 }
 .cron-edit-field textarea { resize: vertical; }
@@ -4370,7 +4381,7 @@ details[open] > .thinking-summary::before {
 
 .agents-form-card h3 {
     margin: 0 0 1rem;
-    font-size: 1rem;
+    font-size: var(--text-heading);
 }
 
 .agents-form-grid {
@@ -4382,7 +4393,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-form-grid label {
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     color: var(--text-muted);
 }
 
@@ -4395,7 +4406,7 @@ details[open] > .thinking-summary::before {
 
 .agents-form-error {
     color: var(--color-danger-text);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     margin-bottom: 0.75rem;
 }
 
@@ -4405,7 +4416,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-field-loading {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     font-style: italic;
     align-self: center;
@@ -4413,7 +4424,7 @@ details[open] > .thinking-summary::before {
 
 .agents-field-error {
     display: block;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     color: var(--color-danger-text);
     margin-top: 0.2rem;
 }
@@ -4424,7 +4435,7 @@ details[open] > .thinking-summary::before {
 }
 
 .agents-dirty-indicator {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--accent);
     margin-left: auto;
     font-style: italic;
@@ -4451,11 +4462,11 @@ details[open] > .thinking-summary::before {
 
 .agents-confirm-dialog h4 {
     margin: 0 0 0.75rem;
-    font-size: 1rem;
+    font-size: var(--text-heading);
 }
 
 .agents-confirm-dialog p {
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     color: var(--text-muted);
     margin-bottom: 1rem;
 }
@@ -4496,14 +4507,14 @@ details[open] > .thinking-summary::before {
     background: var(--color-surface-2); /* Muted --bg-surface with transparency */
     border-bottom: 1px solid var(--border);
     border-left: 3px solid var(--warning); /* Visual accent to reinforce read-only */
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     color: var(--text-secondary);
 }
 
 .read-only-badge {
     font-weight: 600;
     color: var(--text-primary);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .read-only-status {
@@ -4512,7 +4523,7 @@ details[open] > .thinking-summary::before {
     gap: 0.35rem;
     padding: 0.2rem 0.5rem;
     border-radius: var(--radius-sm);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     font-weight: 500;
     background: var(--color-accent-wash); /* Same pattern as streaming-badge */
     color: var(--accent);
@@ -4528,7 +4539,7 @@ details[open] > .thinking-summary::before {
     margin-left: auto;
     font-style: italic;
     color: var(--text-secondary); /* Better contrast than text-muted */
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 
 /* ── World Default Inheritance Badge ─────────────────────────────────────── */
@@ -4537,7 +4548,7 @@ details[open] > .thinking-summary::before {
     display: inline-block;
     padding: 0.1rem 0.45rem;
     border-radius: var(--radius-pill);
-    font-size: 0.68rem;
+    font-size: var(--text-caption);
     font-weight: 500;
     background: var(--color-wash);
     color: var(--text-secondary);
@@ -4558,7 +4569,7 @@ details[open] > .thinking-summary::before {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     padding-top: 0.4rem;
 }
@@ -4617,7 +4628,7 @@ details[open] > .thinking-summary::before {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
@@ -4629,7 +4640,7 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-new-btn-icon {
-    font-size: 1rem;
+    font-size: var(--text-heading);
     line-height: 1;
     font-weight: 400;
 }
@@ -4642,7 +4653,7 @@ details[open] > .thinking-summary::before {
 .conversation-list-loading,
 .conversation-list-empty {
     padding: 0.5rem 0.75rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-style: italic;
     color: var(--text-muted);
 }
@@ -4665,7 +4676,7 @@ details[open] > .thinking-summary::before {
     border-left: 3px solid transparent;
     border-radius: 0;
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     text-align: left;
     text-decoration: none; /* suppress anchor underline when rendered as <a> (#935) */
     cursor: pointer;
@@ -4704,7 +4715,7 @@ details[open] > .thinking-summary::before {
 /* "Default" pill badge */
 .conversation-default-badge {
     flex-shrink: 0;
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     font-weight: 500;
     color: var(--text-muted);
     border: 1px solid var(--border);
@@ -4732,7 +4743,7 @@ details[open] > .thinking-summary::before {
 }
 
 .conversation-updated-at {
-    font-size: 0.68rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     white-space: nowrap;
 }
@@ -4748,7 +4759,7 @@ details[open] > .thinking-summary::before {
     border: none;
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     padding: 0.1rem 0.25rem;
 }
 
@@ -4770,7 +4781,7 @@ details[open] > .thinking-summary::before {
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     padding: 0.1rem 0.25rem;
     /* Dim the pushpin glyph so it reads as an inactive action until pinned. */
     filter: grayscale(1) opacity(0.6);
@@ -4805,7 +4816,7 @@ details[open] > .thinking-summary::before {
     border: none;
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     padding: 0.1rem 0.25rem;
     filter: grayscale(1) opacity(0.6);
 }
@@ -4840,7 +4851,7 @@ details[open] > .thinking-summary::before {
     cursor: pointer;
     text-align: left;
     color: var(--text);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     padding: 0.25rem 0.4rem;
     border-radius: var(--radius-sm);
 }
@@ -4855,7 +4866,7 @@ details[open] > .thinking-summary::before {
 
 .conversation-section-menu-empty {
     color: var(--text-muted);
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     padding: 0.25rem 0.4rem;
 }
 
@@ -4891,7 +4902,7 @@ details[open] > .thinking-summary::before {
 
 .group-chevron {
     display: inline-block;
-    font-size: 0.55rem;
+    font-size: var(--text-caption);
     transition: transform 0.2s ease;
 }
 
@@ -4909,7 +4920,7 @@ details[open] > .thinking-summary::before {
     border-radius: var(--radius-pill);
     background: var(--surface-hover);
     color: var(--text-muted);
-    font-size: 0.6rem;
+    font-size: var(--text-caption);
     font-weight: 600;
 }
 
@@ -4933,7 +4944,7 @@ details[open] > .thinking-summary::before {
 .conversation-filter-btn {
     flex: 1;
     padding: 0.15rem 0.4rem;
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     font-weight: 600;
     line-height: 1.2;
     color: var(--text-muted);
@@ -4977,7 +4988,7 @@ details[open] > .thinking-summary::before {
 
 .session-boundary-label {
     padding: 0 0.5rem;
-    font-size: 0.7rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     font-family: var(--font-mono);
     white-space: nowrap;
@@ -5003,7 +5014,7 @@ details[open] > .thinking-summary::before {
 
 .compaction-boundary-label {
     padding: 0 0.75rem;
-    font-size: 0.75rem;
+    font-size: var(--text-mono);
     color: var(--accent);
     font-family: var(--font-mono);
     white-space: nowrap;
@@ -5047,7 +5058,7 @@ h3.conversation-title.editable:hover {
 }
 
 .conversation-title-input {
-    font-size: 1rem;
+    font-size: var(--text-heading);
     font-weight: 600;
     background: var(--bg-input, var(--bg-secondary));
     border: 1px solid var(--border-focus, var(--accent));
@@ -5103,7 +5114,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text);
-    font-size: 0.875rem;
+    font-size: var(--text-body);
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
@@ -5133,7 +5144,7 @@ h3.conversation-title.editable:hover {
     padding: 0.35rem 0.7rem;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     color: var(--text);
-    font-size: 0.875rem;
+    font-size: var(--text-body);
     text-decoration: none;
     white-space: nowrap;
 }
@@ -5150,7 +5161,7 @@ h3.conversation-title.editable:hover {
 
 .activity-subnav-notice {
     padding: 0.4rem 0.75rem;
-    font-size: 0.8125rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
 }
 
@@ -5195,7 +5206,7 @@ h3.conversation-title.editable:hover {
     justify-content: center;
     height: 100%;
     min-height: 200px;
-    font-size: 1rem;
+    font-size: var(--text-heading);
     color: var(--text-muted);
 }
 
@@ -5232,7 +5243,7 @@ h3.conversation-title.editable:hover {
     color: var(--color-on-accent);
     border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     margin-top: 0.25rem;
     display: inline-block;
 }
@@ -5304,13 +5315,13 @@ h3.conversation-title.editable:hover {
 
 .home-agent-roster-heading h2 {
     margin: 0;
-    font-size: 1.2rem;
+    font-size: var(--text-title);
 }
 
 .home-agent-roster-heading p {
     margin: 0.35rem 0 0;
     color: var(--text-muted);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .home-agent-roster .agent-dashboard {
@@ -5331,7 +5342,7 @@ h3.conversation-title.editable:hover {
     justify-content: center;
     height: 100%;
     color: var(--text-muted);
-    font-size: 0.95rem;
+    font-size: var(--text-body);
 }
 
 .agent-card-grid {
@@ -5378,7 +5389,7 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card-emoji {
-    font-size: 2rem;
+    font-size: var(--text-display);
     line-height: 1;
     flex-shrink: 0;
 }
@@ -5392,14 +5403,14 @@ h3.conversation-title.editable:hover {
 
 .agent-card-name {
     font-weight: 600;
-    font-size: 1rem;
+    font-size: var(--text-heading);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .agent-card-status {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     margin-top: 0.1rem;
 }
 
@@ -5415,7 +5426,7 @@ h3.conversation-title.editable:hover {
     background: var(--accent);
     color: var(--color-on-accent);
     border-radius: var(--radius-pill);
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     font-weight: 700;
     padding: 0.1rem 0.45rem;
     min-width: 1.4rem;
@@ -5424,7 +5435,7 @@ h3.conversation-title.editable:hover {
 }
 
 .agent-card-description {
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     margin: 0 0 0.5rem;
     overflow: hidden;
@@ -5436,7 +5447,7 @@ h3.conversation-title.editable:hover {
 .agent-card-stats {
     display: flex;
     gap: 0.75rem;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     margin-top: 0.25rem;
 }
@@ -5462,7 +5473,7 @@ h3.conversation-title.editable:hover {
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 1rem;
+    font-size: var(--text-heading);
     cursor: pointer;
     padding: 4px 8px;
     border-radius: var(--radius-sm);
@@ -5481,7 +5492,7 @@ h3.conversation-title.editable:hover {
     background: none;
     border: none;
     color: var(--color-ink-muted);
-    font-size: 1rem;
+    font-size: var(--text-heading);
     cursor: pointer;
     padding: 4px 8px;
     /* Fluent's 32px pointer minimum - the glyph alone gave a ~24px target. */
@@ -5545,7 +5556,7 @@ h3.conversation-title.editable:hover {
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 1.2rem;
+    font-size: var(--text-title);
     cursor: pointer;
 }
 .portal-settings-close:hover { color: var(--text); }
@@ -5561,7 +5572,7 @@ h3.conversation-title.editable:hover {
     padding: 0.5rem 0;
 }
 .portal-settings-hint {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     padding-bottom: 0.75rem;
 }
@@ -5581,14 +5592,14 @@ h3.conversation-title.editable:hover {
 }
 .session-debug-title {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: var(--text-title);
     font-weight: 600;
 }
 .session-debug-close {
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 1.2rem;
+    font-size: var(--text-title);
     cursor: pointer;
 }
 .session-debug-close:hover { color: var(--text); }
@@ -5607,7 +5618,7 @@ h3.conversation-title.editable:hover {
     color: var(--text-muted);
     padding: 0.6rem 1rem;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     white-space: nowrap;
     transition: color 0.15s, border-color 0.15s;
 }
@@ -5627,7 +5638,7 @@ h3.conversation-title.editable:hover {
 .session-debug-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 .session-debug-table th,
 .session-debug-table td {
@@ -5646,7 +5657,7 @@ h3.conversation-title.editable:hover {
 }
 .session-debug-meta {
     padding: 0.5rem 1.5rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     display: flex;
     align-items: center;
@@ -5656,7 +5667,7 @@ h3.conversation-title.editable:hover {
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     padding: 2px 4px;
     border-radius: var(--radius-sm);
 }
@@ -5664,7 +5675,7 @@ h3.conversation-title.editable:hover {
 .session-debug-system-prompt {
     margin: 0;
     padding: 1rem 1.5rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
@@ -5687,7 +5698,7 @@ h3.conversation-title.editable:hover {
     align-items: center;
     gap: 0.5rem;
     padding: 0.75rem 0;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-muted);
     flex-wrap: wrap;
 }
@@ -5697,7 +5708,7 @@ h3.conversation-title.editable:hover {
     color: var(--text);
     border-radius: var(--radius-sm);
     padding: 2px 4px;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 .session-debug-pager-btn {
     background: none;
@@ -5706,7 +5717,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-sm);
     padding: 3px 8px;
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 .session-debug-pager-btn:hover:not(:disabled) {
     color: var(--text);
@@ -5725,7 +5736,7 @@ h3.conversation-title.editable:hover {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0.5rem 0.75rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 .session-debug-entry.compaction-boundary {
     border-color: var(--warning);
@@ -5746,31 +5757,31 @@ h3.conversation-title.editable:hover {
 }
 .entry-role-badge {
     font-weight: 600;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
 }
 .entry-timestamp {
     color: var(--text-muted);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
 }
 .entry-flag {
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     padding: 1px 5px;
     border-radius: var(--radius-sm);
     background: var(--warning);
     color: var(--color-on-accent);
 }
 .entry-flag-sentinel {
-    background: var(--danger);
+    background: var(--color-danger-fill);
     color: var(--color-on-solid);
 }
 .entry-content-details summary {
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 .entry-content-full {
     margin: 0.25rem 0 0;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 300px;
@@ -5824,7 +5835,7 @@ h3.conversation-title.editable:hover {
 
 .agent-detail-id {
     font-family: var(--font-mono);
-    font-size: 0.9rem;
+    font-size: var(--text-mono);
     color: var(--text-muted);
     background: var(--bg-surface);
     padding: 0.15rem 0.45rem;
@@ -5842,7 +5853,7 @@ h3.conversation-title.editable:hover {
     padding: 0.6rem 1rem;
     cursor: pointer;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
     color: var(--text-secondary);
     list-style: none;
     display: flex;
@@ -5853,7 +5864,7 @@ h3.conversation-title.editable:hover {
 
 .agent-section > summary::before {
     content: '\25B6';
-    font-size: 0.65rem;
+    font-size: var(--text-caption);
     color: var(--text-muted);
     transition: transform 0.15s;
 }
@@ -5886,7 +5897,7 @@ h3.conversation-title.editable:hover {
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
     padding: 0.15rem 0.5rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     color: var(--text-secondary);
 }
 
@@ -5896,7 +5907,7 @@ h3.conversation-title.editable:hover {
     cursor: pointer;
     color: var(--text-muted);
     padding: 0;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     line-height: 1;
 }
 
@@ -5931,7 +5942,7 @@ h3.conversation-title.editable:hover {
     align-items: center;
     gap: 0.75rem;
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .sidebar-subnav-add {
@@ -5952,7 +5963,7 @@ h3.conversation-title.editable:hover {
 
 .world-default-badge {
     display: inline-block;
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
@@ -5973,7 +5984,7 @@ h3.conversation-title.editable:hover {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     background: var(--surface-raised);
-    font-size: 0.82rem;
+    font-size: var(--text-label);
     max-height: 120px;
     overflow-y: auto;
 }
@@ -5989,7 +6000,7 @@ h3.conversation-title.editable:hover {
 
 .steering-queue-icon {
     flex-shrink: 0;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .steering-dropped-icon {
@@ -6000,7 +6011,7 @@ h3.conversation-title.editable:hover {
     flex-shrink: 0;
     padding: 1px 6px;
     border-radius: var(--radius-sm);
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.02em;
@@ -6073,13 +6084,13 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-dashboard-title {
-    font-size: 1.5rem;
+    font-size: var(--text-display);
     margin: 0;
 }
 
 .activity-dashboard-subtitle {
     color: var(--text-muted);
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 .activity-summary-strip {
@@ -6101,13 +6112,13 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-summary-value {
-    font-size: 1.35rem;
+    font-size: var(--text-title);
     font-weight: 600;
     line-height: 1.1;
 }
 
 .activity-summary-stat--freshness .activity-summary-value {
-    font-size: 1.05rem;
+    font-size: var(--text-heading);
 }
 
 .activity-summary-stat--action {
@@ -6132,7 +6143,7 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-summary-label {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.03em;
     color: var(--text-muted);
@@ -6153,7 +6164,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-sm);
     background: var(--surface-2);
     color: inherit;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
     cursor: pointer;
 }
 
@@ -6191,7 +6202,7 @@ h3.conversation-title.editable:hover {
     table-layout: fixed;
     min-width: 640px;
     border-collapse: collapse;
-    font-size: 0.9rem;
+    font-size: var(--text-body);
 }
 
 /* #2528: explicit column allocation - the title column gives way, the signal columns do not.
@@ -6267,7 +6278,7 @@ h3.conversation-title.editable:hover {
     margin: 0.1rem 0.2rem 0.1rem 0;
     border-radius: var(--radius-pill);
     background: var(--surface-3);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
 }
 
 /* #2857: role treatment on the agent chip. A left border rather than a background swap, so a
@@ -6285,7 +6296,7 @@ h3.conversation-title.editable:hover {
 .activity-agent-role {
     margin-left: 0.3rem;
     opacity: 0.7;
-    font-size: 0.68rem;
+    font-size: var(--text-caption);
     text-transform: lowercase;
 }
 
@@ -6299,7 +6310,7 @@ h3.conversation-title.editable:hover {
     flex: 0 0 auto;
     margin-left: 0.3rem;
     font-family: var(--font-mono);
-    font-size: 0.68rem;
+    font-size: var(--text-mono);
     opacity: 0.75;
 }
 
@@ -6343,7 +6354,7 @@ h3.conversation-title.editable:hover {
     /* Full-width basis forces the wrap onto a second line within the cell. */
     flex: 1 0 100%;
     margin-top: 0.15rem;
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     line-height: 1.3;
     opacity: 0.65;
     overflow: hidden;
@@ -6358,7 +6369,7 @@ h3.conversation-title.editable:hover {
     margin-left: 0.4rem;
     padding: 0.05rem 0.4rem;
     border-radius: var(--radius-sm);
-    font-size: 0.7rem;
+    font-size: var(--text-caption);
 }
 
 .activity-badge-cron {
@@ -6394,7 +6405,7 @@ h3.conversation-title.editable:hover {
 }
 
 .activity-status {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     text-transform: capitalize;
 }
 
@@ -6485,7 +6496,7 @@ h3.conversation-title.editable:hover {
     display: block;
     margin-bottom: 0.4rem;
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     font-weight: 600;
 }
 .cron-rich-select {
@@ -6518,7 +6529,7 @@ h3.conversation-title.editable:hover {
 }
 .cron-selector-chevron {
     color: var(--text-muted);
-    font-size: 1rem;
+    font-size: var(--text-heading);
 }
 .cron-rich-select-menu {
     position: absolute;
@@ -6565,7 +6576,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-pill);
     background: var(--color-wash);
     color: var(--text-muted);
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
 }
 .cron-selection-empty { margin-top: 1rem; }
 .cron-page-card {
@@ -6583,7 +6594,7 @@ h3.conversation-title.editable:hover {
     padding: 1rem 1.25rem;
     border-bottom: 1px solid var(--border);
 }
-.cron-page-card-header h3 { margin: 0; font-size: 1.05rem; }
+.cron-page-card-header h3 { margin: 0; font-size: var(--text-heading); }
 .cron-page-card-subtitle,
 .cron-page-actions {
     display: flex;
@@ -6621,11 +6632,11 @@ h3.conversation-title.editable:hover {
 .attach-btn { display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
 .attach-btn:focus-within { outline: 2px solid var(--accent); }
 .attachment-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.attachment-chip { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 15rem; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: var(--radius-pill); font-size: 0.78rem; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 15rem; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: var(--radius-pill); font-size: var(--text-label); }
 .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-size { color: var(--text-muted); }
 .attachment-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; }
-.attachment-error { flex-basis: 100%; color: var(--error); font-size: 0.8rem; }
+.attachment-error { flex-basis: 100%; color: var(--error); font-size: var(--text-label); }
 
 /* ── User-defined conversation sections (#2124) ─────────────────────────── */
 /* #2441: "My sections" is nested under the agent chat section behind a collapsible
@@ -6677,7 +6688,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-sm);
     color: inherit;
     cursor: pointer;
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     padding: 0.1rem 0.4rem;
 }
 
@@ -6718,7 +6729,7 @@ h3.conversation-title.editable:hover {
     border: none;
     color: inherit;
     cursor: pointer;
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     padding: 0.05rem 0.2rem;
     opacity: 0.75;
 }
@@ -6738,7 +6749,7 @@ h3.conversation-title.editable:hover {
     border: 1px solid var(--sidebar-border);
     border-radius: var(--radius-sm);
     color: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     padding: 0.1rem 0.3rem;
 }
 
@@ -6755,7 +6766,7 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius-sm);
     color: inherit;
     cursor: pointer;
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     padding: 0.1rem 0.35rem;
 }
 
@@ -6764,7 +6775,7 @@ h3.conversation-title.editable:hover {
 }
 
 .conversation-section-empty {
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
     opacity: 0.5;
     padding: 0.15rem 0.5rem;
 }
@@ -6774,7 +6785,7 @@ h3.conversation-title.editable:hover {
     align-items: center;
     justify-content: space-between;
     padding: 0.1rem 0.5rem;
-    font-size: 0.8rem;
+    font-size: var(--text-label);
 }
 
 .conversation-section-item-title {
@@ -6789,7 +6800,7 @@ h3.conversation-title.editable:hover {
     color: inherit;
     cursor: pointer;
     opacity: 0;
-    font-size: 0.72rem;
+    font-size: var(--text-caption);
 }
 
 .conversation-section-item:hover .section-remove-conversation-btn {
@@ -6905,7 +6916,7 @@ h3.conversation-title.editable:hover {
 }
 
 .tools-form-label {
-    font-size: 0.8rem;
+    font-size: var(--text-label);
     opacity: 0.75;
 }
 
@@ -6923,7 +6934,7 @@ h3.conversation-title.editable:hover {
     margin: 0 0 0.5rem 0;
     padding-left: 1.1rem;
     color: var(--error-color);
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .tools-list {
@@ -6945,7 +6956,7 @@ h3.conversation-title.editable:hover {
 }
 
 .tools-list-icon {
-    font-size: 1.15rem;
+    font-size: var(--text-title);
     flex: 0 0 auto;
 }
 
@@ -7005,14 +7016,14 @@ h3.conversation-title.editable:hover {
 }
 
 .home-agent-count {
-    font-size: 1.4rem;
+    font-size: var(--text-title);
     font-weight: 600;
 }
 
 .home-agent-count-label,
 .home-agent-connected {
     opacity: 0.75;
-    font-size: 0.85rem;
+    font-size: var(--text-body);
 }
 
 .home-starter {
@@ -7023,7 +7034,7 @@ h3.conversation-title.editable:hover {
 
 .home-starter-title {
     margin: 0;
-    font-size: 1.2rem;
+    font-size: var(--text-title);
 }
 
 .home-message-input {
@@ -7049,7 +7060,7 @@ h3.conversation-title.editable:hover {
 }
 
 .home-control-label {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.7;
