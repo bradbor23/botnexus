@@ -533,6 +533,55 @@ internal sealed class ListAgentsToolProvider(
 }
 
 /// <summary>
+/// List-locations tool (<c>list_locations</c>). Gated by the standard allowlist, like every other
+/// provider here: available unless the agent's <c>toolIds</c> restricts it away.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This was built opt-in first - included only when <c>toolIds</c> named it - on the reasoning that
+/// an agent with no business touching infrastructure should not be able to enumerate it. Two things
+/// made that the wrong call.
+/// </para>
+/// <para>
+/// <b>The grant is not additive.</b> A non-empty <c>toolIds</c> restricts to <em>exactly</em> that
+/// list, and <c>InProcessIsolationStrategy</c> applies it to the workspace tools too. So the only
+/// way to grant this tool would also have stripped <c>read</c>, <c>write</c>, <c>edit</c>,
+/// <c>shell</c>, <c>ls</c>, <c>grep</c> and <c>glob</c> from that agent unless every one of them
+/// was re-listed by hand. That produces mysteriously crippled agents, which is a worse outcome
+/// than the one being defended against.
+/// </para>
+/// <para>
+/// <b>The marginal exposure is small.</b> <c>ShellTool</c> - arbitrary command execution - is in
+/// the default toolset, alongside <c>write</c> and <c>edit</c>. Anyone who can inject into an
+/// agent's context already has a shell on its workspace; a read-only list of names and endpoints
+/// adds little to that. The protection that carries the weight here is not who may call the tool
+/// but what the tool can say: no credential reaches the payload, which
+/// <c>LocationsToolExposureFenceArchitectureTests</c> enforces and which holds however the gate is
+/// set.
+/// </para>
+/// <para>
+/// For an agent genuinely exposed to untrusted input, the control is <c>toolIds</c> on that agent -
+/// which is what the mechanism is for.
+/// </para>
+/// </remarks>
+internal sealed class ListLocationsToolProvider(
+    IOptionsMonitor<PlatformConfig>? platformConfig) : IToolProvider
+{
+    internal const string ToolName = "list_locations";
+
+    /// <inheritdoc />
+    public bool ShouldInclude(ToolProviderContext context)
+        => platformConfig is not null && context.ToolAllowed(ToolName);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<IAgentTool>> CreateToolsAsync(ToolProviderContext context)
+    {
+        IReadOnlyList<IAgentTool> tools = [new ListLocationsTool(platformConfig!)];
+        return Task.FromResult(tools);
+    }
+}
+
+/// <summary>
 /// Agent lifecycle tools (<c>create_agent</c>, <c>update_agent</c>). Requires the registry,
 /// configuration writer, and BotNexus home; each tool has its own allowlist sub-gate.
 /// </summary>
