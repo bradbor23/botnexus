@@ -4574,13 +4574,7 @@ details[open] > .thinking-summary::before {
     padding-top: 0.4rem;
 }
 
-.gateway-commit {
-    font-family: monospace;
-    color: var(--text-muted);
-    text-decoration: none;
-}
 
-.gateway-commit:hover { color: var(--accent); }
 
 /* ── Conversation UI — Wave 2 ─────────────────────────────────────────────── */
 
