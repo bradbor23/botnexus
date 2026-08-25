@@ -107,12 +107,19 @@
                         <span class="gateway-started" title="@GatewayInfo.Info.StartedAt.ToString("o")">
                             &#x21BA; @FormatStarted(GatewayInfo.Info.StartedAt)
                         </span>
-                        <a class="gateway-commit"
-                           href="https://github.com/sytone/botnexus/commit/@GatewayInfo.Info.CommitSha"
-                           target="_blank"
-                           title="@GatewayInfo.Info.CommitSha">
-                            @GatewayInfo.Info.CommitShort
-                        </a>
+                        @* Only when there is a real SHA to link to. SourceRevisionId defaults to
+                           the literal "unknown" unless the build passes BotNexusSourceRevisionId,
+                           so an ordinary `dotnet build` rendered the word "unknown" as a link to
+                           /commit/unknown - a dead link that told the reader nothing. *@
+                        @if (HasCommitSha)
+                        {
+                            <a class="gateway-commit"
+                               href="https://github.com/sytone/botnexus/commit/@GatewayInfo.Info.CommitSha"
+                               target="_blank"
+                               title="@GatewayInfo.Info.CommitSha">
+                                @GatewayInfo.Info.CommitShort
+                            </a>
+                        }
                     </div>
                 }
 
@@ -204,6 +211,19 @@
     /// <c>--density-*</c> token set for the whole portal (#2441).
     /// </summary>
     private string DensityAttribute => PortalDensity.Normalize(Prefs.Current.Density);
+
+    /// <summary>
+    /// True only when the gateway reports a real commit SHA.
+    /// </summary>
+    /// <remarks>
+    /// <c>SourceRevisionId</c> is deliberately left at the literal <c>"unknown"</c> for projects
+    /// that do not opt in (see <c>Directory.Build.props</c>), so a build that does not pass
+    /// <c>BotNexusSourceRevisionId</c> reports that string rather than a hash. Rendering it
+    /// produced a link reading "unknown" pointing at <c>/commit/unknown</c>.
+    /// </remarks>
+    private bool HasCommitSha =>
+        GatewayInfo.Info?.CommitSha is { Length: > 0 } sha
+        && !string.Equals(sha, "unknown", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True when the light theme is active, driving the toggle's icon and label.</summary>
     private bool IsLightTheme => PortalTheme.Normalize(Prefs.Current.Theme) == PortalTheme.Light;
