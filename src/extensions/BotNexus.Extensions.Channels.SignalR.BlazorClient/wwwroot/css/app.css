@@ -7555,3 +7555,330 @@ h3.conversation-title.editable:hover {
     .guide-layout { flex-direction: column; }
     .guide-nav { flex: 0 0 auto; max-height: 12rem; border-right: none; border-bottom: 1px solid var(--color-hairline); }
 }
+
+/* =====================================================
+   Config forms (SchemaForm)
+
+   SchemaForm has always emitted these class names; the stylesheet had no rule for a
+   single one of them, so every configuration screen - desktop and mobile - rendered as
+   raw browser defaults. That is why the labels butted straight against their inputs and
+   the fieldset legends sat on top of their own borders. The .pcfg-* block above styled
+   the markup SchemaForm replaced, and was never carried across.
+   ===================================================== */
+
+.schema-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    /* Config text is read, not scanned. Past this width the label column and its control
+       drift too far apart to associate at a glance. */
+    max-width: 900px;
+}
+
+.schema-form-empty {
+    color: var(--text-muted);
+    font-size: var(--text-body);
+    padding: 1rem;
+}
+
+.schema-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.schema-group-title {
+    margin: 0;
+    font-size: var(--text-heading);
+    line-height: var(--text-heading-lh);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ── Cards: objects, dictionaries and arrays ──────────────────────────────── */
+
+/* A fieldset carries the right semantics for a group of controls - the legend is
+   announced with each control inside it - but its default border draws through its own
+   legend. Reset the chrome, keep the element. */
+.schema-object,
+.schema-dict,
+.schema-array {
+    min-width: 0;
+    margin: 0;
+    padding: 0.9rem 1rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-primary);
+}
+
+.schema-object > legend,
+.schema-dict > legend,
+.schema-array > legend {
+    display: block;
+    float: left;
+    width: 100%;
+    padding: 0;
+    margin-bottom: 0.6rem;
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+/* float:left on the legend takes it out of flow; this restores the card's own. */
+.schema-object > legend + *,
+.schema-dict > legend + *,
+.schema-array > legend + * {
+    clear: both;
+}
+
+.schema-object-description {
+    margin: 0 0 0.75rem;
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-muted);
+    max-width: 70ch;
+}
+
+/* Nested cards step down rather than repeating the same weight at every depth. */
+.schema-object .schema-object,
+.schema-object .schema-dict,
+.schema-object .schema-array {
+    background: var(--bg-secondary);
+}
+
+/* ── Buckets inside a card ────────────────────────────────────────────────── */
+
+.schema-subgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.schema-subgroup + .schema-subgroup {
+    margin-top: 1.1rem;
+}
+
+.schema-subgroup-title {
+    margin: 0 0 0.15rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* ── Field rows ───────────────────────────────────────────────────────────── */
+
+.schema-field {
+    display: grid;
+    /* Label column is bounded at both ends: it has to be wide enough to read and narrow
+       enough to leave the control the majority of the row. */
+    grid-template-columns: minmax(9rem, 12rem) minmax(0, 1fr);
+    gap: 0.35rem 1rem;
+    align-items: start;
+}
+
+.schema-field-label {
+    /* Optical alignment with the first line of the control, which carries input padding. */
+    padding-top: 0.4rem;
+    font-size: var(--text-label);
+    line-height: var(--text-label-lh);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.schema-field-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.schema-field-control > input[type="text"],
+.schema-field-control > input[type="password"],
+.schema-field-control > input[type="number"],
+.schema-field-control > select {
+    width: 100%;
+    max-width: 26rem;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: var(--text-body);
+    font-family: var(--font-sans);
+    transition: border-color 0.15s;
+}
+
+.schema-field-control > input:focus,
+.schema-field-control > select:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+/* A checkbox is its own control; stretching it to the field width would be absurd. */
+.schema-field-toggle .schema-field-control > input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    margin: 0.45rem 0 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.schema-field-description {
+    margin: 0;
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-muted);
+    max-width: 70ch;
+}
+
+.schema-field-error,
+.schema-array-error,
+.schema-dict-error {
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--color-danger-text);
+}
+
+/* ── Collections ──────────────────────────────────────────────────────────── */
+
+.schema-array-item,
+.schema-dict-entry {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.35rem 0;
+}
+
+.schema-array-item + .schema-array-item,
+.schema-dict-entry + .schema-dict-entry {
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* A list item is identified by its position, so the generated "[0]" label is noise -
+   and it costs a whole label column that the value could be using. */
+.schema-array-item > .schema-field,
+.schema-dict-entry > .schema-field {
+    display: block;
+    flex: 1 1 14rem;
+    min-width: 0;
+}
+
+.schema-array-item > .schema-field > .schema-field-label,
+.schema-dict-entry > .schema-field > .schema-field-label {
+    display: none;
+}
+
+.schema-dict-key {
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-mono);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.schema-dict-add {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.dict-newkey,
+.dict-rename-input {
+    flex: 0 1 12rem;
+    min-width: 0;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: var(--text-label);
+    font-family: var(--font-sans);
+}
+
+.dict-newkey:focus,
+.dict-rename-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+/* ── Collection buttons ───────────────────────────────────────────────────── */
+
+.array-add,
+.dict-add,
+.array-item-up,
+.array-item-down,
+.array-item-remove,
+.dict-entry-delete,
+.dict-rename {
+    flex-shrink: 0;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--text-caption);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.array-add,
+.dict-add {
+    align-self: flex-start;
+    margin-top: 0.6rem;
+    border-style: dashed;
+    color: var(--text-muted);
+}
+
+.array-add:hover,
+.dict-add:hover,
+.array-item-up:hover:not(:disabled),
+.array-item-down:hover:not(:disabled),
+.dict-rename:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.array-item-remove:hover,
+.dict-entry-delete:hover {
+    border-color: var(--color-danger-text);
+    background: var(--color-danger-wash);
+    color: var(--color-danger-text);
+}
+
+.array-item-up:disabled,
+.array-item-down:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* ── Narrow layouts ───────────────────────────────────────────────────────── */
+
+/* Below this the two-column row leaves the control too little room to be usable, so the
+   label sits above its input instead. Mobile Settings renders this same component. */
+@media (max-width: 720px) {
+    .schema-field {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.2rem;
+    }
+
+    .schema-field-label {
+        padding-top: 0;
+    }
+
+    .schema-field-control > input[type="text"],
+    .schema-field-control > input[type="password"],
+    .schema-field-control > input[type="number"],
+    .schema-field-control > select {
+        max-width: 100%;
+    }
+}
