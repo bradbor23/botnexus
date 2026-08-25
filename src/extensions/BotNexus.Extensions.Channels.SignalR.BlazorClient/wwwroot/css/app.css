@@ -7405,3 +7405,7 @@ h3.conversation-title.editable:hover {
 .conversation-filter-btn {
     min-height: var(--hit-pointer);
 }
+
+/* Failure count in the usage panel. Danger-toned because a non-zero value here means sends are
+   being rejected right now - the one number in that panel that should interrupt a glance. */
+.usage-fail { color: var(--color-danger-text); }

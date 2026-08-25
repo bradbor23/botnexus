@@ -65,6 +65,7 @@ public sealed record ProviderRateLimitSnapshot(
 /// <param name="Provider">Canonical provider id.</param>
 /// <param name="Model">Model id named in the request body.</param>
 /// <param name="Requests">Calls observed. Exact.</param>
+/// <param name="Failures">Calls that returned a non-success status. Exact.</param>
 /// <param name="InputTokens">Input tokens observed. Derived from the window's consumed counter.</param>
 /// <param name="OutputTokens">Output tokens observed. Derived from the window's consumed counter.</param>
 /// <param name="ObservedAtUtc">When the call completed.</param>
@@ -72,6 +73,7 @@ public sealed record ProviderUsageSample(
     string Provider,
     string Model,
     long Requests,
+    long Failures,
     long InputTokens,
     long OutputTokens,
     DateTimeOffset ObservedAtUtc);
@@ -81,10 +83,15 @@ public sealed record ProviderUsageSample(
 /// </summary>
 public interface IProviderUsageStore
 {
-    /// <summary>Records a rate-limit snapshot and, when tokens were consumed, a usage sample.</summary>
+    /// <summary>Records a rate-limit snapshot and, when a model is known, a usage sample.</summary>
     /// <param name="snapshot">The freshly parsed snapshot.</param>
     /// <param name="model">Model named in the request that produced it; may be null.</param>
-    void Record(ProviderRateLimitSnapshot snapshot, string? model);
+    /// <param name="failed">
+    /// Whether the call returned a non-success status. Recorded because a burn view that counts
+    /// only successes hides the most expensive kind of mistake: a misconfigured model that 404s on
+    /// every send looks identical to no traffic at all.
+    /// </param>
+    void Record(ProviderRateLimitSnapshot snapshot, string? model, bool failed = false);
 
     /// <summary>The most recent snapshot per provider.</summary>
     IReadOnlyDictionary<string, ProviderRateLimitSnapshot> Snapshots { get; }
@@ -129,7 +136,7 @@ public sealed class ProviderUsageStore : IProviderUsageStore
     public IReadOnlyDictionary<string, ProviderRateLimitSnapshot> Snapshots => _snapshots;
 
     /// <inheritdoc/>
-    public void Record(ProviderRateLimitSnapshot snapshot, string? model)
+    public void Record(ProviderRateLimitSnapshot snapshot, string? model, bool failed = false)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -147,7 +154,7 @@ public sealed class ProviderUsageStore : IProviderUsageStore
             Used(snapshot.OutputTokensLimit, snapshot.OutputTokensRemaining), snapshot.OutputTokensResetUtc);
 
         var sample = new ProviderUsageSample(
-            snapshot.Provider, model.Trim(), Requests: 1, input, output,
+            snapshot.Provider, model.Trim(), Requests: 1, Failures: failed ? 1 : 0, input, output,
             snapshot.ObservedAtUtc == default ? _time.GetUtcNow() : snapshot.ObservedAtUtc);
 
         lock (_gate)

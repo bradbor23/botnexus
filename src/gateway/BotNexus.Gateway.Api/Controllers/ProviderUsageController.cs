@@ -81,6 +81,7 @@ public sealed class ProviderUsageController(IProviderUsageStore store) : Control
     private static BurnDto BuildBurn(IReadOnlyList<ProviderUsageSample> samples) => new()
     {
         Requests = samples.Sum(s => s.Requests),
+        Failures = samples.Sum(s => s.Failures),
         InputTokens = samples.Sum(s => s.InputTokens),
         OutputTokens = samples.Sum(s => s.OutputTokens),
         Models = [.. samples
@@ -89,6 +90,7 @@ public sealed class ProviderUsageController(IProviderUsageStore store) : Control
             {
                 Model = g.Key,
                 Requests = g.Sum(x => x.Requests),
+                Failures = g.Sum(x => x.Failures),
                 InputTokens = g.Sum(x => x.InputTokens),
                 OutputTokens = g.Sum(x => x.OutputTokens),
             })
@@ -154,6 +156,9 @@ public sealed class BurnDto
     /// <summary>Calls observed. Exact.</summary>
     public long Requests { get; init; }
 
+    /// <summary>Calls that returned a non-success status. Exact.</summary>
+    public long Failures { get; init; }
+
     /// <summary>Input tokens observed. Derived from allowance deltas.</summary>
     public long InputTokens { get; init; }
 
@@ -172,6 +177,9 @@ public sealed class ModelBurnDto
 
     /// <summary>Calls observed for this model.</summary>
     public long Requests { get; init; }
+
+    /// <summary>Calls for this model that returned a non-success status.</summary>
+    public long Failures { get; init; }
 
     /// <summary>Input tokens attributed to this model.</summary>
     public long InputTokens { get; init; }

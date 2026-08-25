@@ -85,6 +85,12 @@
                         <span><strong>@_current.Burn.Requests</strong> @Plural(_current.Burn.Requests, "call")</span>
                         <span><strong>@Compact(_current.Burn.InputTokens)</strong> in</span>
                         <span><strong>@Compact(_current.Burn.OutputTokens)</strong> out</span>
+                        @* Only rendered when non-zero: a permanent "0 failed" trains the reader to
+                           stop seeing the row, which is the one row that must be noticed. *@
+                        @if (_current.Burn.Failures > 0)
+                        {
+                            <span class="usage-fail"><strong>@_current.Burn.Failures</strong> failed</span>
+                        }
                     </div>
 
                     @if (_current.Burn.Models.Count == 0)
@@ -99,6 +105,10 @@
                                 <div class="usage-model-row">
                                     <span class="usage-model-name t-mono">@m.Model</span>
                                     <span class="t-caption usage-dim">@m.Requests @Plural(m.Requests, "call")</span>
+                                    @if (m.Failures > 0)
+                                    {
+                                        <span class="t-caption usage-fail">@m.Failures failed</span>
+                                    }
                                     <span class="t-caption usage-dim">@Compact(m.InputTokens) / @Compact(m.OutputTokens)</span>
                                 </div>
                             }
@@ -245,7 +255,7 @@
     private sealed record LimitDimension(
         string Id, string Label, long Limit, long Remaining, long Used, double PercentUsed, DateTimeOffset? ResetUtc);
 
-    private sealed record Burn(long Requests, long InputTokens, long OutputTokens, List<ModelBurn> Models);
+    private sealed record Burn(long Requests, long Failures, long InputTokens, long OutputTokens, List<ModelBurn> Models);
 
-    private sealed record ModelBurn(string Model, long Requests, long InputTokens, long OutputTokens);
+    private sealed record ModelBurn(string Model, long Requests, long Failures, long InputTokens, long OutputTokens);
 }

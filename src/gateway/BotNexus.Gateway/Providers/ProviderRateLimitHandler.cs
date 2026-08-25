@@ -59,8 +59,15 @@ public sealed class ProviderRateLimitHandler : DelegatingHandler
             if (provider is not null)
             {
                 var snapshot = Parse(provider, response, DateTimeOffset.UtcNow);
-                if (snapshot.HasAnyLimit)
-                    _store.Record(snapshot, model);
+                var failed = !response.IsSuccessStatusCode;
+
+                // A failed call is recorded even with no limit headers on the response. That is the
+                // common shape for a 4xx - a 404 for a retired model id carries none at all - and
+                // gating on HasAnyLimit made exactly those calls invisible. A burn panel that
+                // silently ignores errors is worse than no panel: it reports calm while every send
+                // is failing.
+                if (snapshot.HasAnyLimit || failed)
+                    _store.Record(snapshot, model, failed);
             }
         }
         catch (Exception ex)
