@@ -49,6 +49,8 @@ public sealed class SecretFilePermissionFenceArchitectureTests : ArchitectureTes
         // auth.json - OAuth token persist + refresh (CLI side).
         "src/gateway/BotNexus.Cli/Commands/ProviderCommand.cs",
         "src/gateway/BotNexus.Cli/Commands/Provider/CopilotAuthLoader.cs",
+        // secrets.db - the sqlite: secret store, written by `botnexus secret set`.
+        "src/gateway/BotNexus.Cli/Commands/SecretCommand.cs",
     };
 
     /// <summary>A call to the central helper, in either overload form.</summary>

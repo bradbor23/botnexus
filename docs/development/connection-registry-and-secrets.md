@@ -3,7 +3,8 @@
 A plan for letting an agent act on a named server — a Proxmox host, a NAS, an internal
 API — without ever holding the credential for it.
 
-Status: Phases 1-3 delivered - the agreed first slice is complete.
+Status: Phases 1-4 and 6 delivered. Phase 5 (the Proxmox extension) deferred at the
+operator's request, to test the documentation by building one from it.
 
 ## The problem
 
@@ -239,19 +240,53 @@ deny-list of suspicious names. The field that would actually have leaked was cal
 `PathOrEndpoint`; an exact set catches that and a name filter does not. Confirmed to redden when a
 `CredentialRef` member is added.
 
-**Phase 4 — `sqlite:` and `keyring:` providers.** Deferred deliberately: they add no
-capability the first three phases lack, and `keyring:` needs host setup that should not
-block the model landing.
+**Phase 4 - `sqlite:` and `keyring:` providers. Delivered.**
 
-**Phase 5 — Proxmox extension.** A native BotNexus tool extension, following the existing
-GitHub/Web tools. Takes a location name, resolves the credential internally, exposes an
-explicit verb allow-list, read-only by default (`list_nodes`, `list_vms`, `vm_status`).
-State-changing verbs are opt-in per location.
-*Done when:* an agent answers a question about a real host without the credential
-appearing anywhere in the transcript.
+`SqliteSecretProvider` reads `sqlite:name` from `~/.botnexus/secrets.db`, and
+`botnexus secret set|list|remove` writes it. The CLI is part of the same change because a store
+nothing can populate would make the backend decorative.
 
-**Phase 6 — Documentation.** A guide page, and refresh the `botnexus-guide` skill so the
-Trailguide can explain the model.
+The value is never a command-line argument - it is read from stdin, piped or prompted without echo.
+Anything on a command line reaches shell history, `ps` output and CI logs. There is deliberately no
+`secret get`: a command whose purpose is to print a credential to a terminal is a facility for
+exfiltrating one. `list` shows names and timestamps only.
+
+`secrets.db` is restricted to its owner on creation and after every write, and `SecretCommand.cs`
+is registered with `SecretFilePermissionFenceArchitectureTests` as a secret-writing surface.
+
+**This backend is not encrypted at rest and is not stronger than `file:`.** It buys one artifact to
+back up instead of a directory of files. The documentation says so in those words rather than
+letting "database" imply security.
+
+`KeyringSecretProvider` reads `keyring:service/account` through the platform's own tool -
+`secret-tool` on Linux, `security` on macOS. It is the only backend that protects a credential at
+rest, and the least available: a Secret Service daemon needs a session bus and an unlocked keyring,
+which a headless server has neither of. Absence produces an instruction, not a stack trace.
+
+**Windows is unsupported and says so.** Reading a Credential Manager entry needs `CredReadW` rather
+than a command, and an untested P/Invoke would be worse than an honest gap.
+
+*Verified:* 10 sqlite tests, 14 keyring tests, and the CLI end to end - piped value stored, `600`
+permissions, and the value appearing zero times in `list` output.
+
+**Phase 5 - Proxmox extension. Deferred at the operator's request**, to test whether the
+documentation is enough to build one from.
+
+**Phase 6 - Documentation. Delivered.**
+
+`docs/user-guide/secrets-and-locations.md`, listed in the portal guide and copied into the
+`botnexus-guide` skill: the rule the design follows, registering a location, all four backends with
+exact commands and their honest at-rest properties, granting `list_locations`, a troubleshooting
+table keyed on the actual error strings, and a section stating what the design does *not* protect
+against.
+
+It also records the gap Phase 5 leaves. **No tool consumes a credential yet**, so an agent can
+discover a Proxmox host and not act on it. The two interim routes are described with their cost:
+`shell` + `curl` works today but puts the token within the agent's reach, voiding the property for
+that agent; an MCP server keeps the property at the cost of a second component. Documenting the
+gap matters more than documenting the feature - someone planning around this needs to know where
+it stops.
+
 
 ## Decisions taken
 
