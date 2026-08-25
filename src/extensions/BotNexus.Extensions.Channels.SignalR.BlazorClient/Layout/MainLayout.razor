@@ -248,9 +248,13 @@
         public const string Agents = "agents";
         public const string Cron = "cron";
         public const string Plugins = "plugins";
+        public const string Guide = "guide";
 
+        // Guide sits last: it is a reference, not a place work happens. Adding a key here is safe
+        // for existing users - the resolver below walks this list and re-inserts anything missing
+        // from a saved order next to its neighbours, so a new entry appears without a migration.
         public static readonly IReadOnlyList<string> DefaultOrder =
-            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, Cron, Plugins];
+            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, Cron, Plugins, Guide];
     }
 
     /// <summary>
@@ -387,6 +391,7 @@
         NavOrderKeys.Agents => RenderAgentsNav(),
         NavOrderKeys.Cron => RenderCronNav(),
         NavOrderKeys.Plugins => RenderPluginsNav(),
+        NavOrderKeys.Guide => RenderGuideNav(),
         _ => _ => { }
     };
 
@@ -753,6 +758,13 @@
     private RenderFragment RenderPluginsNav() => __builder =>
     {
         @NavAnchor(NavOrderKeys.Plugins, @<text>&#x1F9E9; Plugins</text>)
+    };
+
+    // The in-app guide. Goes through the same NavAnchor helper as every other entry, so it inherits
+    // the route-derived testid, the active-state matching and any user ordering override.
+    private RenderFragment RenderGuideNav() => __builder =>
+    {
+        @NavAnchor(NavOrderKeys.Guide, @<text>&#x1F4D6; Guide</text>)
     };
 
     protected override void OnInitialized()

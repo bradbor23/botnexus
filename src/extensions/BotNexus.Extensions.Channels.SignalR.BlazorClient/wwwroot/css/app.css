@@ -7409,3 +7409,123 @@ h3.conversation-title.editable:hover {
 /* Failure count in the usage panel. Danger-toned because a non-zero value here means sends are
    being rejected right now - the one number in that panel that should interrupt a glance. */
 .usage-fail { color: var(--color-danger-text); }
+
+
+/* ── In-app guide ─────────────────────────────────────────────────────────
+   Contents on the left, the rendered page on the right. The body reuses
+   .msg-content, the same markdown typography the chat transcript uses, so the
+   guide cannot drift into a second look for the same kind of content — it only
+   adds a reading measure on top. */
+.guide-layout {
+    display: flex;
+    gap: 0;
+    height: 100%;
+    min-height: 0;
+}
+
+.guide-nav {
+    flex: 0 0 15rem;
+    min-width: 12rem;
+    overflow-y: auto;
+    border-right: 1px solid var(--color-hairline);
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.guide-nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    text-align: left;
+    background: none;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.6rem;
+    min-height: var(--hit-pointer);
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard);
+}
+
+.guide-nav-item:hover {
+    background: var(--color-wash);
+    color: var(--color-ink);
+}
+
+.guide-nav-item.active {
+    background: var(--color-accent-wash-soft);
+    border-left-color: var(--color-accent);
+    color: var(--color-ink);
+}
+
+.guide-nav-item.is-child {
+    padding-left: 1.4rem;
+}
+
+.guide-nav-title { color: inherit; }
+.guide-nav-blurb { color: var(--color-ink-faint); }
+
+.guide-content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 1.25rem 1.5rem 3rem;
+}
+
+/* ~68 characters is the readable measure for running prose; the chat bubble has
+   its own width and never needed one. */
+.guide-body {
+    max-width: 68ch;
+}
+
+/* Wide content in docs — option tables, sample payloads — scrolls in its own
+   box so the page itself never scrolls sideways. */
+.guide-body table,
+.guide-body pre {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.guide-search {
+    margin-left: auto;
+    min-width: 14rem;
+    max-width: 22rem;
+    min-height: var(--hit-pointer);
+    padding: 0.25rem 0.6rem;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+}
+
+/* Contextual help. Sits in a page header and deep-links into the guide, because
+   the moment someone needs an explanation is while they are looking at the
+   thing, not after they have gone hunting for a menu. */
+.help-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--hit-pointer);
+    min-height: var(--hit-pointer);
+    border-radius: var(--radius-sm);
+    color: var(--color-ink-faint);
+    font-size: var(--icon-md);
+    text-decoration: none;
+    transition: background var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard);
+}
+
+.help-link:hover {
+    background: var(--color-wash);
+    color: var(--color-accent);
+}
+
+@media (max-width: 48rem) {
+    .guide-layout { flex-direction: column; }
+    .guide-nav { flex: 0 0 auto; max-height: 12rem; border-right: none; border-bottom: 1px solid var(--color-hairline); }
+}
