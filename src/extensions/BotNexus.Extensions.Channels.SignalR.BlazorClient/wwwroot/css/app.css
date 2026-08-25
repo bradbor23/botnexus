@@ -5484,11 +5484,10 @@ h3.conversation-title.editable:hover {
 }
 .banner-settings-btn:hover { background: var(--hover-bg, var(--color-wash)); }
 
-/* Theme toggle. Mirrors .banner-settings-btn, and takes over the auto margin that previously sat
-   on it so the two group together at the right end of the bar rather than splitting the free
-   space between them (two auto margins would each absorb half and leave a gap). */
+/* Theme toggle. Mirrors .banner-settings-btn. The auto margin that groups the trailing controls
+   now sits on .banner-usage-btn, the first of them - two auto margins in one flex row each absorb
+   half the free space and would leave a gap between the buttons. */
 .banner-theme-btn {
-    margin-left: auto;
     background: none;
     border: none;
     color: var(--color-ink-muted);
@@ -7091,4 +7090,217 @@ h3.conversation-title.editable:hover {
     gap: 0.4rem;
     text-decoration: none;
     color: inherit;
+}
+
+/* ── Provider usage popover ───────────────────────────────────────────────
+   Anchored under the top bar rather than centred, because it reports on the
+   indicator that opens it. The scrim is transparent: this is a glanceable
+   readout, not a decision the user must dismiss, so dimming the app behind it
+   would overstate its importance. It still covers the viewport so a click
+   anywhere closes it. */
+.usage-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: transparent;
+}
+
+.usage-panel {
+    position: absolute;
+    top: calc(var(--density-bar-h) + 8px);
+    right: 12px;
+    width: min(24rem, calc(100vw - 24px));
+    max-height: min(32rem, calc(100vh - var(--density-bar-h) - 24px));
+    overflow-y: auto;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-lg);
+    padding: 0.9rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    /* .material-overlay supplies the acrylic background and the overlay shadow. */
+}
+
+.usage-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.usage-header h3 {
+    margin: 0;
+    flex: 1;
+    color: var(--color-ink);
+}
+
+.usage-close {
+    background: none;
+    border: none;
+    color: var(--color-ink-faint);
+    cursor: pointer;
+    padding: 0 0.25rem;
+    min-width: var(--hit-pointer);
+    min-height: var(--hit-pointer);
+    border-radius: var(--radius-sm);
+    transition: color var(--motion-fast) var(--ease-standard);
+}
+
+.usage-close:hover { color: var(--color-ink); background: var(--color-wash); }
+
+.usage-select {
+    background: var(--color-surface-2);
+    color: var(--color-ink);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+    padding: 0.15rem 0.4rem;
+    min-height: var(--hit-pointer);
+    cursor: pointer;
+}
+
+.usage-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.usage-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--color-hairline);
+    color: var(--color-ink);
+}
+
+.usage-dim { color: var(--color-ink-faint); }
+
+.usage-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+
+.usage-row-label { flex: 1; color: var(--color-ink); }
+.usage-row-value { white-space: nowrap; }
+.usage-row-reset { white-space: nowrap; }
+
+.usage-row-pct {
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+    min-width: 2.6rem;
+    text-align: right;
+}
+
+/* The track is a surface step, not a tinted colour: the fill carries the meaning
+   and a coloured track would compete with it. */
+.usage-bar {
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-2);
+    overflow: hidden;
+}
+
+.usage-bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: var(--radius-pill);
+    transition: width var(--motion-base) var(--ease-standard);
+}
+
+/* Semantic, not decorative: green until three-quarters spent, amber approaching
+   the ceiling, red when throttling is imminent. */
+.usage-bar-fill.is-ok { background: var(--color-success); }
+.usage-bar-fill.is-warning { background: var(--color-warning); }
+.usage-bar-fill.is-critical { background: var(--color-danger); }
+
+.usage-totals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+    color: var(--color-ink-muted);
+}
+
+.usage-totals strong {
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-models {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: 0.2rem;
+}
+
+.usage-model-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.3rem 0.45rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+}
+
+.usage-model-name {
+    flex: 1;
+    color: var(--color-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.usage-model-row span:not(.usage-model-name) { font-variant-numeric: tabular-nums; }
+
+.usage-empty {
+    color: var(--color-ink-faint);
+    margin: 0.4rem 0;
+}
+
+.usage-note {
+    color: var(--color-ink-faint);
+    margin: 0.5rem 0 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--color-hairline);
+}
+
+/* The top-bar indicator that opens the panel. */
+.banner-usage-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--color-ink-muted);
+    font-size: var(--text-caption);
+    cursor: pointer;
+    padding: 4px 8px;
+    min-height: var(--hit-pointer);
+    border-radius: var(--radius-sm);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-variant-numeric: tabular-nums;
+    transition: background var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard);
+}
+
+.banner-usage-btn:hover { background: var(--color-wash); color: var(--color-ink); }
+
+/* A 6px dot carrying the worst dimension's severity, so the bar is readable at a
+   glance without opening anything. */
+.banner-usage-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--color-ink-faint);
+}
+
+.banner-usage-dot.is-ok { background: var(--color-success); }
+.banner-usage-dot.is-warning { background: var(--color-warning); }
+.banner-usage-dot.is-critical { background: var(--color-danger); }
+
+@media (max-width: 34rem) {
+    .usage-panel { right: 6px; width: calc(100vw - 12px); }
 }
