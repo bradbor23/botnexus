@@ -161,6 +161,13 @@
        Both are provided so a control can pick the one matching its input
        modality rather than splitting the difference and satisfying neither. */
     --hit-touch: 44px;
+
+    /* Glyph sizes for icon controls. Separate from the type roles on purpose: those describe
+       running text, and an emoji rendered at body size is not legible as a symbol. An icon has to
+       be recognised by SHAPE at a glance, which needs more size than a letterform does to be read
+       in a word. */
+    --icon-sm: 1rem;      /* 16px - secondary glyphs that sit inside dense rows */
+    --icon-md: 1.125rem;  /* 18px - primary action glyphs */
     --hit-pointer: 32px;
 
     /* ── 5. Elevation ──────────────────────────────────────────────────── */
@@ -7315,4 +7322,86 @@ h3.conversation-title.editable:hover {
 
 @media (max-width: 34rem) {
     .usage-panel { right: 6px; width: calc(100vw - 12px); }
+}
+
+
+/* ── Icon control sizing ──────────────────────────────────────────────────
+   Every icon-only or icon-led control in the portal was rendering its glyph at
+   12-14px inside a box as small as 20x19 - under half the area of Fluent's 32px
+   pointer minimum, and small enough that the symbol could not be identified
+   without leaning in. These rules raise both dimensions together: a bigger glyph
+   that is still in a 20px box is no easier to hit, and a bigger box around a
+   12px glyph is no easier to read.
+
+   Grouped rather than tuned per component so the whole set stays consistent and
+   a new icon button inherits the convention by using one of these classes. */
+
+.toggle-btn,
+.conversation-header-action,
+.config-btn,
+.new-chat-btn,
+.banner-settings-btn,
+.conversation-pin-btn,
+.conversation-archive-btn,
+.conversation-section-btn,
+.msg-copy-btn,
+.tool-copy-btn,
+.tool-popout-btn,
+.tool-modal-close,
+.session-debug-copy-btn,
+.workspace-tree-delete,
+.announcement-dismiss {
+    font-size: var(--icon-md);
+    min-width: var(--hit-pointer);
+    min-height: var(--hit-pointer);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+/* The tab strip keeps its own height, so only the glyph grows. */
+.agent-tab-icon {
+    font-size: var(--icon-md);
+    line-height: 1;
+}
+
+/* Sidebar nav glyphs sit beside a label and read as a row marker rather than a
+   target, so they take the smaller step. */
+.sidebar-nav-item .nav-icon,
+.conversation-new-btn {
+    font-size: var(--icon-sm);
+}
+
+/* The burger is the one control that must never be hard to find: it is how a
+   narrow viewport reaches the whole navigation. Its three bars are drawn, not a
+   glyph, so it is sized rather than scaled by font-size. */
+.burger-btn {
+    min-width: var(--hit-pointer);
+    min-height: var(--hit-pointer);
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.burger-btn .burger-line {
+    width: 18px;
+    height: 2px;
+}
+
+/* Message-hover actions overlay content, so they stay visually light - but light
+   is about contrast and background, not about being too small to hit. */
+.msg-copy-btn,
+.tool-copy-btn {
+    font-size: var(--icon-sm);
+}
+
+/* Two sidebar controls that are small buttons rather than rows: both are real targets and both sat
+   under the pointer minimum. The group header is deliberately excluded - at 215px wide it is a full
+   row and trivially hittable, and padding it out would only add vertical noise to a list header. */
+.conversation-new-btn,
+.conversation-filter-btn {
+    min-height: var(--hit-pointer);
 }

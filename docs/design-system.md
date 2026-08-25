@@ -177,6 +177,25 @@ not a third size.
 HIG's continuous "squircle" curvature has no portable CSS equivalent yet;
 plain `border-radius` is the honest approximation.
 
+### Icons
+
+`--icon-sm` **16px** for glyphs that sit beside a label and read as a row marker ·
+`--icon-md` **18px** for icon-only action controls.
+
+Deliberately separate from the type roles: those describe running text, and an
+emoji rendered at body size is not legible *as a symbol*. An icon is recognised
+by shape at a glance, which needs more size than a letterform does to be read
+inside a word.
+
+Size and hit target move together. A bigger glyph in a 20px box is no easier to
+hit, and a bigger box around a 12px glyph is no easier to read — the portal had
+both problems at once, with 12–14px glyphs in boxes as small as 20×19.
+
+**Every icon-only control carries a `title`.** Where the control also has a
+visible label, the tooltip says what the destination is *for* rather than
+repeating the word already on screen: a tooltip that restates its own label is
+noise.
+
 ### Hit targets
 
 `--hit-pointer` **32px** (Fluent desktop minimum) · `--hit-touch` **44px** (HIG).
