@@ -779,8 +779,51 @@
     // populates deterministically as soon as the gateway responds (#2233, #2236). Never throws.
     protected override async Task OnInitializedAsync()
     {
+        await EnsurePortalInitializedAsync();
         await LoadToolsAsync();
         await LoadNavOrderAsync();
+    }
+
+    /// <summary>
+    /// Initialises the portal for every route, from the shell.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This used to be the responsibility of individual pages, and only three of them accepted it:
+    /// Landing, Home and Activity. Every other route - /skills, /agents, /tools, /cron, /plugins,
+    /// /configuration - reached by direct navigation, a bookmark or a refresh therefore ran against
+    /// a <c>GatewayRestClient</c> that had never been handed its base URL, because
+    /// <c>Configure()</c> is called from inside <c>InitializeAsync</c>.
+    /// </para>
+    /// <para>
+    /// The failure was silent and misattributed. Every REST call from those routes threw from
+    /// <c>EnsureConfigured</c>, each page caught it and rendered its own generic message, and the
+    /// Skills page reported "Unable to load skills directory" - blaming a folder that was perfectly
+    /// healthy for a startup ordering problem. Initialising here removes the whole class rather than
+    /// adding a fourth page to the list, which is how it grew to three.
+    /// </para>
+    /// <para>
+    /// The existing per-page calls are left in place: they are guarded on IsReady/IsLoading and
+    /// become no-ops, and removing them is a separate cleanup with no behavioural gain.
+    /// </para>
+    /// </remarks>
+    private async Task EnsurePortalInitializedAsync()
+    {
+        if (PortalLoad.IsReady || PortalLoad.IsLoading)
+            return;
+
+        try
+        {
+            var hubUrl = new Uri(new Uri(Nav.BaseUri), "/hub/gateway").ToString();
+            PortalLoad.ClientKind = "desktop";
+            await PortalLoad.InitializeAsync(hubUrl);
+        }
+        catch (Exception ex)
+        {
+            // Matches the pages this replaces: a portal that cannot reach the gateway must still
+            // render a shell the user can navigate, not a blank screen.
+            Console.Error.WriteLine($"Portal initialization failed: {ex.Message}");
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
