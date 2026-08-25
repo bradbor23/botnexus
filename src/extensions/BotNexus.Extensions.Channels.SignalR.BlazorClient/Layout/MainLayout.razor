@@ -79,7 +79,7 @@
     }
 
     @* Two-column body *@
-    <div class="app-body">
+    <div class="app-body" id="app-body">
         @* Mobile overlay - tap to close sidebar *@
         @if (_sidebarOpen)
         {
@@ -147,6 +147,12 @@
         }
 
         @* Main canvas - @Body renders here *@
+        @* Reuses BotNexus.splitter, the same mechanism the workspace, reports and skills
+           panels already use, rather than a second drag implementation. The JS resolves the left
+           pane as this element's previousElementSibling, which is the sidebar. Desktop only: on
+           mobile the sidebar is a fixed overlay, so there is no boundary to drag. *@
+        <div class="panel-splitter sidebar-splitter" role="separator" aria-orientation="vertical"
+             aria-label="Resize sidebar" title="Drag to resize"></div>
         <main class="main-canvas">
             <GlobalErrorBoundary>
             @Body
@@ -806,6 +812,20 @@
             // from the same stored value, but that script is the only thing that ran before this
             // point, and re-applying keeps a single owner of the DOM state once Blazor is live.
             await JS.InvokeVoidAsync("portalPrefs.applyTheme", PortalTheme.Normalize(Prefs.Current.Theme));
+
+            // Sidebar resize. min 180px keeps the conversation titles readable rather than letting
+            // the pane be dragged to a useless sliver; max 40% stops it swallowing the canvas.
+            // Width persists in its own localStorage key, independent of the open/closed toggle,
+            // so collapsing and reopening restores the width the user chose.
+            try
+            {
+                await JS.InvokeVoidAsync("BotNexus.splitter.init", "app-body", "bn-sidebar-width", 240, 180, 0.4);
+            }
+            catch
+            {
+                // A splitter that fails to initialise leaves a fixed-width sidebar, which is what
+                // the portal had before. Never worth failing first render over.
+            }
             // Re-render immediately after mobile detection so layout responds without waiting for gateway load.
             StateHasChanged();
 
