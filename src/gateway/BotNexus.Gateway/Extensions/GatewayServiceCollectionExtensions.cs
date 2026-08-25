@@ -134,6 +134,18 @@ public static class GatewayServiceCollectionExtensions
         // Core services
         services.TryAddSingleton<IFileSystem, FileSystem>();
         services.TryAddSingleton<BotNexusHome>();
+
+        // Credential resolution. Providers are registered per scheme with TryAddEnumerable so a
+        // second registration of the same one is a no-op rather than a duplicate - SecretResolver
+        // treats two providers claiming one scheme as a fatal configuration error, since silently
+        // letting one win means a credential could resolve from a store nobody expected.
+        // Both registered by implementation type, not by factory: TryAddEnumerable rejects a
+        // factory descriptor outright ("indistinguishable from other services registered for
+        // ISecretProvider"), because it has no type to deduplicate on. FileSecretProvider takes
+        // its IFileSystem through the constructor, so the container supplies it anyway.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, EnvironmentSecretProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, FileSecretProvider>());
+        services.TryAddSingleton<ISecretResolver, SecretResolver>();
         // #2855: the OPTIONAL embeddings capability registry. Always registered and normally
         // empty - composition populates it only for providers that opted in, and an empty
         // registry resolves every key to absent, which is the lexical-only default.
