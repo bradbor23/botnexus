@@ -3,7 +3,7 @@
 A plan for letting an agent act on a named server — a Proxmox host, a NAS, an internal
 API — without ever holding the credential for it.
 
-Status: Phase 1 delivered. Phases 1-3 are the agreed first slice.
+Status: Phases 1-3 delivered - the agreed first slice is complete.
 
 ## The problem
 
@@ -167,15 +167,77 @@ Decisions taken while building it, beyond the design above:
 both credential types keep their redacted `ToString` and their `PrintMembers` override. It was
 confirmed to redden when an unregistered unwrap is introduced.
 
-**Phase 2 — Config surface.** Extend `LocationConfig`; validation rejecting inline
-secrets; `[Display]`/`[ConfigField]` annotations; regenerate
-`docs/botnexus-config.schema.json`; add `config.example.jsonc` with placeholders only;
-confirm `.gitignore` covers real config.
-*Done when:* a literal in `credentialRef` fails start-up validation naming the key, and
-the portal Configuration page renders the new fields with descriptions.
+**Phase 2 - Config surface. Delivered.**
 
-**Phase 3 — Locations tool.** Metadata-only tool plus its exposure fence.
-*Done when:* an agent can list targets, and a test proves the DTO cannot carry a ref.
+`LocationConfig` gains `Username`, `CredentialRef`, `VerifyTls` (defaulting to *on*) and `Tags`,
+and every property on the type - the five pre-existing ones included - now carries `[Display]`
+and `[ConfigField]`. That took five entries out of the `ConfigFieldCoverage` baseline, 174 to 169.
+
+`credentialRef` is deliberately **not** marked `Secret` and renders as ordinary text. It holds a
+pointer, and a value with no scheme fails validation, so a pasted password cannot end up there.
+Masking it would hide the one part an operator needs to read to fix a mistyped reference while
+protecting nothing. `connectionString` stays masked, because it really does hold a credential.
+
+`PlatformConfigValidator` rejects a `credentialRef` that is not a well-formed `SecretRef`, naming
+the key - `gateway.locations.proxmox-main.credentialRef` - and never echoing the value, since if
+it really is a pasted credential the error may well be logged. The check applies to every
+location type, not only the ones that currently take an endpoint.
+
+`docs/config.example.jsonc` is the annotated example. It is documentation and nothing loads it:
+the gateway's reader rejects comments, so a commented `config.json` is silently ignored and the
+gateway runs on defaults. The generated schema is the mechanism that actually helps while editing
+the real file - point `$schema` at it and an editor shows the same descriptions inline.
+
+*Verified:* 13 validation tests, 6 coverage-fence tests, and a preview gateway booted on the
+example config - all three example locations load, `example-db` is redacted by the API, and the
+portal Configuration page renders a Locations group per location with the fields in their declared
+order, `Connection string` masked and `Credential reference` plainly editable.
+
+Two bugs found and fixed on the way, both the same shape as each other and as the test-isolation
+one - a Windows path literal used on a platform where it means nothing:
+
+- `botnexus config schema` defaulted its output to `docs\botnexus-config.schema.json`. Off
+  Windows that wrote a file *named* `docs\botnexus-config.schema.json` into the working directory
+  and no schema where anyone would look. The documented regeneration command therefore did not
+  work on Linux or macOS at all.
+- `botnexus validate` reported `VALID` for a config file that is not JSON. The loader falls back
+  to defaults on unreadable JSON so the gateway stays up, which is right for the gateway, but the
+  validator was then validating that pristine fallback rather than the operator's file - saying
+  yes to a config the gateway could not read and was silently ignoring.
+
+**Phase 3 - Locations tool. Delivered.**
+
+`list_locations` (`src/gateway/BotNexus.Gateway/Tools/ListLocationsTool.cs`) lets an agent discover
+what this installation knows about, and gives it no means of authenticating to any of it.
+
+`LocationEntry` is a hand-written projection rather than a serialisation of `LocationConfig`, so a
+field added to configuration does nothing until someone edits `Project`. Two exclusions are
+deliberate:
+
+- `credentialRef` - names where a credential lives. Harmless in a file an operator reads; a useful
+  hint to anyone who has talked their way into an agent's context.
+- `connectionString` - **is** a credential. The locations REST API derives its display value as
+  `Path ?? Endpoint ?? ConnectionString` and redacts afterwards; reusing that helper here would have
+  handed an agent the connection string of every database location. The projection reads `Path` and
+  `Endpoint` by name and never consults `ConnectionString`. A database location therefore has no
+  `address` field at all.
+
+`hasCredential` is a boolean: enough for an agent to know a target is authenticated, never which
+credential nor where it is kept.
+
+Gated by the standard allowlist, like every other tool - see the resolved open question below. Only
+configured locations are listed; the world descriptor's derived entries for agent workspaces and
+internal directories are an implementation detail.
+
+*Verified:* 14 tool tests, 5 gate tests, 4 fence tests, and a live agent call. The raw tool result
+was read directly rather than trusting the agent's prose - which mattered, because the model
+summarised "all three have credentials" when the payload correctly reported `hasCredential:false`
+for the one without.
+
+`LocationsToolExposureFenceArchitectureTests` asserts the member list **exactly**, not against a
+deny-list of suspicious names. The field that would actually have leaked was called
+`PathOrEndpoint`; an exact set catches that and a name filter does not. Confirmed to redden when a
+`CredentialRef` member is added.
 
 **Phase 4 — `sqlite:` and `keyring:` providers.** Deferred deliberately: they add no
 capability the first three phases lack, and `keyring:` needs host setup that should not
@@ -205,6 +267,11 @@ Trailguide can explain the model.
 1. Should `credentialRef` support more than one credential per location (e.g. a token
    *and* a TLS client cert)? A `credentials` map keyed by purpose is more general; a
    single ref is simpler. Recommend starting single and widening if a consumer needs it.
-2. Should the locations tool be opt-in per agent via `toolIds`, or available to all?
-   Recommend opt-in — an agent with no business touching infrastructure should not be
-   able to enumerate it.
+2. ~~Should the locations tool be opt-in per agent via `toolIds`, or available to all?~~
+   **Resolved: available by default, gated by the standard allowlist.** Opt-in was built
+   first and reversed. `toolIds` is not additive - a non-empty list restricts to exactly
+   that list, and the isolation strategy applies it to the workspace tools too - so the
+   only way to grant the tool also stripped `read`, `write`, `edit` and `shell` from the
+   agent. And the marginal exposure is small next to `ShellTool`, which is already in the
+   default set: anyone who can inject into an agent's context has a shell already. What
+   carries the weight is that no credential reaches the payload, which holds either way.

@@ -97,11 +97,6 @@ HeartbeatAgentConfig.Enabled
 HeartbeatAgentConfig.IntervalMinutes
 HeartbeatAgentConfig.Prompt
 HeartbeatAgentConfig.QuietHours
-LocationConfig.Description
-LocationConfig.Endpoint
-LocationConfig.Path
-LocationConfig.Properties
-LocationConfig.Type
 MemoryAgentConfig.Enabled
 MemoryAgentConfig.Indexing
 MemoryAgentConfig.Path

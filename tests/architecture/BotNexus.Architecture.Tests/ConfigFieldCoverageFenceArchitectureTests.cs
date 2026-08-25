@@ -64,7 +64,7 @@ public sealed class ConfigFieldCoverageFenceArchitectureTests
     /// (for example pasting in a hundred new entries) is visible as a one-line numeric change in review
     /// rather than being buried in a large diff.
     /// </summary>
-    private const int ExpectedBaselineCount = 174;
+    private const int ExpectedBaselineCount = 169;
 
     [Fact]
     public void EveryConfigProperty_CarriesConfigFieldAttribute()
