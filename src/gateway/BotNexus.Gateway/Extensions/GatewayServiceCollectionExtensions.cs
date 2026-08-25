@@ -145,6 +145,8 @@ public static class GatewayServiceCollectionExtensions
         // its IFileSystem through the constructor, so the container supplies it anyway.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, EnvironmentSecretProvider>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, FileSecretProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, SqliteSecretProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISecretProvider, KeyringSecretProvider>());
         services.TryAddSingleton<ISecretResolver, SecretResolver>();
         // #2855: the OPTIONAL embeddings capability registry. Always registered and normally
         // empty - composition populates it only for providers that opted in, and an empty
