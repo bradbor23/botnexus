@@ -17,8 +17,8 @@ public interface IGatewayProcessManager
     Task<GatewayStartResult> StartAsync(GatewayStartOptions options, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Stops the running gateway process by sending a hard kill signal.
-    /// Waits up to 5 seconds for the process to exit, then deletes the PID file.
+    /// Stops the running gateway process, requesting a graceful shutdown first and escalating to a
+    /// hard kill only when that is refused or unavailable, then deletes the PID file.
     /// </summary>
     /// <param name="homePath">BotNexus home directory containing the PID file. Defaults to ~/.botnexus.</param>
     /// <param name="gatewayBinaryPath">Optional path of the gateway assembly this deployment would

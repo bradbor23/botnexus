@@ -25,6 +25,9 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     // Injectable process enumeration for PID-file-less discovery (#2772). Tests supply fakes so no
     // real process is ever inspected or signalled.
     private readonly Func<IEnumerable<IGatewayProcessHandle>> _processEnumerator;
+    // How long a graceful stop request is given to land before escalating to a hard kill.
+    // Injectable so tests exercise the escalation without waiting out a real grace period.
+    private readonly TimeSpan _gracefulStopTimeout;
     // Default health URL used for status probing when no override is provided.
     internal const string DefaultHealthUrl = GatewayDefaults.LoopbackListenUrl + "/health";
 
@@ -34,9 +37,11 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         TimeSpan? waitForExitTimeout = null,
         Func<Process, int, bool>? waitForExitOverride = null,
         HttpClient? probeClient = null,
-        Func<IEnumerable<IGatewayProcessHandle>>? processEnumerator = null)
+        Func<IEnumerable<IGatewayProcessHandle>>? processEnumerator = null,
+        TimeSpan? gracefulStopTimeout = null)
     {
         _processEnumerator = processEnumerator ?? LiveProcessHandle.EnumerateAll;
+        _gracefulStopTimeout = gracefulStopTimeout ?? TimeSpan.FromSeconds(10);
         _healthChecker = healthChecker;
         _logger = logger;
         _waitForExitTimeout = waitForExitTimeout ?? TimeSpan.FromSeconds(5);
@@ -307,8 +312,15 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     }
 
     /// <summary>
-    /// Stops the gateway process by sending a hard kill signal, waiting up to 5 seconds
-    /// for exit, then cleaning up the PID file.
+    /// Stops the gateway process by requesting a graceful shutdown first (SIGTERM on Unix) and
+    /// escalating to a hard kill only when that is refused or unavailable, then cleaning up the
+    /// PID file.
+    /// <para>
+    /// The graceful step matters: a hard kill gives the gateway no chance to checkpoint SQLite,
+    /// flush sessions or record a clean shutdown, so every CLI-driven restart was reported by the
+    /// next run as "previous gateway run terminated uncleanly". SIGTERM is a signal the gateway
+    /// already handles - it was simply never sent.
+    /// </para>
     /// <para>
     /// The PID is only signalled after its recorded identity has been verified against the live
     /// process (issue #2369). A recycled or unverifiable PID is cleaned up and reported as
@@ -352,33 +364,57 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
 
         var pid = discoveredByPath ? handle.Id : record!.Pid;
         _logger.LogInformation(
-            "Killing gateway process {Pid} ({Source})", pid, discoveredByPath ? "discovered by binary path" : "from PID file");
+            "Stopping gateway process {Pid} ({Source})", pid, discoveredByPath ? "discovered by binary path" : "from PID file");
 
-        try
+        var exited = false;
+
+        // Politely first. Only a refused or unavailable graceful stop earns a hard kill.
+        if (handle.TryRequestGracefulStop())
         {
-            handle.Kill();
-        }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogWarning(ex, "Gateway process {Pid} already exited", pid);
-            await CleanupPidFileAsync(pidFilePath);
-            return new GatewayStopResult(
-                Success: true,
-                Message: $"Gateway process {pid} already exited",
-                Outcome: GatewayStopOutcome.Stopped);
-        }
-        catch (Win32Exception ex)
-        {
-            _logger.LogError(ex, "Failed to kill gateway process {Pid}", pid);
-            return new GatewayStopResult(
-                Success: false,
-                Message: $"Failed to kill gateway process {pid}: {ex.Message}",
-                Outcome: GatewayStopOutcome.Failed);
+            _logger.LogInformation(
+                "Requested graceful shutdown of gateway process {Pid}; waiting up to {Timeout}s",
+                pid, _gracefulStopTimeout.TotalSeconds);
+
+            exited = await Task.Run(
+                () => handle.WaitForExit((int)_gracefulStopTimeout.TotalMilliseconds), cancellationToken);
+
+            if (exited)
+                _logger.LogInformation("Gateway process {Pid} shut down gracefully", pid);
+            else
+                _logger.LogWarning(
+                    "Gateway process {Pid} ignored the graceful stop request for {Timeout}s; escalating to a hard kill",
+                    pid, _gracefulStopTimeout.TotalSeconds);
         }
 
-        // Wait for process to exit after kill
-        var timeoutMs = (int)_waitForExitTimeout.TotalMilliseconds;
-        var exited = await Task.Run(() => handle.WaitForExit(timeoutMs), cancellationToken);
+        if (!exited)
+        {
+            try
+            {
+                handle.Kill();
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Gateway process {Pid} already exited", pid);
+                await CleanupPidFileAsync(pidFilePath);
+                return new GatewayStopResult(
+                    Success: true,
+                    Message: $"Gateway process {pid} already exited",
+                    Outcome: GatewayStopOutcome.Stopped);
+            }
+            catch (Win32Exception ex)
+            {
+                _logger.LogError(ex, "Failed to kill gateway process {Pid}", pid);
+                return new GatewayStopResult(
+                    Success: false,
+                    Message: $"Failed to kill gateway process {pid}: {ex.Message}",
+                    Outcome: GatewayStopOutcome.Failed);
+            }
+
+            // Wait for process to exit after the hard kill
+            var timeoutMs = (int)_waitForExitTimeout.TotalMilliseconds;
+            exited = await Task.Run(() => handle.WaitForExit(timeoutMs), cancellationToken);
+        }
+
         if (!exited)
         {
             _logger.LogWarning("Gateway process {Pid} did not exit within {Timeout}s", pid, _waitForExitTimeout.TotalSeconds);

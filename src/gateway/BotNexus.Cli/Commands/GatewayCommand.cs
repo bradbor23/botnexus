@@ -48,14 +48,23 @@ internal sealed class GatewayCommand
             context.ExitCode = await StartAsync(repoRoot, home, port, attached, verbose, skipBuild, context.GetCancellationToken());
         });
 
-        // Stop command
-        var stopCommand = new Command("stop", "Stop the gateway process");
+        // Stop command.
+        //
+        // --source is load-bearing, not cosmetic: it resolves the gateway binary this deployment
+        // would launch, which is the only thing that lets StopAsync fall back to discovering a
+        // running gateway that never wrote a PID file (issue #2772).
+        var stopCommand = new Command("stop", "Stop the gateway process")
+        {
+            sourceOption
+        };
         stopCommand.SetHandler(async context =>
         {
             var target = context.ParseResult.GetValueForOption(targetOption);
+            var source = context.ParseResult.GetValueForOption(sourceOption);
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
+            var repoRoot = CliPaths.ResolveSource(source);
             var home = CliPaths.ResolveTarget(target);
-            context.ExitCode = await StopAsync(home, verbose, context.GetCancellationToken());
+            context.ExitCode = await StopAsync(repoRoot, home, verbose, context.GetCancellationToken());
         });
 
         // Status command
@@ -306,9 +315,10 @@ internal sealed class GatewayCommand
         return lastExitCode;
     }
 
-    private async Task<int> StopAsync(string home, bool verbose, CancellationToken cancellationToken)
+    private async Task<int> StopAsync(string repoRoot, string home, bool verbose, CancellationToken cancellationToken)
     {
         var interactive = AnsiConsole.Profile.Capabilities.Interactive;
+        var gatewayBinaryPath = UpdateCommand.ResolveGatewayBinaryPath(repoRoot);
         GatewayStopResult result;
 
         if (interactive)
@@ -319,13 +329,13 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Stopping gateway...", async ctx =>
                 {
-                    capturedResult = await _processManager.StopAsync(home, cancellationToken: cancellationToken);
+                    capturedResult = await _processManager.StopAsync(home, gatewayBinaryPath, cancellationToken);
                 });
             result = capturedResult;
         }
         else
         {
-            result = await _processManager.StopAsync(home, cancellationToken: cancellationToken);
+            result = await _processManager.StopAsync(home, gatewayBinaryPath, cancellationToken);
         }
 
         if (result.Success)
@@ -448,6 +458,7 @@ internal sealed class GatewayCommand
         var interactive = AnsiConsole.Profile.Capabilities.Interactive;
 
         // Stop
+        var gatewayBinaryPath = UpdateCommand.ResolveGatewayBinaryPath(repoRoot);
         GatewayStopResult stopResult;
         if (interactive)
         {
@@ -457,20 +468,34 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Stopping gateway...", async ctx =>
                 {
-                    capturedStop = await _processManager.StopAsync(home, cancellationToken: cancellationToken);
+                    capturedStop = await _processManager.StopAsync(home, gatewayBinaryPath, cancellationToken);
                 });
             stopResult = capturedStop;
         }
         else
         {
             AnsiConsole.MarkupLine("[blue][[gateway]][/] Stopping gateway...");
-            stopResult = await _processManager.StopAsync(home, cancellationToken: cancellationToken);
+            stopResult = await _processManager.StopAsync(home, gatewayBinaryPath, cancellationToken);
         }
 
-        if (stopResult.Success)
-            AnsiConsole.MarkupLine("[green]✓[/] Gateway stopped");
-        else
-            AnsiConsole.MarkupLine($"[yellow]⚠[/] Stop result: {CliText.SafeDisplay(stopResult.Message ?? "unknown")}");
+        // Report what was observed, not merely that the call succeeded. NotRunning is also
+        // Success: true, so keying the tick off Success alone renders "Gateway stopped" for a
+        // no-op - the exact misreport GatewayStopOutcome was introduced to end (issue #2772).
+        // A stale claim here is expensive: the very next step overwrites extension assemblies
+        // that a still-live gateway holds mapped, which fails the deploy mid-flight.
+        switch (stopResult.Outcome)
+        {
+            case GatewayStopOutcome.Stopped:
+                AnsiConsole.MarkupLine("[green]✓[/] Gateway stopped");
+                break;
+            case GatewayStopOutcome.NotRunning:
+                AnsiConsole.MarkupLine($"[yellow]⚠[/] No running gateway was found to stop: {CliText.SafeDisplay(stopResult.Message ?? "unknown")}");
+                AnsiConsole.MarkupLine("[dim]If a gateway is in fact running, it was started outside this deployment - check with 'ps' before redeploying.[/]");
+                break;
+            default:
+                AnsiConsole.MarkupLine($"[yellow]⚠[/] Stop result: {CliText.SafeDisplay(stopResult.Message ?? "unknown")}");
+                break;
+        }
 
         await Task.Delay(1000, cancellationToken);
 
