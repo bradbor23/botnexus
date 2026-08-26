@@ -4024,18 +4024,31 @@ details[open] > .thinking-summary::before {
     font-weight: 600;
     color: var(--text-muted);
 }
+/* The cron editor stacks its labels above its controls rather than using the two-column
+   rows the config and agent forms do, which suits its short fields in a responsive grid.
+   The controls themselves should still look like every other control in the product: this
+   was on --bg-tertiary (#1c232c) against --bg-input (#151a21) everywhere else, a visible
+   shade apart, with 0.1rem more vertical padding. */
 .cron-edit-field input[type="text"],
 .cron-edit-field select,
 .cron-edit-field textarea {
     width: 100%;
     box-sizing: border-box;
-    background: var(--bg-tertiary);
+    background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
-    padding: 0.45rem 0.6rem;
+    padding: 0.35rem 0.6rem;
     font-size: var(--text-body);
-    font-family: inherit;
+    font-family: var(--font-sans);
+    transition: border-color 0.15s;
+}
+
+.cron-edit-field input[type="text"]:focus,
+.cron-edit-field select:focus,
+.cron-edit-field textarea:focus {
+    border-color: var(--accent);
+    outline: none;
 }
 .cron-edit-field textarea { resize: vertical; }
 .cron-edit-field-inline > label {
