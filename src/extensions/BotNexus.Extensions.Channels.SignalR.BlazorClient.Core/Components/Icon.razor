@@ -36,6 +36,15 @@
 
     private string? _markup;
 
+    // The generator makes each icon's gradient id unique across the SET, which is what stops
+    // two different icons resolving against each other. It cannot help when the SAME icon
+    // renders more than once - three canvas icons on one screen meant three elements carrying
+    // id="bn-canvas-g". That renders correctly, since the definitions are identical, but
+    // duplicate ids are invalid and trip validators and accessibility tooling. A per-instance
+    // suffix makes the document-level guarantee as strong as the set-level one.
+    private static int s_instances;
+    private readonly int _instance = Interlocked.Increment(ref s_instances);
+
     protected override void OnParametersSet() => _markup = Build();
 
     private string? Build()
@@ -44,6 +53,17 @@
             return null;
 
         var slug = Name.Trim().ToLowerInvariant();
+
+        // Only gradient icons declare an id at all, so this is a no-op for most of the set.
+        var body = def.Body;
+        var stroke = def.Stroke;
+        if (body.Contains("id=\"bn-", StringComparison.Ordinal))
+        {
+            var suffix = "-i" + _instance.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            body = body.Replace($"id=\"bn-{slug}-g\"", $"id=\"bn-{slug}-g{suffix}\"", StringComparison.Ordinal)
+                       .Replace($"url(#bn-{slug}-g)", $"url(#bn-{slug}-g{suffix})", StringComparison.Ordinal);
+            stroke = stroke.Replace($"url(#bn-{slug}-g)", $"url(#bn-{slug}-g{suffix})", StringComparison.Ordinal);
+        }
         var css = string.IsNullOrWhiteSpace(Class) ? "" : " " + Encode(Class);
         var labelling = string.IsNullOrWhiteSpace(Title)
             ? """aria-hidden="true" focusable="false" """
@@ -51,8 +71,8 @@
 
         return $"""
             <svg class="bn-icon bn-icon-{Encode(slug)}{css}" width="{Size}" height="{Size}"
-                 viewBox="0 0 24 24" fill="none" stroke="{def.Stroke}" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" {labelling}>{def.Body}</svg>
+                 viewBox="0 0 24 24" fill="none" stroke="{stroke}" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" {labelling}>{body}</svg>
             """;
     }
 
