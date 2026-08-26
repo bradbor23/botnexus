@@ -340,9 +340,11 @@ The generator now makes each id unique per icon and **refuses to emit a set wher
 icons declare the same one**. `Icon.razor` additionally suffixes each id per instance,
 so the same icon rendered three times does not produce three duplicate ids.
 
-`Icon.razor` emits the whole element as a single `MarkupString`. Raw markup inserted
-*inside* an existing `<svg>` parent is parsed in the HTML namespace and renders as
-nothing; starting from `<svg>` lets the parser switch namespaces correctly.
+`Icon.razor` emits the whole element - root included - as a single `MarkupString`
+rather than an `<svg>` root with a `MarkupString` body. Raw markup injected into an
+existing SVG parent is namespace-sensitive and can end up in the HTML namespace, where
+it renders as nothing; starting the fragment at `<svg>` leaves the namespace decision
+to the parser, which handles it the same way it handles any inline SVG in a document.
 
 ---
 
@@ -398,8 +400,8 @@ configuration page had an accessible name.
 6. Every colour must come from a token, or the light theme will not follow it.
 7. Derive spacing from the size token; never restate it as a literal. Three
    conversation-row buttons were pinned at `right: 2.95/1.6/0.25rem` and later given
-   the 32px `--hit-pointer` minimum without the offsets being revisited - each then
-   overlapped its neighbour by 10px.
+   the 32px `--hit-pointer` minimum without the offsets being revisited. 32 - 21.6
+   leaves each button overlapping its neighbour by 10.4px.
 8. No icon hardcodes its stroke. `currentColor` or its own gradient, so a hover,
    disabled or selected state can reach it.
 
