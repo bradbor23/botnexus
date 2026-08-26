@@ -262,6 +262,131 @@ pointer click leaves nothing behind while keyboard traversal always shows one.
 
 ---
 
+## Icon library
+
+44 inline SVG icons. The source of truth is `assets/icons/svg/`; the Blazor library is
+**generated**, never hand-edited:
+
+```bash
+python3 scripts/generate-icons.py
+```
+
+That writes `IconLibrary.g.cs` and the per-icon tone rules in `app.css`. To change an
+icon, change its SVG and re-run.
+
+Drawing conventions: 24 x 24 viewBox, `fill="none"`, 2px strokes, round caps and
+joins, transparent background, legible at 16, 20, 24 and 32px.
+
+### Usage
+
+```razor
+<Icon Name="home" />                                     @* 20px default *@
+<Icon Name="delete" Size="16" Class="bn-icon-inherit" /> @* takes its control colour *@
+<Icon Name="agents" Class="bn-icon-flat" />              @* gradient collapsed to flat *@
+<Icon Name="refresh" Class="bn-icon-spin" />             @* in progress *@
+<Icon Name="warning" Title="Config invalid" />           @* announced; default aria-hidden *@
+```
+
+### The palette
+
+Colour here is restrained and semantic, in the same spirit as the category palette:
+blue for communication and actions, green for activity and completion, amber for
+tools, scheduling and temporary state, red for destructive and blocking, and gradients
+for AI, extension and creative identities.
+
+| Hue | Icons |
+|---|---|
+| Green `#22C55E` | `activity` `check` `todo` `usage` |
+| Blue `#3B82F6` | `add` `agents` `chat` `conversation` `guide` `help` `send` |
+| Amber `#F59E0B` | `cron-jobs` `folder` `light-mode` `pause` `pin` `tools` `warning` |
+| Red `#EF4444` | `avoid` `delete` `error` `stop` |
+| Violet `#8B5CF6` | `assistant` `canvas` `skills` `thinking` |
+| Teal `#14B8A6` | `plugins` `reports` |
+| Indigo `#6366F1` | `dark-mode` `workspace` |
+| Cyan `#06B6D4` | `bot` |
+
+Seven carry a gradient rather than a flat tone - `agents` `assistant` `bot` `canvas`
+`plugins` `skills` `usage` - and the hue above is their first stop, used when the icon
+is forced flat.
+
+Thirteen carry no tone at all and inherit their context: `attach` `back` `close`
+`configuration` `copy` `edit` `file` `home` `move` `refresh` `running` `search`
+`visibility`.
+
+### Colour policy
+
+No icon hardcodes its stroke. Every root carries `stroke="currentColor"` (or a
+gradient reference) and the artwork tone lives in a generated `.bn-icon-<name>` rule.
+Rendering is identical; the difference is that any context can override it - a
+disabled control, a selected row, a button whose label sets the colour.
+
+| Class | Effect |
+|---|---|
+| `bn-icon-inherit` | Take the colour of the surrounding control |
+| `bn-icon-flat` | Drop a gradient for the icon's flat tone |
+| `bn-icon-spin` | Rotate; respects `prefers-reduced-motion` |
+
+These are emitted **after** the per-icon tones on purpose. Both are single-class
+selectors, so source order alone decides which wins - written above the tones they
+silently lose, and an archive icon stays red instead of inheriting its button.
+
+### SVG ids are document-global
+
+The set originally declared every gradient as `id="g"`. Once two of those icons
+rendered together, every `url(#g)` resolved to whichever landed in the DOM first and
+the icons silently took each other's colours - three of them share the sidebar.
+
+The generator now makes each id unique per icon and **refuses to emit a set where two
+icons declare the same one**. `Icon.razor` additionally suffixes each id per instance,
+so the same icon rendered three times does not produce three duplicate ids.
+
+`Icon.razor` emits the whole element as a single `MarkupString`. Raw markup inserted
+*inside* an existing `<svg>` parent is parsed in the HTML namespace and renders as
+nothing; starting from `<svg>` lets the parser switch namespaces correctly.
+
+---
+
+## Form patterns
+
+Two layouts, chosen by the shape of the content rather than by page.
+
+**Two-column rows** - configuration and the agent editor. A label column, then a
+control column carrying the control, its description and its error. Collapses to one
+column under 720px, the width the mobile Settings page renders the same component at.
+
+```css
+grid-template-columns: minmax(9rem, 12rem) minmax(0, 1fr);
+align-items: start;
+```
+
+`align-items: start`, not `center`: a centred label floats halfway down a tall control
+and against a ten-row checkbox list ends up level with nothing. Single-line controls
+cap at `26rem` - letting an input run the full row width pushes its label a long way
+from its value.
+
+**Stacked rows** - the cron editor. Labels above controls in a responsive grid, which
+suits a form of many short fields. The controls still use the shared input style; only
+the arrangement differs.
+
+### The generic renderer
+
+`SchemaForm` draws every configuration screen, desktop and mobile, from the UI-schema
+envelope. Style the classes it emits; do not fork it:
+
+`schema-form` `schema-group` `schema-group-title` `schema-object` `schema-subgroup`
+`schema-subgroup-title` `schema-field` `schema-field-label` `schema-field-control`
+`schema-field-description` `schema-field-error` `schema-array` `schema-dict`
+
+The schema already carries `x-ui-label`, `x-ui-description`, `x-ui-group` and
+`x-ui-order`. Render all four. Descriptions and grouping were computed and thrown away
+for a long time, which is why those screens read as a wall of bare labels - 31 of the
+gateway section's 34 fields carry a description that was never shown.
+
+Every input needs a `for`/`id` pairing. Before this was fixed, not one input on the
+configuration page had an accessible name.
+
+---
+
 ## Rules
 
 1. No raw hex in a component rule. Add a token instead.
@@ -271,6 +396,20 @@ pointer click leaves nothing behind while keyboard traversal always shows one.
    invites action.
 5. Type roles, never raw font-sizes.
 6. Every colour must come from a token, or the light theme will not follow it.
+7. Derive spacing from the size token; never restate it as a literal. Three
+   conversation-row buttons were pinned at `right: 2.95/1.6/0.25rem` and later given
+   the 32px `--hit-pointer` minimum without the offsets being revisited - each then
+   overlapped its neighbour by 10px.
+8. No icon hardcodes its stroke. `currentColor` or its own gradient, so a hover,
+   disabled or selected state can reach it.
+
+### Enforced by tests
+
+Conventions nothing checks have already drifted, so these fail loudly on the things
+that otherwise fail silently: no two icons declaring the same id (with both names in
+the message), every `url(#...)` resolving inside its own icon, every stroke being
+overridable, the tone overrides being declared after the tones, and every toned icon
+having a rule. When you add to the system, add the fence with it.
 
 ### Deliberate exceptions
 
