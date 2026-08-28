@@ -7797,3 +7797,23 @@ h3.conversation-title.editable:hover {
         flex: 1 1 auto;
     }
 }
+
+/* ── Extension-hosted views ─────────────────────────────────────────────────
+   The frame fills the main canvas so a hosted view looks like a page of the
+   portal rather than a panel floating inside one. */
+
+.extension-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.extension-view-frame {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: var(--bg-base);
+}

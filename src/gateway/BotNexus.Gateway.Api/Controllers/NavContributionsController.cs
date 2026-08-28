@@ -94,6 +94,7 @@ public sealed class NavContributionsController : ControllerBase
             IsSafeKey(nav.Icon) ? nav.Icon!.Trim().ToLowerInvariant() : null,
             nav.Order,
             nav.External,
+            nav.FullPage,
             extensionId);
     }
 
@@ -148,7 +149,8 @@ public sealed class NavContributionsController : ControllerBase
 /// <param name="Path">Site-relative path to navigate to.</param>
 /// <param name="Icon">Portal icon name, or <c>null</c> to let the portal choose a default.</param>
 /// <param name="Order">Sort position among nav entries.</param>
-/// <param name="External">Whether the path needs a full page load rather than client-side routing.</param>
+/// <param name="External">Whether the path is served outside the Blazor router.</param>
+/// <param name="FullPage">Whether the view replaces the window instead of being hosted in the portal.</param>
 /// <param name="ExtensionId">Extension that contributed the entry, for attribution and debugging.</param>
 public sealed record NavContributionResponse(
     string Id,
@@ -157,4 +159,5 @@ public sealed record NavContributionResponse(
     string? Icon,
     int Order,
     bool External,
+    bool FullPage,
     string ExtensionId);

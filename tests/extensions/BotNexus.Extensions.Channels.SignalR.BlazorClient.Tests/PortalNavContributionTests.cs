@@ -129,9 +129,31 @@ public sealed class PortalNavContributionTests : IDisposable
         var cut = RenderLayout();
 
         var anchor = Assert.Single(cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']"));
-        Assert.Equal("/agent-builder", anchor.GetAttribute("href"));
         Assert.Contains("Agent Builder", anchor.TextContent);
         Assert.Equal("botnexus-agent-builder", anchor.GetAttribute("data-nav-contributed-by"));
+
+        // Not the extension's own path: an embedded view is reached through the portal route that
+        // frames it, which is what keeps the sidebar and header around the view.
+        Assert.Equal("extension/agent-builder", anchor.GetAttribute("href"));
+        Assert.Equal("true", anchor.GetAttribute("data-nav-embedded"));
+    }
+
+    // Leaving the portal entirely has to be asked for. A plugin that says nothing gets embedded.
+    [Fact]
+    public void A_full_page_contribution_links_straight_at_the_extension_path()
+    {
+        _contributionsJson = """
+            [
+              { "id": "widget", "label": "Widget", "path": "/widget", "icon": "tools",
+                "order": 65, "external": true, "fullPage": true, "extensionId": "x" }
+            ]
+            """;
+
+        var cut = RenderLayout();
+
+        var anchor = Assert.Single(cut.FindAll("a.sidebar-nav-item[data-testid='nav-widget']"));
+        Assert.Equal("/widget", anchor.GetAttribute("href"));
+        Assert.Equal("false", anchor.GetAttribute("data-nav-embedded"));
     }
 
     // Order 65 sits between Agents (60) and Cron (70). An append-only merge would put it last.

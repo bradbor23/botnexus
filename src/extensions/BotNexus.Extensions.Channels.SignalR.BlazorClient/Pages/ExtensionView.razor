@@ -1,0 +1,61 @@
+@page "/extension/{ViewId}"
+@using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services
+@inject NavOrderApiClient NavOrderApi
+
+@*
+    Hosts an extension-served view inside the portal shell.
+
+    A contributed path is served by an extension, not by the Blazor router, so it cannot be a
+    routed component. Navigating to it directly replaces the whole window and takes the sidebar,
+    header and theme with it, which reads as leaving the app rather than moving inside it. Framing
+    it here keeps the portal chrome around the view while the extension keeps serving its own
+    document, with no coupling between the two beyond the path.
+*@
+
+<PageTitle>BotNexus &mdash; @(_contribution?.Label ?? "Extension")</PageTitle>
+
+<div class="extension-view" data-testid="extension-view">
+    @if (_loading)
+    {
+        <div class="config-loading" aria-live="polite" data-testid="extension-view-loading">
+            <div class="loading-spinner small"></div>
+            <span>Loading view.</span>
+        </div>
+    }
+    else if (_contribution is null)
+    {
+        @* A stale bookmark or a plugin removed since the link was shared is a normal thing to
+           happen, so it is a notice rather than an error page. *@
+        <div class="agents-status warning" role="status" data-testid="extension-view-unknown">
+            No extension provides the view '@ViewId'. It may have been removed, or its plugin
+            uninstalled.
+        </div>
+    }
+    else
+    {
+        <iframe class="extension-view-frame"
+                data-testid="extension-view-frame"
+                src="@_contribution.Path"
+                title="@_contribution.Label"></iframe>
+    }
+</div>
+
+@code {
+    /// <summary>Contributed nav id, which is what makes a hosted view linkable and reloadable.</summary>
+    [Parameter] public string? ViewId { get; set; }
+
+    private NavContributionDto? _contribution;
+    private bool _loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _contribution = null;
+
+        var contributions = await NavOrderApi.ListContributionsAsync();
+        _contribution = contributions.FirstOrDefault(
+            c => string.Equals(c.Id, ViewId, StringComparison.OrdinalIgnoreCase));
+
+        _loading = false;
+    }
+}

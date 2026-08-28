@@ -78,10 +78,21 @@ public sealed record ExtensionNavEntry
     public int Order { get; init; }
 
     /// <summary>
-    /// Whether the path is served outside the Blazor router and therefore needs a full page load
-    /// rather than client-side routing.
+    /// Whether the path is served outside the Blazor router and therefore cannot be reached by
+    /// client-side routing.
     /// </summary>
     public bool External { get; init; }
+
+    /// <summary>
+    /// Whether the view should replace the whole window instead of being hosted inside the portal.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>false</c>, so a contributed view is embedded in the portal frame and keeps
+    /// the sidebar, header and theme around it. Navigating away from the portal entirely is the
+    /// disjointed option and therefore the one that has to be asked for, not the default a plugin
+    /// gets by saying nothing.
+    /// </remarks>
+    public bool FullPage { get; init; }
 }
 /// <summary>
 /// Schema declaration for a single extension configuration field.

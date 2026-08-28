@@ -1615,15 +1615,22 @@
     // instead of leaving a gap, and an extension can never inject SVG into the portal DOM.
     private RenderFragment RenderContributedNav(NavContributionDto contribution) => __builder =>
     {
-        <a href="@contribution.Path"
+        <a href="@ContributionHref(contribution)"
            class="sidebar-nav-item"
            data-testid="@("nav-" + contribution.Id)"
            data-nav-contributed-by="@contribution.ExtensionId"
-           @onclick:preventDefault="@contribution.External"
+           data-nav-embedded="@((!contribution.FullPage).ToString().ToLowerInvariant())"
+           @onclick:preventDefault="true"
            @onclick="() => NavigateToContribution(contribution)">
             <Icon Name="@ResolveContributedIcon(contribution.Icon)" /><span class="sidebar-nav-label">@contribution.Label</span>
         </a>
     };
+
+    // An embedded view is reached through a PORTAL route that frames it, so the sidebar, header
+    // and theme stay put. Navigating straight at the extension's own path replaces the window and
+    // reads as leaving the app; that is now opt-in via fullPage.
+    private static string ContributionHref(NavContributionDto contribution) =>
+        contribution.FullPage ? contribution.Path : $"extension/{contribution.Id}";
 
     private static string ResolveContributedIcon(string? icon) =>
         !string.IsNullOrWhiteSpace(icon) && IconLibrary.Icons.ContainsKey(icon)
@@ -1635,8 +1642,12 @@
         if (_isMobile)
             _sidebarOpen = false;
 
-        if (contribution.External)
+        // forceLoad ONLY for a full-page view. The embedded route is an ordinary Blazor route, so
+        // a client-side navigation keeps the portal loaded rather than reloading the whole app.
+        if (contribution.FullPage)
             Nav.NavigateTo(contribution.Path, forceLoad: true);
+        else
+            Nav.NavigateTo($"extension/{contribution.Id}");
     }
 
     // The management UI (#2235) mutates tools through the same ToolsApiClient the nav reads from,

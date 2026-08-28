@@ -130,8 +130,11 @@ public sealed class NavContributionDto
     /// <summary>Effective order number, on the same scale as the built-in nav items.</summary>
     [JsonPropertyName("order")] public int Order { get; set; }
 
-    /// <summary>Whether the path needs a full page load rather than client-side routing.</summary>
+    /// <summary>Whether the path is served outside the Blazor router.</summary>
     [JsonPropertyName("external")] public bool External { get; set; }
+
+    /// <summary>Whether the view replaces the window rather than being hosted inside the portal.</summary>
+    [JsonPropertyName("fullPage")] public bool FullPage { get; set; }
 
     /// <summary>Extension that contributed the entry.</summary>
     [JsonPropertyName("extensionId")] public string ExtensionId { get; set; } = string.Empty;
