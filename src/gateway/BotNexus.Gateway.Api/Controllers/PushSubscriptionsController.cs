@@ -61,11 +61,17 @@ public sealed class PushSubscriptionsController(
             return BadRequest(new { error = "endpoint must be an absolute https URL." });
         }
 
-        // The keys are checked for shape now rather than at send time: a malformed key stored here
-        // would fail silently on every future notification, and the browser that sent it would
-        // have no idea it was never subscribed.
-        if (!IsKeyOfLength(request.P256dh, 65) || !IsKeyOfLength(request.Auth, 16))
-            return BadRequest(new { error = "p256dh must be 65 bytes and auth 16, both base64url." });
+        // Checked now rather than at send time, and checked for VALIDITY rather than length: a key
+        // that is 65 bytes but not a point on the curve passes a length check, is stored happily,
+        // and then throws inside the key agreement on every notification from then on - while the
+        // browser that sent it believes it is subscribed. Length alone let exactly that through.
+        if (!IsSubscriberKey(request.P256dh) || !IsKeyOfLength(request.Auth, 16))
+        {
+            return BadRequest(new
+            {
+                error = "p256dh must be a P-256 public key and auth 16 bytes, both base64url.",
+            });
+        }
 
         await _store.SaveAsync(
             new PushSubscription
@@ -97,6 +103,18 @@ public sealed class PushSubscriptionsController(
             await _store.RemoveAsync(request.Endpoint, ct);
 
         return NoContent();
+    }
+
+    private static bool IsSubscriberKey(string value)
+    {
+        try
+        {
+            return WebPushEncryptor.IsValidSubscriberKey(Base64Url.Decode(value));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
     private static bool IsKeyOfLength(string value, int expected)

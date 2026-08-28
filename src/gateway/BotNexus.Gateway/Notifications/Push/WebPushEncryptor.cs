@@ -150,6 +150,43 @@ public static class WebPushEncryptor
         return padded[..end];
     }
 
+    /// <summary>
+    /// Whether a p256dh value is a usable subscriber key: right length, and an actual point on the
+    /// P-256 curve.
+    /// </summary>
+    /// <remarks>
+    /// Length alone is not enough, and the difference is not academic. 65 bytes that are not on the
+    /// curve are accepted by every length check and then throw inside the key agreement on every
+    /// single notification, forever, while the browser that sent them believes it is subscribed.
+    /// Found exactly that way: a hand-made subscription with a random 65-byte "key" was stored
+    /// happily and then failed on the next notification raised.
+    /// </remarks>
+    public static bool IsValidSubscriberKey(byte[] uaPublicKey)
+    {
+        if (uaPublicKey is not { Length: PublicKeyLength } || uaPublicKey[0] != 0x04)
+            return false;
+
+        try
+        {
+            using var _ = ECDiffieHellman.Create(new ECParameters
+            {
+                Curve = ECCurve.NamedCurves.nistP256,
+                Q = new ECPoint
+                {
+                    X = uaPublicKey.AsSpan(1, 32).ToArray(),
+                    Y = uaPublicKey.AsSpan(33, 32).ToArray(),
+                },
+            });
+
+            return true;
+        }
+        catch (CryptographicException)
+        {
+            // Not a point on the curve.
+            return false;
+        }
+    }
+
     private static byte[] DeriveSharedSecret(ECDiffieHellman ours, byte[] theirPublicKey)
     {
         using var theirs = ECDiffieHellman.Create(new ECParameters

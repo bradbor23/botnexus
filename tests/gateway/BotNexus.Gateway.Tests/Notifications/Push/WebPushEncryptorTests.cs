@@ -90,6 +90,49 @@ public sealed class WebPushEncryptorTests
         Assert.NotEqual(uaPublic, body);
     }
 
+    // Found in production, not in review: a hand-made subscription whose p256dh was 65 random
+    // bytes passed the length check the endpoint had, was stored, and then threw inside the key
+    // agreement on the next notification raised - and would have done so on every notification
+    // after it, while the subscriber believed it was subscribed.
+    [Fact]
+    public void Rejects_a_key_that_is_the_right_length_but_not_on_the_curve()
+    {
+        var notOnCurve = new byte[65];
+        notOnCurve[0] = 0x04;
+        RandomNumberGenerator.Fill(notOnCurve.AsSpan(1));
+
+        Assert.False(WebPushEncryptor.IsValidSubscriberKey(notOnCurve));
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(66)]
+    [InlineData(0)]
+    public void Rejects_a_key_of_the_wrong_length(int length)
+    {
+        var key = new byte[length];
+        if (length > 0) key[0] = 0x04;
+
+        Assert.False(WebPushEncryptor.IsValidSubscriberKey(key));
+    }
+
+    // A compressed point is well-formed but not what the Push API produces, and the rest of this
+    // file assumes 65 uncompressed bytes.
+    [Fact]
+    public void Rejects_a_key_that_is_not_uncompressed()
+    {
+        var compressed = new byte[65];
+        compressed[0] = 0x02;
+
+        Assert.False(WebPushEncryptor.IsValidSubscriberKey(compressed));
+    }
+
+    [Fact]
+    public void Accepts_a_real_subscriber_key()
+    {
+        Assert.True(WebPushEncryptor.IsValidSubscriberKey(Base64Url.Decode(UaPublic)));
+    }
+
     // Every message must use a fresh ephemeral key and salt, or two notifications to the same
     // subscription would reuse a key/nonce pair - the one mistake AES-GCM does not forgive.
     [Fact]
