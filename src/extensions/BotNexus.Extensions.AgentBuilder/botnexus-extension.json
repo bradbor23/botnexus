@@ -1,0 +1,9 @@
+{
+  "id": "botnexus-agent-builder",
+  "name": "Agent Builder",
+  "description": "Serves the BotNexus Agent Builder web app at /agent-builder: persona-seeded generation of agent SOUL/IDENTITY/AGENTS/TOOLS files and config, with read-only clone from existing gateway agents.",
+  "version": "1.0.0",
+  "entryAssembly": "BotNexus.Extensions.AgentBuilder.dll",
+  "extensionTypes": ["endpoint-contributor"],
+  "enabled": true
+}
