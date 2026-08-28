@@ -3,6 +3,7 @@ using AngleSharp.Dom;
 using Bunit;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Components;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 
@@ -265,6 +266,40 @@ public sealed class NotificationCentreTests : IDisposable
 
         cut.Find(".notification-overlay").Click();
         Assert.Empty(cut.FindAll("[data-testid='notification-panel']"));
+    }
+
+    [Fact]
+    public void Escape_closes_the_panel()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        cut.Find("[data-testid='notification-bell']").Click();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-panel']").Count > 0);
+
+        cut.Find(".notification-overlay").KeyDown(Key.Escape);
+
+        Assert.Empty(cut.FindAll("[data-testid='notification-panel']"));
+    }
+
+    // The handler above is on the overlay, and a keydown handler only fires while its element
+    // holds focus. Opening the panel leaves focus on the BELL, so without this the Escape handler
+    // is unreachable and does nothing - which is exactly how it shipped the first time.
+    [Fact]
+    public void Opening_moves_focus_to_the_panel_so_escape_can_reach_it()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        var before = _ctx.JSInterop.Invocations.Count(i => i.Identifier.Contains("focus"));
+
+        cut.Find("[data-testid='notification-bell']").Click();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-panel']").Count > 0);
+
+        cut.WaitForState(() =>
+            _ctx.JSInterop.Invocations.Count(i => i.Identifier.Contains("focus")) > before);
     }
 
     // ── Desktop notifications ───────────────────────────────────────────────────────────────

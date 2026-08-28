@@ -39,6 +39,12 @@
       "blurb": "Cron, headless runs, exit codes and approval posture."
     },
     {
+      "id": "notifications",
+      "file": "notifications.md",
+      "title": "Notifications",
+      "blurb": "Being told when a run fails or an agent blocks, in the portal and on your desktop."
+    },
+    {
       "id": "channels",
       "file": "channels/signalr.md",
       "title": "Channels",

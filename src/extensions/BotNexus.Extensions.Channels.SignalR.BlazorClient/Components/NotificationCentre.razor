@@ -19,6 +19,7 @@
 {
 <div class="notification-centre" data-testid="notification-centre">
     <button class="banner-notifications-btn"
+            @ref="_bellRef"
             data-testid="notification-bell"
             title="@(_unread > 0 ? $"{_unread} unread notification(s)" : "Notifications")"
             aria-label="@(_unread > 0 ? $"Notifications, {_unread} unread" : "Notifications")"
@@ -38,7 +39,8 @@
    transparent: this is a glanceable readout, not a decision that should dim the app behind it. *@
 @if (_api is not null && _open)
 {
-    <div class="notification-overlay" @onclick="Close" @onkeydown="HandleKeyDown" tabindex="-1">
+    <div class="notification-overlay" @ref="_overlayRef"
+         @onclick="Close" @onkeydown="HandleKeyDown" tabindex="-1">
         <div class="notification-panel" role="dialog" aria-modal="true"
              aria-labelledby="notification-panel-title"
              data-testid="notification-panel" @onclick:stopPropagation="true">
@@ -137,6 +139,10 @@
     private DesktopNotifier? _notifier;
     private DesktopNotificationStatus? _desktop;
     private DotNetObjectReference<NotificationCentre>? _selfRef;
+    private ElementReference _overlayRef;
+    private ElementReference _bellRef;
+    private bool _focusOverlay;
+    private bool _restoreFocus;
     private IReadOnlyList<NotificationDto> _items = [];
     private int _unread;
     private bool _open;
@@ -181,6 +187,37 @@
             Nav.NavigateTo(link);
     });
 
+    // A keydown handler on a div only fires while that div holds focus, and clicking the bell
+    // leaves focus on the bell - so the overlay has to take it, or Escape does nothing. Focus goes
+    // back to the bell on close, which is what a keyboard user expects and what stops the page
+    // jumping to the top.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusOverlay && _open)
+        {
+            _focusOverlay = false;
+            await TryFocusAsync(_overlayRef);
+        }
+        else if (_restoreFocus && !_open)
+        {
+            _restoreFocus = false;
+            await TryFocusAsync(_bellRef);
+        }
+    }
+
+    private static async Task TryFocusAsync(ElementReference element)
+    {
+        try
+        {
+            await element.FocusAsync();
+        }
+        catch
+        {
+            // The element went away between render and focus, or JS is unavailable. Focus is a
+            // convenience here; losing it is not worth an exception out of the banner.
+        }
+    }
+
     public void Dispose()
     {
         if (_hub is not null)
@@ -224,7 +261,11 @@
         StateHasChanged();
     });
 
-    private void Close() => _open = false;
+    private void Close()
+    {
+        _open = false;
+        _restoreFocus = true;
+    }
 
     // Escape closes it like any other transient surface; the overlay carries the handler because it
     // is the element that holds focus while the panel is open.
@@ -239,7 +280,12 @@
         _open = !_open;
 
         if (!_open)
+        {
+            _restoreFocus = true;
             return;
+        }
+
+        _focusOverlay = true;
 
         _loading = true;
         StateHasChanged();
