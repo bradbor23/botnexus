@@ -15,11 +15,49 @@ namespace BotNexus.Gateway.Api.Controllers;
 /// </remarks>
 [ApiController]
 [Route("api/notifications")]
-public sealed class NotificationsController(INotificationStore store) : ControllerBase
+public sealed class NotificationsController(
+    INotificationStore store,
+    INotificationPublisher publisher) : ControllerBase
 {
     private const int MaxLimit = 500;
 
     private readonly INotificationStore _store = store;
+    private readonly INotificationPublisher _publisher = publisher;
+
+    /// <summary>
+    /// Raises a notification, so the whole delivery chain can be exercised on demand.
+    /// </summary>
+    /// <remarks>
+    /// Every other notification is raised by something going wrong, which makes the feature
+    /// awkward to verify: you would have to break something to find out whether being told works.
+    /// This goes through the ordinary publisher rather than writing to the store directly, so it
+    /// proves the real path end to end - stored, pushed over SignalR, counted in the badge, and
+    /// raised as a desktop alert if the browser is set up for one. A test that bypassed the
+    /// publisher would prove nothing about the parts that actually fail.
+    /// </remarks>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpPost("test")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    public async Task<IActionResult> RaiseTest(CancellationToken ct = default)
+    {
+        // The publisher assigns the id and timestamp, and does not hand the stored record back, so
+        // this reports that the notification was raised rather than echoing it. The client learns
+        // the rest the same way it learns about every other notification - over the push, or on
+        // its next read.
+        await _publisher.PublishAsync(
+            new Notification
+            {
+                Id = string.Empty,
+                Kind = NotificationKind.GatewayHealth,
+                Severity = NotificationSeverity.Info,
+                Title = "Test notification",
+                Body = "If you can see this, notifications are working. Dismiss it when you are done.",
+                CreatedAtUtc = default,
+            },
+            ct);
+
+        return Accepted();
+    }
 
     /// <summary>Lists notifications, newest first.</summary>
     /// <param name="includeRead">Include notifications already read. Defaults to true.</param>

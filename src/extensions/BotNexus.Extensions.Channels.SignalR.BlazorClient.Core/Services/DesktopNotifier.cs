@@ -17,6 +17,18 @@ public sealed class DesktopNotificationStatus
     /// <summary>The user's own opt-in for THIS portal, kept in the browser beside the permission.</summary>
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
 
+    /// <summary>
+    /// Whether the page is a secure context. Plain http to anything but localhost is not, and a
+    /// browser reports permission as denied there regardless of what the user does.
+    /// </summary>
+    [JsonPropertyName("secure")] public bool Secure { get; set; }
+
+    /// <summary>The origin serving the portal, so a diagnosis can name the address at fault.</summary>
+    [JsonPropertyName("origin")] public string? Origin { get; set; }
+
+    /// <summary>Coarse browser family - chrome, edge, firefox, safari or other.</summary>
+    [JsonPropertyName("browser")] public string? Browser { get; set; }
+
     /// <summary>Toasts will actually be raised: supported, permitted, and opted in.</summary>
     [JsonIgnore]
     public bool IsActive => Supported && Enabled
@@ -32,6 +44,18 @@ public sealed class DesktopNotificationStatus
     /// </summary>
     [JsonIgnore]
     public bool IsBlocked => Supported && string.Equals(Permission, "denied", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The permission is denied because the portal is not served over a secure connection, not
+    /// because anyone refused it.
+    /// </summary>
+    /// <remarks>
+    /// Worth telling apart from an ordinary denial, because the remedies are opposites: this one
+    /// cannot be fixed in browser settings at all, and sending someone there to try is worse than
+    /// saying nothing. It needs HTTPS, or reaching the gateway on localhost.
+    /// </remarks>
+    [JsonIgnore]
+    public bool NeedsSecureContext => Supported && !Secure;
 }
 
 /// <summary>

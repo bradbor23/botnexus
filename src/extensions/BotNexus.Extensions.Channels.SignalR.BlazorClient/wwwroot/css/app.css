@@ -7975,17 +7975,62 @@ h3.conversation-title.editable:hover {
     position: sticky;
     bottom: 0;
     display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 0.5rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
     padding: 0.45rem 0.6rem;
     background: var(--bg-surface);
     border-top: 1px solid var(--border);
 }
 
+.notification-panel-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.35rem;
+}
+
 .notification-panel-footer .t-caption {
     color: var(--text-muted);
-    text-align: right;
+}
+
+/* Guidance only appears while desktop alerts are not working, so it is allowed to take a
+   few lines - it is the difference between a dead end and something the reader can act on. */
+.notification-help {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.notification-help p {
+    margin: 0;
+}
+
+.notification-help ul {
+    margin: 0.3rem 0 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.notification-help code {
+    /* Commands must stay copyable: wrapping beats a horizontal scrollbar in a 24rem panel. */
+    overflow-wrap: anywhere;
+    font-size: 0.72rem;
+    padding: 0 0.15rem;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+}
+
+.notification-help summary {
+    cursor: pointer;
+    color: var(--accent);
+}
+
+.notification-help-error {
+    margin: 0;
+    color: var(--error);
 }
 
 /* Pressed state carries "on" on its own, so the label can stay a plain statement of

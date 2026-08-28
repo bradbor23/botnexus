@@ -34,11 +34,33 @@ window.botnexusDesktopNotifications = window.botnexusDesktopNotifications || {
         }
     },
 
+    // Which browser, so the "how do I unblock this" instructions name the right menu rather than
+    // describing a generic browser nobody is using. Deliberately coarse: getting the family right
+    // is what matters, and UA sniffing beyond that is a losing game. Order matters - Edge and
+    // Chrome both claim to be Chrome, and every browser on iOS claims to be Safari.
+    _browser: function () {
+        var ua = navigator.userAgent || '';
+
+        if (/Edg\//.test(ua)) return 'edge';
+        if (/Firefox\//.test(ua)) return 'firefox';
+        if (/Chrome\//.test(ua)) return 'chrome';
+        if (/Safari\//.test(ua)) return 'safari';
+
+        return 'other';
+    },
+
     status: function () {
         return {
             supported: this._supported(),
             permission: this._supported() ? window.Notification.permission : 'unsupported',
-            enabled: this._enabled()
+            enabled: this._enabled(),
+            // A page served over plain http to anything but localhost is not a secure context, and
+            // browsers report permission as 'denied' there no matter what the user does. Without
+            // this flag that denial is indistinguishable from a real one, and the portal ends up
+            // sending people to a browser setting that cannot fix it.
+            secure: window.isSecureContext === true,
+            origin: window.location.origin,
+            browser: this._browser()
         };
     },
 

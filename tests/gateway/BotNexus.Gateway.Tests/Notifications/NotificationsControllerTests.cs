@@ -42,7 +42,8 @@ public sealed class NotificationsControllerTests : IDisposable
 
     private INotificationStore Store() => new SqliteNotificationStore(DbPath, timeProvider: _time);
 
-    private NotificationsController Controller() => new(Store());
+    private NotificationsController Controller(INotificationPublisher? publisher = null) =>
+        new(Store(), publisher ?? new NotificationPublisher(Store()));
 
     private async Task<Notification> Seed(
         string title = "Run finished",
@@ -61,6 +62,50 @@ public sealed class NotificationsControllerTests : IDisposable
         ActionResult<IReadOnlyList<NotificationResponse>> result) =>
         Assert.IsAssignableFrom<IReadOnlyList<NotificationResponse>>(
             Assert.IsType<OkObjectResult>(result.Result).Value);
+
+    // Every other notification is raised by something failing, which makes the feature awkward to
+    // check: you would have to break something to learn whether being told works. The test
+    // endpoint goes through the ordinary publisher, so it exercises the real path rather than
+    // writing to the store behind its back - which would prove nothing about the parts that fail.
+    [Fact]
+    public async Task Raises_a_test_notification_through_the_publisher()
+    {
+        var spy = new SpyPublisher();
+
+        var result = await Controller(spy).RaiseTest();
+
+        Assert.IsType<AcceptedResult>(result);
+        var raised = Assert.Single(spy.Published);
+        Assert.Equal(NotificationSeverity.Info, raised.Severity);
+        Assert.Contains("Test", raised.Title, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // It has to land in the store like anything else, or "send a test" would prove the endpoint
+    // works while the thing it is testing does not.
+    [Fact]
+    public async Task A_test_notification_is_stored_and_counts_as_unread()
+    {
+        await Controller().RaiseTest();
+
+        var body = Body(await Controller().List());
+        var stored = Assert.Single(body);
+        Assert.Null(stored.ReadAtUtc);
+
+        var count = Assert.IsType<OkObjectResult>((await Controller().UnreadCount()).Result).Value;
+        Assert.Equal(1, Assert.IsType<UnreadCountResponse>(count).Count);
+    }
+
+    /// <summary>Records what was published without storing it.</summary>
+    private sealed class SpyPublisher : INotificationPublisher
+    {
+        public List<Notification> Published { get; } = [];
+
+        public Task PublishAsync(Notification notification, CancellationToken ct = default)
+        {
+            Published.Add(notification);
+            return Task.CompletedTask;
+        }
+    }
 
     [Fact]
     public async Task Lists_newest_first()

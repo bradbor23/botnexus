@@ -310,7 +310,13 @@ public sealed class NotificationCentreTests : IDisposable
     // never raises a toast the user did not opt into.
 
     /// <summary>Plans the status call, which is what the footer renders from.</summary>
-    private void WithDesktop(bool supported, string permission, bool enabled)
+    private void WithDesktop(
+        bool supported,
+        string permission,
+        bool enabled,
+        bool secure = true,
+        string? browser = "chrome",
+        string? origin = "https://gateway.example")
     {
         _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.status")
             .SetResult(new DesktopNotificationStatus
@@ -318,6 +324,9 @@ public sealed class NotificationCentreTests : IDisposable
                 Supported = supported,
                 Permission = permission,
                 Enabled = enabled,
+                Secure = secure,
+                Browser = browser,
+                Origin = origin,
             });
     }
 
@@ -363,7 +372,7 @@ public sealed class NotificationCentreTests : IDisposable
     public void Says_so_when_the_browser_has_blocked_desktop_alerts()
     {
         WithApi();
-        WithDesktop(supported: true, permission: "denied", enabled: false);
+        WithDesktop(supported: true, permission: "denied", enabled: false, secure: true);
         _handler.ListJson = "[]";
 
         var cut = Render();
@@ -396,7 +405,10 @@ public sealed class NotificationCentreTests : IDisposable
         WithApi();
         WithDesktop(supported: true, permission: "default", enabled: false);
         var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
-        request.SetResult(new DesktopNotificationStatus { Supported = true, Permission = "granted", Enabled = true });
+        request.SetResult(new DesktopNotificationStatus
+        {
+            Supported = true, Permission = "granted", Enabled = true, Secure = true,
+        });
         _handler.ListJson = "[]";
 
         var cut = Render();
@@ -416,7 +428,10 @@ public sealed class NotificationCentreTests : IDisposable
         WithDesktop(supported: true, permission: "granted", enabled: true);
         var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
         var setEnabled = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.setEnabled", _ => true);
-        setEnabled.SetResult(new DesktopNotificationStatus { Supported = true, Permission = "granted", Enabled = false });
+        setEnabled.SetResult(new DesktopNotificationStatus
+        {
+            Supported = true, Permission = "granted", Enabled = false, Secure = true,
+        });
         _handler.ListJson = "[]";
 
         var cut = Render();
@@ -481,12 +496,138 @@ public sealed class NotificationCentreTests : IDisposable
         Assert.Empty(show.Invocations);
     }
 
+    // ── Guidance ────────────────────────────────────────────────────────────────────────────
+
+    // The case that prompted all of this. A browser denies notifications outright on a plain-http
+    // origin that is not localhost, and NO browser setting overrides it - so reporting it as a
+    // site setting sends the reader somewhere that cannot help. It has to be told apart.
+    [Fact]
+    public void An_insecure_origin_is_diagnosed_as_such_not_as_a_browser_setting()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "denied", enabled: false,
+            secure: false, origin: "http://192.168.0.10:5005");
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        var help = cut.Find("[data-testid='desktop-alerts-insecure']").TextContent;
+        Assert.Contains("secure connection", help);
+        Assert.Contains("http://192.168.0.10:5005", help);
+
+        // The wrong diagnosis must NOT also be on screen.
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-blocked']"));
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-toggle']"));
+    }
+
+    [Theory]
+    [InlineData("chrome", "Site settings")]
+    [InlineData("edge", "Permissions for this site")]
+    [InlineData("firefox", "padlock")]
+    [InlineData("safari", "Safari")]
+    public void Unblocking_steps_name_the_menu_the_reader_actually_has(string browser, string expected)
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "denied", enabled: false, browser: browser);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Contains(
+            expected,
+            cut.Find("[data-testid='desktop-alerts-unblock-steps']").TextContent);
+    }
+
+    // An unrecognised browser still gets something actionable rather than nothing.
+    [Fact]
+    public void An_unknown_browser_still_gets_generic_steps()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "denied", enabled: false, browser: "other");
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Contains(
+            "site settings",
+            cut.Find("[data-testid='desktop-alerts-unblock-steps']").TextContent);
+    }
+
+    // THE thing the user asked for: help is for people who need it. Someone who already has
+    // desktop alerts working should not be told how to turn them on.
+    [Fact]
+    public void No_guidance_is_shown_once_desktop_alerts_are_working()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "granted", enabled: true);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-insecure']"));
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-blocked']"));
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-pitch']"));
+        Assert.Equal("Desktop alerts on", cut.Find("[data-testid='desktop-alerts-toggle']").TextContent.Trim());
+    }
+
+    // ── Test notification ───────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Sending_a_test_asks_the_gateway_to_raise_a_real_notification()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='notification-send-test']").Click();
+
+        cut.WaitForState(() => _handler.Calls.Contains("POST /api/notifications/test"));
+    }
+
+    // Offered even where a toast is impossible, because it still proves the store, the push and
+    // the badge - the parts a browser cannot break.
+    [Fact]
+    public void The_test_is_offered_even_when_desktop_alerts_cannot_work()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "denied", enabled: false, secure: false);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Single(cut.FindAll("[data-testid='notification-send-test']"));
+    }
+
+    [Fact]
+    public void A_refused_test_says_so_rather_than_failing_silently()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+        _handler.FailTest = true;
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='notification-send-test']").Click();
+
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-test-error']").Count == 1);
+    }
+
     /// <summary>Answers the notification endpoints and records what was called.</summary>
     private sealed class StubHandler : HttpMessageHandler
     {
         public string ListJson { get; set; } = "[]";
 
         public int UnreadCount { get; set; }
+
+        /// <summary>Makes the test-notification endpoint refuse, so the failure path is reachable.</summary>
+        public bool FailTest { get; set; }
 
         public List<string> Calls { get; } = [];
 
@@ -500,6 +641,12 @@ public sealed class NotificationCentreTests : IDisposable
             if (path.EndsWith("/unread-count", StringComparison.Ordinal))
             {
                 return Task.FromResult(Json("{\"count\":" + UnreadCount + "}"));
+            }
+
+            if (path.EndsWith("/test", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(
+                    FailTest ? HttpStatusCode.InternalServerError : HttpStatusCode.Accepted));
             }
 
             if (request.Method == HttpMethod.Get)

@@ -155,6 +155,24 @@ public sealed class NotificationsApiClient(HttpClient http)
     }
 
     /// <summary>
+    /// Asks the gateway to raise a test notification. Returns whether it accepted the request.
+    /// </summary>
+    /// <remarks>
+    /// Everything else here reads notifications; this is the one call that makes one happen. It
+    /// exists because every real notification is raised by a failure, so without it the only way
+    /// to find out whether being told works is to break something.
+    /// </remarks>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<bool> SendTestAsync(CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync("/api/notifications/test", content: null, ct);
+
+        // No Changed here: the notification comes back over the push like any other, and raising
+        // the event too would double-count the badge against a gateway that pushed it first.
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
     /// Announces a notification that arrived over SignalR, so the badge repaints without a fetch.
     /// </summary>
     public void NotifyRaised() => Changed?.Invoke();
