@@ -261,7 +261,9 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
     /// </summary>
     public static void MapExtensionEndpoints(WebApplication app)
     {
-        foreach (var contributor in app.Services.GetServices<IEndpointContributor>())
+        // Ordered, not registration order. OrderBy is stable, so contributors sharing an Order
+        // keep their previous relative sequence and only a contributor that asks to move moves.
+        foreach (var contributor in app.Services.GetServices<IEndpointContributor>().OrderBy(c => c.Order))
             contributor.MapEndpoints(app);
 
         foreach (var apiContributor in app.Services.GetServices<IApiContributor>())

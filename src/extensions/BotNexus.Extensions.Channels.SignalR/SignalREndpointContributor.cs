@@ -16,6 +16,16 @@ namespace BotNexus.Extensions.Channels.SignalR;
 /// </summary>
 public class SignalREndpointContributor : IEndpointContributor
 {
+    /// <inheritdoc />
+    /// <remarks>
+    /// The portal is the LAST-RESORT handler: its catch-all serves the SPA document for anything
+    /// nobody else claimed, so it must register after every other contributor's middleware or it
+    /// will swallow their routes. Declaring that here is what replaces the previous per-path
+    /// allowlist, which required editing this file for every new UI extension - something a
+    /// marketplace plugin cannot do.
+    /// </remarks>
+    public int Order => int.MaxValue;
+
     public void MapEndpoints(WebApplication app)
     {
         app.MapHub<GatewayHub>("/hub/gateway");
@@ -62,13 +72,25 @@ public class SignalREndpointContributor : IEndpointContributor
             }
             else
             {
-                // Desktop: let API/hub/health/swagger pass through
+                // Anything routing has already matched belongs to whoever registered it. Routing
+                // runs ahead of this middleware, so an endpoint-routed extension - a controller, a
+                // MapGet, a route group - is identifiable here without naming its path. This is
+                // what the hardcoded "/api/" entry was really compensating for.
+                if (context.GetEndpoint() is not null)
+                {
+                    await next();
+                    return;
+                }
+
+                // Paths served by MIDDLEWARE rather than by an endpoint still need naming, because
+                // there is nothing for routing to have matched. The list is limited to surfaces the
+                // gateway itself owns: a UI extension no longer belongs here, because Order =
+                // int.MaxValue means its middleware already ran and short-circuited before this.
                 if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase) ||
                     path.Equals("/health", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/mobile", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/agent-builder", StringComparison.OrdinalIgnoreCase))
+                    path.StartsWith("/mobile", StringComparison.OrdinalIgnoreCase))
                 {
                     await next();
                     return;
