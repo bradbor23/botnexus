@@ -67,6 +67,12 @@
       ]
     },
     {
+      "id": "plugins",
+      "file": "plugins.md",
+      "title": "Plugins & marketplace",
+      "blurb": "Installing plugins from a repository, and building one that carries skills or a UI."
+    },
+    {
       "id": "extensions",
       "file": "extensions.md",
       "title": "Extensions",

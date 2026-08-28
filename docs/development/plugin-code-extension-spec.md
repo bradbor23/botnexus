@@ -1,6 +1,6 @@
 # Spec: extending the plugin format to carry code/UI extensions
 
-**Status:** design, accepted for build · **Reference consumer:** the Agent Builder extension, a
+**Status:** items 1-3 delivered; item 4 outstanding · **Reference consumer:** the Agent Builder extension, a
 working `IEndpointContributor` serving a SPA at `/agent-builder` · **Supersedes:** the
 proposal draft of the same name.
 
@@ -249,8 +249,11 @@ is opt-in, declared in the manifest, and must be named explicitly in the install
 
 Also required:
 
-- **Explicit consent.** Installing a code plugin requires an operator confirmation distinct from
-  skills — "this plugin runs code in your gateway". Skills-only installs stay low-friction.
+- **Explicit consent.** DELIVERED ahead of the rest of item 4. Installing a code plugin requires an
+  operator confirmation distinct from skills — "this plugin runs code in your gateway" — refused
+  under its own `extension.consent` field so a caller can tell it from a broken plugin without
+  parsing prose. Skills-only installs stay low-friction. The ABI guard and post-auth placement
+  remain outstanding.
 - **Capability disclosure.** The install UI shows what the extension contributes —
   `extensionTypes`, served paths, nav entries, tools — derived from the manifest, before the
   operator commits.
@@ -261,12 +264,16 @@ Also required:
 
 ## 9. Build order
 
-1. **Carry and deploy a prebuilt extension** from a plugin — schema `extension` field, deploy
+Items 1-3 are built, deployed and verified end to end: Agent Builder now installs as a plugin,
+declares its own nav entry, claims its own path, and both of its former portal patches are deleted.
+Item 4 is the gate on opening this to third-party plugins.
+
+1. [done] **Carry and deploy a prebuilt extension** from a plugin — schema `extension` field, deploy
    step, provenance, staged update/uninstall (§4.2), restart to activate. Makes code shippable
    at all.
-2. **Endpoint-aware fallback + contributor ordering** (§5). Removes the passthrough patch.
-3. **Nav contribution API** (§6). Removes the `MainLayout` patch.
-4. **ABI guard (§7) and code-plugin consent + post-auth placement (§8).** Required before this
+2. [done] **Endpoint-aware fallback + contributor ordering** (§5). Removes the passthrough patch.
+3. [done] **Nav contribution API** (§6). Removes the `MainLayout` patch.
+4. [todo] **ABI guard (§7) and code-plugin consent + post-auth placement (§8).** Required before this
    is opened to third-party plugins.
 
 Agent Builder can ship as a marketplace plugin once 1–3 exist. Item 4 gates opening the
