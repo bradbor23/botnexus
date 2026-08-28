@@ -38,6 +38,50 @@ public sealed record ExtensionManifest
     /// Used to validate operator config and apply defaults at startup.
     /// </summary>
     public IReadOnlyList<ExtensionConfigFieldSchema> ConfigSchema { get; init; } = [];
+
+    /// <summary>
+    /// Left-nav entries this extension contributes to the portal. Empty for an extension with no
+    /// UI, which is most of them.
+    /// </summary>
+    /// <remarks>
+    /// Declared on the EXTENSION manifest rather than a plugin manifest so that an extension built
+    /// from source gets contributed nav on the same terms as one delivered by a marketplace
+    /// plugin. Nav is a property of the thing that serves the path, not of the thing that
+    /// delivered it.
+    /// </remarks>
+    public IReadOnlyList<ExtensionNavEntry> Nav { get; init; } = [];
+}
+/// <summary>
+/// One left-nav entry contributed by an extension.
+/// </summary>
+public sealed record ExtensionNavEntry
+{
+    /// <summary>Stable key for ordering and de-duplication, e.g. <c>agent-builder</c>.</summary>
+    public string Id { get; init; } = string.Empty;
+
+    /// <summary>Text shown in the sidebar.</summary>
+    public string Label { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Path the entry navigates to. Must be a site-relative path beginning with <c>/</c>; anything
+    /// else is dropped rather than rendered.
+    /// </summary>
+    public string Path { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Name of a portal icon. Unknown names fall back to a default rather than failing, and
+    /// arbitrary markup is never accepted - an extension cannot inject SVG into the portal DOM.
+    /// </summary>
+    public string? Icon { get; init; }
+
+    /// <summary>Sort position among nav entries; lower sorts earlier.</summary>
+    public int Order { get; init; }
+
+    /// <summary>
+    /// Whether the path is served outside the Blazor router and therefore needs a full page load
+    /// rather than client-side routing.
+    /// </summary>
+    public bool External { get; init; }
 }
 /// <summary>
 /// Schema declaration for a single extension configuration field.
@@ -148,4 +192,7 @@ public sealed record LoadedExtension
     /// Configuration field schema declared by this extension in the manifest.
     /// </summary>
     public IReadOnlyList<ExtensionConfigFieldSchema> ConfigSchema { get; init; } = [];
+
+    /// <summary>Left-nav entries this extension contributes to the portal.</summary>
+    public IReadOnlyList<ExtensionNavEntry> Nav { get; init; } = [];
 }

@@ -192,6 +192,7 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
                 LoadedAtUtc = DateTimeOffset.UtcNow,
                 RegisteredServices = registeredServiceNames,
                 Enabled = extension.Manifest.Enabled,
+                Nav = extension.Manifest.Nav,
                 ConfigSchema = extension.Manifest.ConfigSchema
             };
 
