@@ -67,7 +67,8 @@ public class SignalREndpointContributor : IEndpointContributor
                     path.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase) ||
                     path.Equals("/health", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/mobile", StringComparison.OrdinalIgnoreCase))
+                    path.StartsWith("/mobile", StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith("/agent-builder", StringComparison.OrdinalIgnoreCase))
                 {
                     await next();
                     return;

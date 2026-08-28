@@ -246,6 +246,7 @@
         public const string Configuration = "configuration";
         public const string Skills = "skills";
         public const string Agents = "agents";
+        public const string AgentBuilder = "agent-builder";
         public const string Cron = "cron";
         public const string Plugins = "plugins";
         public const string Guide = "guide";
@@ -254,7 +255,7 @@
         // for existing users - the resolver below walks this list and re-inserts anything missing
         // from a saved order next to its neighbours, so a new entry appears without a migration.
         public static readonly IReadOnlyList<string> DefaultOrder =
-            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, Cron, Plugins, Guide];
+            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, AgentBuilder, Cron, Plugins, Guide];
     }
 
     /// <summary>
@@ -392,6 +393,7 @@
         NavOrderKeys.Cron => RenderCronNav(),
         NavOrderKeys.Plugins => RenderPluginsNav(),
         NavOrderKeys.Guide => RenderGuideNav(),
+        NavOrderKeys.AgentBuilder => RenderAgentBuilderNav(),
         _ => _ => { }
     };
 
@@ -741,6 +743,27 @@
             </div>
         }
     };
+
+    // Agent Builder is served same-origin by the botnexus-agent-builder extension at
+    // /agent-builder, which is NOT a Blazor route, so this forces a full navigation
+    // (forceLoad) rather than letting the client router intercept it into a 404.
+    private RenderFragment RenderAgentBuilderNav() => __builder =>
+    {
+        <a href="/agent-builder"
+           class="sidebar-nav-item"
+           data-testid="nav-agent-builder"
+           @onclick:preventDefault="true"
+           @onclick="NavigateToAgentBuilder">
+            <Icon Name="tools" /><span class="sidebar-nav-label">Agent Builder</span>
+        </a>
+    };
+
+    private void NavigateToAgentBuilder()
+    {
+        if (_isMobile)
+            _sidebarOpen = false;
+        Nav.NavigateTo("/agent-builder", forceLoad: true);
+    }
 
     private RenderFragment RenderCronNav() => __builder =>
     {
