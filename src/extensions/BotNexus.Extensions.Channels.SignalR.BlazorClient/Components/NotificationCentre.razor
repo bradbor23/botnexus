@@ -98,6 +98,35 @@
                     }
                 </ul>
             }
+
+            @* The opt-in lives in the panel rather than in portal settings because this is where
+               someone is when they realise they want to be told without watching. Absent entirely
+               on a browser with no Notification API, rather than shown broken. *@
+            @if (_desktop is { Supported: true })
+            {
+                <footer class="notification-panel-footer">
+                    @if (_desktop.IsBlocked)
+                    {
+                        @* A denial cannot be re-prompted from script, so this has to send the user
+                           to their browser settings instead of offering a button that cannot work. *@
+                        <span class="t-caption" data-testid="desktop-alerts-blocked">
+                            Desktop alerts are blocked for this site in your browser settings.
+                        </span>
+                    }
+                    else
+                    {
+                        <button class="toolbar-btn"
+                                data-testid="desktop-alerts-toggle"
+                                aria-pressed="@(_desktop.IsActive ? "true" : "false")"
+                                title="@(_desktop.IsActive
+                                    ? "Stop showing notifications outside the browser"
+                                    : "Show notifications outside the browser, even when this tab is in the background")"
+                                @onclick="ToggleDesktopAsync">
+                            @(_desktop.IsActive ? "Desktop alerts on" : "Enable desktop alerts")
+                        </button>
+                    }
+                </footer>
+            }
         </div>
     </div>
 }
@@ -105,6 +134,9 @@
 @code {
     private NotificationsApiClient? _api;
     private GatewayHubConnection? _hub;
+    private DesktopNotifier? _notifier;
+    private DesktopNotificationStatus? _desktop;
+    private DotNetObjectReference<NotificationCentre>? _selfRef;
     private IReadOnlyList<NotificationDto> _items = [];
     private int _unread;
     private bool _open;
@@ -128,7 +160,26 @@
         // The badge is correct before the panel is ever opened, and covers everything raised while
         // this browser was closed or on another device.
         _unread = await _api.UnreadCountAsync();
+
+        _notifier = Services.GetService(typeof(DesktopNotifier)) as DesktopNotifier;
+
+        if (_notifier is not null)
+        {
+            // Handing over the reference is what lets a clicked toast route inside the running app
+            // rather than reboot the WASM bundle.
+            _selfRef = DotNetObjectReference.Create(this);
+            await _notifier.RegisterAsync(_selfRef);
+            _desktop = await _notifier.GetStatusAsync();
+        }
     }
+
+    /// <summary>Follows a clicked desktop toast, from JS, without reloading the app.</summary>
+    [JSInvokable]
+    public Task OpenFromDesktopNotification(string link) => InvokeAsync(() =>
+    {
+        if (!string.IsNullOrWhiteSpace(link))
+            Nav.NavigateTo(link);
+    });
 
     public void Dispose()
     {
@@ -137,6 +188,13 @@
 
         if (_api is not null)
             _api.Changed -= HandleChanged;
+
+        // Fire and forget: Dispose cannot await, and a page that is going away has nothing to gain
+        // from the result. The reference is what actually has to be released.
+        if (_notifier is not null)
+            _ = _notifier.UnregisterAsync();
+
+        _selfRef?.Dispose();
     }
 
     // A push updates the badge without a round trip. The list itself is only refreshed when the
@@ -150,7 +208,13 @@
             _items = [payload.ToDto(), .. _items];
         }
 
-        await Task.CompletedTask;
+        // The toast is raised from the push, not from the list: this is the one moment the portal
+        // knows something happened NOW. The JS side decides whether to actually show it - it
+        // suppresses a toast when the portal is in front of the user, because the badge that just
+        // moved has already said it.
+        if (_desktop is { IsActive: true } && _notifier is not null)
+            await _notifier.ShowAsync(payload.Id, payload.Title, payload.Body, payload.Link);
+
         StateHasChanged();
     });
 
@@ -183,6 +247,26 @@
         _items = await _api!.ListAsync(includeRead: true, limit: 50);
         _unread = await _api!.UnreadCountAsync();
         _loading = false;
+
+        // Permission can be revoked in browser settings behind the portal's back, so the state is
+        // re-read on open rather than trusted from initialisation.
+        if (_notifier is not null)
+            _desktop = await _notifier.GetStatusAsync();
+    }
+
+    // Enabling has two distinct paths: an unanswered permission needs the browser prompt, which
+    // only a user gesture may raise - this click is that gesture. An already-granted permission
+    // just needs the opt-in flipped, with no prompt at all.
+    private async Task ToggleDesktopAsync()
+    {
+        if (_notifier is null)
+            return;
+
+        _desktop = _desktop is { IsActive: true }
+            ? await _notifier.SetEnabledAsync(false)
+            : _desktop is { CanAsk: true }
+                ? await _notifier.RequestAsync()
+                : await _notifier.SetEnabledAsync(true);
     }
 
     // Opening a notification is the act of having seen it, so it is marked read here rather than

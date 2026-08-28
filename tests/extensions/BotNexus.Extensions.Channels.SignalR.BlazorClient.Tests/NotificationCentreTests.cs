@@ -1,8 +1,10 @@
 using System.Net;
+using AngleSharp.Dom;
 using Bunit;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Components;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
 
 namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
 
@@ -25,6 +27,11 @@ public sealed class NotificationCentreTests : IDisposable
     {
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
         _ctx.Services.AddSingleton(new GatewayHubConnection());
+
+        // Registered exactly as production does. Left unplanned, the JS calls return null under
+        // Loose interop, which is what an absent script looks like - so the default here is a
+        // browser that cannot show desktop notifications at all.
+        _ctx.Services.AddSingleton(sp => new DesktopNotifier(sp.GetRequiredService<IJSRuntime>()));
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -258,6 +265,185 @@ public sealed class NotificationCentreTests : IDisposable
 
         cut.Find(".notification-overlay").Click();
         Assert.Empty(cut.FindAll("[data-testid='notification-panel']"));
+    }
+
+    // ── Desktop notifications ───────────────────────────────────────────────────────────────
+    //
+    // These stay honest about a browser API that is absent on some clients, permission-gated on
+    // all of them, and a dead end once denied. The JS itself is not under test here; what is
+    // under test is that the portal asks the browser the right question at the right moment and
+    // never raises a toast the user did not opt into.
+
+    /// <summary>Plans the status call, which is what the footer renders from.</summary>
+    private void WithDesktop(bool supported, string permission, bool enabled)
+    {
+        _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.status")
+            .SetResult(new DesktopNotificationStatus
+            {
+                Supported = supported,
+                Permission = permission,
+                Enabled = enabled,
+            });
+    }
+
+    private IElement OpenPanel(IRenderedComponent<NotificationCentre> cut)
+    {
+        cut.Find("[data-testid='notification-bell']").Click();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-panel']").Count > 0);
+        return cut.Find("[data-testid='notification-panel']");
+    }
+
+    // A browser with no Notification API gets no broken switch: the whole control is absent.
+    [Fact]
+    public void Desktop_alerts_are_not_offered_when_the_browser_cannot_show_them()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-toggle']"));
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-blocked']"));
+    }
+
+    [Fact]
+    public void Offers_to_enable_desktop_alerts_before_permission_is_asked_for()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "default", enabled: false);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Equal(
+            "Enable desktop alerts",
+            cut.Find("[data-testid='desktop-alerts-toggle']").TextContent.Trim());
+    }
+
+    // A denial can never be re-prompted from script, so offering a button would be a lie. The
+    // user has to be told where the switch actually is.
+    [Fact]
+    public void Says_so_when_the_browser_has_blocked_desktop_alerts()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "denied", enabled: false);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-toggle']"));
+        Assert.Contains("blocked", cut.Find("[data-testid='desktop-alerts-blocked']").TextContent);
+    }
+
+    [Fact]
+    public void Reports_desktop_alerts_as_on_once_permitted_and_opted_in()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "granted", enabled: true);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        var toggle = cut.Find("[data-testid='desktop-alerts-toggle']");
+        Assert.Equal("Desktop alerts on", toggle.TextContent.Trim());
+        Assert.Equal("true", toggle.GetAttribute("aria-pressed"));
+    }
+
+    // The click IS the user gesture the browser requires; a prompt raised any other way is
+    // ignored by Chrome and refused by Safari.
+    [Fact]
+    public void Enabling_prompts_the_browser_for_permission()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "default", enabled: false);
+        var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
+        request.SetResult(new DesktopNotificationStatus { Supported = true, Permission = "granted", Enabled = true });
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='desktop-alerts-toggle']").Click();
+
+        Assert.Single(request.Invocations);
+        cut.WaitForState(() =>
+            cut.Find("[data-testid='desktop-alerts-toggle']").TextContent.Trim() == "Desktop alerts on");
+    }
+
+    // Turning them off is not a permission question, so it must not go anywhere near the prompt.
+    [Fact]
+    public void Turning_desktop_alerts_off_does_not_touch_the_permission()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "granted", enabled: true);
+        var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
+        var setEnabled = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.setEnabled", _ => true);
+        setEnabled.SetResult(new DesktopNotificationStatus { Supported = true, Permission = "granted", Enabled = false });
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='desktop-alerts-toggle']").Click();
+
+        Assert.Empty(request.Invocations);
+        Assert.Single(setEnabled.Invocations);
+        Assert.Equal(false, setEnabled.Invocations.Single().Arguments[0]);
+    }
+
+    // The toast is raised from the PUSH, which is the one moment the portal knows something
+    // happened now. Whether it is actually shown is the JS side's call - it suppresses one when
+    // the portal is already in front of the user - but the portal has to hand it over.
+    [Fact]
+    public void A_push_hands_the_browser_a_toast_when_desktop_alerts_are_on()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "granted", enabled: true);
+        var show = _ctx.JSInterop.Setup<string>("botnexusDesktopNotifications.show", _ => true);
+        show.SetResult("shown");
+
+        var cut = Render();
+        cut.WaitForState(() => show is not null);
+
+        _ctx.Services.GetRequiredService<GatewayHubConnection>().RaiseNotificationForTest(new NotificationRaisedPayload
+        {
+            Id = "n1",
+            Title = "Agent run failed",
+            Body = "assistant stopped",
+            Link = "/conversations/c1",
+        });
+
+        cut.WaitForState(() => show.Invocations.Count == 1);
+
+        var args = show.Invocations.Single().Arguments;
+        Assert.Equal("n1", args[0]);
+        Assert.Equal("Agent run failed", args[1]);
+        Assert.Equal("assistant stopped", args[2]);
+        Assert.Equal("/conversations/c1", args[3]);
+    }
+
+    // THE consent guard: a push must not reach the OS for someone who never opted in.
+    [Fact]
+    public void A_push_raises_no_toast_when_desktop_alerts_are_off()
+    {
+        WithApi();
+        WithDesktop(supported: true, permission: "granted", enabled: false);
+        var show = _ctx.JSInterop.Setup<string>("botnexusDesktopNotifications.show", _ => true);
+        show.SetResult("inactive");
+
+        var cut = Render();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-bell']").Count == 1);
+
+        _ctx.Services.GetRequiredService<GatewayHubConnection>().RaiseNotificationForTest(new NotificationRaisedPayload
+        {
+            Id = "n1",
+            Title = "Agent run failed",
+        });
+
+        cut.WaitForState(() => cut.Find("[data-testid='notification-badge']").TextContent.Trim() == "1");
+        Assert.Empty(show.Invocations);
     }
 
     /// <summary>Answers the notification endpoints and records what was called.</summary>

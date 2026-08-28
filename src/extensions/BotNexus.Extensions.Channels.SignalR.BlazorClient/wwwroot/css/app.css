@@ -7968,3 +7968,29 @@ h3.conversation-title.editable:hover {
     flex: 0 0 auto;
     line-height: 1;
 }
+
+/* Sticky to the bottom of the panel: the desktop-alerts opt-in must stay reachable
+   without scrolling past a long list to find it. */
+.notification-panel-footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+}
+
+.notification-panel-footer .t-caption {
+    color: var(--text-muted);
+    text-align: right;
+}
+
+/* Pressed state carries "on" on its own, so the label can stay a plain statement of
+   fact rather than shouting the action back at the user. */
+.notification-panel-footer .toolbar-btn[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}

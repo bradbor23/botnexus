@@ -40,6 +40,7 @@ builder.Services.AddScoped<ToolsApiClient>();
 builder.Services.AddScoped<PluginsApiClient>();
 builder.Services.AddScoped<NavOrderApiClient>();
 builder.Services.AddScoped<NotificationsApiClient>();
+builder.Services.AddScoped<DesktopNotifier>();
 builder.Services.AddScoped<IPortalPreferencesService, PortalPreferencesService>();
 
 await builder.Build().RunAsync();

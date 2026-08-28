@@ -108,6 +108,14 @@ public sealed class GatewayHubConnection : IAsyncDisposable
     /// </summary>
     internal void RaiseOnDisconnectedForTest() => OnDisconnected?.Invoke();
 
+    /// <summary>
+    /// Test seam: raises <see cref="OnNotificationRaised"/> without a live transport, so what the
+    /// portal does with a push - badge, list, desktop toast - can be asserted without a gateway
+    /// pushing one. Internal -- not part of the client surface.
+    /// </summary>
+    internal void RaiseNotificationForTest(NotificationRaisedPayload payload) =>
+        OnNotificationRaised?.Invoke(payload);
+
     // ── State ───────────────────────────────────────────────────────────
 
     /// <summary>Whether the hub connection is currently in the <c>Connected</c> state.</summary>
