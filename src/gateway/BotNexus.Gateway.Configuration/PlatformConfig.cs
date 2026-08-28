@@ -932,53 +932,111 @@ public sealed class LocationConfig
     /// <summary>Location type: filesystem, api, mcp-server, database, remote-node.</summary>
     [Display(
         Name = "Type",
-        Description = "Location type: filesystem, api, mcp-server, database, remote-node.",
+        Description = "What kind of resource this is: filesystem, api, mcp-server, database or remote-node. Determines which of the fields below are required.",
         GroupName = "Location",
-        Order = 4)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 4)]
+        Order = 0)]
+    [ConfigField(Widget = ConfigFieldWidget.Select, Group = "location", Order = 0)]
     public string Type { get; set; } = "filesystem";
 
     /// <summary>Path for filesystem locations.</summary>
     [Display(
         Name = "Path",
-        Description = "Path for filesystem locations.",
+        Description = "Filesystem path. Required for filesystem locations. A leading ~ expands to the user's home directory.",
         GroupName = "Location",
-        Order = 5)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 5)]
+        Order = 1)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 1)]
     public string? Path { get; set; }
 
     /// <summary>Endpoint URL for api/mcp-server/remote-node locations.</summary>
     [Display(
         Name = "Endpoint",
-        Description = "Endpoint URL for api/mcp-server/remote-node locations.",
+        Description = "Absolute http or https URL. Required for api, mcp-server and remote-node locations.",
         GroupName = "Location",
-        Order = 6)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 6)]
+        Order = 2)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 2)]
     public string? Endpoint { get; set; }
 
     /// <summary>Connection string for database locations.</summary>
     [Display(
         Name = "Connection string",
-        Description = "Connection string for this location's backing store. Sensitive: contains credentials and is stored and shown masked.")]
+        Description = "Database connection string. Required for database locations. Held in full in config.json, so prefer credentialRef where the target supports it.",
+        GroupName = "Location",
+        Order = 3)]
     [ConfigField(Widget = ConfigFieldWidget.Secret, Group = "location", Order = 3, Secret = true)]
     public string? ConnectionString { get; set; }
+
+    /// <summary>Account name to authenticate as. Not a secret.</summary>
+    [Display(
+        Name = "Username",
+        Description = "Account to authenticate as, for example automation@pve. Stored in the clear - it is an identity, not a credential.",
+        GroupName = "Location",
+        Order = 4)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 4)]
+    public string? Username { get; set; }
+
+    /// <summary>
+    /// Reference to the credential for this location, as <c>scheme:identifier</c> — for example
+    /// <c>env:PROXMOX_TOKEN</c> or <c>file:~/.botnexus/secrets/proxmox</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately <b>not</b> marked <c>Secret</c>, and rendered as ordinary text. It holds a
+    /// pointer, never a credential: a value with no scheme fails validation precisely so a pasted
+    /// password cannot end up here. Masking it would hide the one part an operator needs to read
+    /// to fix a mis-typed reference, while protecting nothing.
+    /// </para>
+    /// <para>
+    /// The credential itself is resolved at call time by <c>ISecretResolver</c> and is never held
+    /// in configuration, never echoed by the API, and never placed in an agent's context.
+    /// </para>
+    /// </remarks>
+    [Display(
+        Name = "Credential reference",
+        Description = "Where to find this location's credential, as scheme:identifier - for example env:PROXMOX_TOKEN or file:~/.botnexus/secrets/proxmox. This field holds a reference, never the credential itself.",
+        GroupName = "Location",
+        Order = 5)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 5)]
+    public string? CredentialRef { get; set; }
+
+    /// <summary>Whether to verify the endpoint's TLS certificate. Defaults to true.</summary>
+    /// <remarks>
+    /// Defaults to verifying. A homelab target with a self-signed certificate is the usual reason
+    /// to turn this off, and making that an explicit, visible setting is better than the
+    /// alternative everyone reaches for otherwise, which is disabling verification globally.
+    /// </remarks>
+    [Display(
+        Name = "Verify TLS",
+        Description = "Verify the endpoint's TLS certificate. Turn off only for a target using a self-signed certificate, and only for that target.",
+        GroupName = "Location",
+        Order = 6)]
+    [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "location", Order = 6)]
+    public bool VerifyTls { get; set; } = true;
 
     /// <summary>Human-readable description.</summary>
     [Display(
         Name = "Description",
-        Description = "Human-readable description.",
+        Description = "What this location is, in a few words. Shown wherever the location is listed.",
         GroupName = "Location",
         Order = 7)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 7)]
     public string? Description { get; set; }
 
-    /// <summary>Extensible properties.</summary>
+    /// <summary>Free-form labels for grouping and filtering locations.</summary>
     [Display(
-        Name = "Properties",
-        Description = "Extensible properties.",
+        Name = "Tags",
+        Description = "Free-form labels for grouping and filtering, for example homelab or hypervisor.",
         GroupName = "Location",
         Order = 8)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 8)]
+    public List<string>? Tags { get; set; }
+
+    /// <summary>Extensible properties.</summary>
+    [Display(
+        Name = "Properties",
+        Description = "Extra key/value settings a consumer of this location understands, for example a Proxmox node name.",
+        GroupName = "Location",
+        Order = 9)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 9)]
     public Dictionary<string, string>? Properties { get; set; }
 }
 

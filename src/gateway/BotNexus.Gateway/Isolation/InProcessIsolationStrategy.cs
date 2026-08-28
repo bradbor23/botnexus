@@ -681,6 +681,8 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
             new ToolProviders.ListAgentsToolProvider(
                 _serviceProvider.GetService<IAgentRegistry>(),
                 _serviceProvider.GetService<IOptions<AgentExchangeOptions>>()),
+            new ToolProviders.ListLocationsToolProvider(
+                _serviceProvider.GetService<IOptionsMonitor<PlatformConfig>>()),
             new ToolProviders.AgentManagementToolProvider(
                 _serviceProvider.GetService<IAgentRegistry>(),
                 _serviceProvider.GetService<IAgentConfigurationWriter>(),

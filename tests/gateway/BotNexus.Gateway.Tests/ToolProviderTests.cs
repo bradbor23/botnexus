@@ -219,5 +219,70 @@ public class ToolProviderTests
             .ShouldBeFalse();
     }
 
-}
+    // ── list_locations: standard allowlist semantics ─────────────────────────────────
 
+    /// <summary>
+    /// Available by default, like every other tool. An earlier revision made this one opt-in, but a
+    /// non-empty toolIds restricts to exactly that list - including the workspace tools - so the
+    /// only way to grant it also stripped read, write, edit and shell from the agent. See the
+    /// provider's remarks.
+    /// </summary>
+    [Fact]
+    public void ListLocationsToolProvider_NoToolIdsConfigured_IsIncluded()
+    {
+        var provider = new ListLocationsToolProvider(PlatformConfigMonitor());
+
+        provider.ShouldInclude(Context(toolIds: [])).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// The control for an agent that should not see the inventory: name the tools it may use, and
+    /// leave this one out.
+    /// </summary>
+    [Fact]
+    public void ListLocationsToolProvider_RestrictedToOtherTools_IsExcluded()
+    {
+        var provider = new ListLocationsToolProvider(PlatformConfigMonitor());
+
+        provider.ShouldInclude(Context(toolIds: ["read", "ls"])).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ListLocationsToolProvider_ExplicitlyNamed_IsIncluded()
+    {
+        var provider = new ListLocationsToolProvider(PlatformConfigMonitor());
+
+        provider.ShouldInclude(Context(toolIds: ["list_locations"])).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ListLocationsToolProvider_NamingIsCaseInsensitive()
+    {
+        var provider = new ListLocationsToolProvider(PlatformConfigMonitor());
+
+        provider.ShouldInclude(Context(toolIds: ["LIST_LOCATIONS"])).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// Without configuration there is nothing to list, and the tool would only be able to report an
+    /// empty world - so it is not offered at all.
+    /// </summary>
+    [Fact]
+    public void ListLocationsToolProvider_WithoutConfiguration_IsExcluded()
+    {
+        var provider = new ListLocationsToolProvider(platformConfig: null);
+
+        provider.ShouldInclude(Context(toolIds: [])).ShouldBeFalse();
+        provider.ShouldInclude(Context(toolIds: ["list_locations"])).ShouldBeFalse();
+    }
+
+    private static IOptionsMonitor<PlatformConfig> PlatformConfigMonitor()
+        => new StaticPlatformConfigMonitor(new PlatformConfig());
+
+    private sealed class StaticPlatformConfigMonitor(PlatformConfig value) : IOptionsMonitor<PlatformConfig>
+    {
+        public PlatformConfig CurrentValue => value;
+        public PlatformConfig Get(string? name) => value;
+        public IDisposable? OnChange(Action<PlatformConfig, string?> listener) => null;
+    }
+}

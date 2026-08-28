@@ -137,18 +137,24 @@
           "description": "Agent ID to route to when an incoming message does not specify one."
         },
         "agentsDirectory": {
+          "title": "Agents directory",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Directory holding per-agent workspaces and configuration. Relative paths resolve against the BotNexus home directory."
         },
         "sessionsDirectory": {
+          "title": "Sessions directory",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Directory holding session transcripts and the session store database."
         },
         "sessionStore": {
+          "title": "Session store",
+          "description": "Backend used to persist sessions and conversation history.",
           "oneOf": [
             {
               "type": "null"
@@ -168,6 +174,8 @@
           "format": "int32"
         },
         "subAgents": {
+          "title": "Sub-agents",
+          "description": "Limits on sub-agent spawning, including per-parent turn and timeout budgets.",
           "oneOf": [
             {
               "type": "null"
@@ -178,6 +186,8 @@
           ]
         },
         "compaction": {
+          "title": "Compaction",
+          "description": "Controls when a long session is summarised to stay within the model context window.",
           "oneOf": [
             {
               "type": "null"
@@ -188,6 +198,8 @@
           ]
         },
         "toolResultPersistence": {
+          "title": "Tool result persistence",
+          "description": "Write-time cap on the size of individual tool results persisted to session history.",
           "oneOf": [
             {
               "type": "null"
@@ -218,6 +230,8 @@
           ]
         },
         "claimAudit": {
+          "title": "Claim audit",
+          "description": "Post-turn auditor that checks an agent's stated outcomes against the tool calls it actually made.",
           "oneOf": [
             {
               "type": "null"
@@ -240,6 +254,8 @@
           ]
         },
         "cors": {
+          "title": "CORS",
+          "description": "Cross-origin request rules for browser-based clients reaching the gateway API.",
           "oneOf": [
             {
               "type": "null"
@@ -250,6 +266,8 @@
           ]
         },
         "rateLimit": {
+          "title": "Rate limiting",
+          "description": "Per-client request rate limits applied to gateway API calls.",
           "oneOf": [
             {
               "type": "null"
@@ -260,6 +278,8 @@
           ]
         },
         "signalR": {
+          "title": "SignalR transport",
+          "description": "Hub transport limits: maximum frame size, parallel invocations, and stream buffer capacity.",
           "oneOf": [
             {
               "type": "null"
@@ -288,15 +308,19 @@
           "description": "Minimum log level override. One of Trace, Debug, Information, Warning, Error, Critical."
         },
         "apiKeys": {
+          "title": "API keys",
           "type": [
             "null",
             "object"
           ],
+          "description": "Multi-tenant API keys keyed by key ID. Each entry authorises a caller and scopes what it may reach.",
           "additionalProperties": {
             "$ref": "#/definitions/ApiKeyConfig"
           }
         },
         "extensions": {
+          "title": "Extensions",
+          "description": "Dynamic extension loading: whether extensions load, from where, and their world-level defaults.",
           "oneOf": [
             {
               "type": "null"
@@ -307,6 +331,8 @@
           ]
         },
         "world": {
+          "title": "World identity",
+          "description": "Name and identity of this world as shown by gateway clients and used in cross-world federation.",
           "oneOf": [
             {
               "type": "null"
@@ -317,24 +343,30 @@
           ]
         },
         "locations": {
+          "title": "Locations",
           "type": [
             "null",
             "object"
           ],
+          "description": "Named locations registry used for resource management and path resolution.",
           "additionalProperties": {
             "$ref": "#/definitions/LocationConfig"
           }
         },
         "crossWorldPermissions": {
+          "title": "Cross-world permissions",
           "type": [
             "array",
             "null"
           ],
+          "description": "Explicit grants controlling which remote worlds may communicate with this one.",
           "items": {
             "$ref": "#/definitions/CrossWorldPermissionConfig"
           }
         },
         "crossWorld": {
+          "title": "Cross-world federation",
+          "description": "Gateway-to-gateway federation settings enabling communication between worlds.",
           "oneOf": [
             {
               "type": "null"
@@ -345,6 +377,8 @@
           ]
         },
         "fileAccess": {
+          "title": "File access policy",
+          "description": "Default read, write and deny path rules applied to every agent unless the agent overrides them.",
           "oneOf": [
             {
               "type": "null"
@@ -355,21 +389,27 @@
           ]
         },
         "shellPreference": {
+          "title": "Shell preference",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Preferred shell on Windows: auto (bash when available, PowerShell otherwise), pwsh, or bash. Ignored on non-Windows platforms."
         },
         "shellCommand": {
+          "title": "Shell command",
           "type": [
             "array",
             "null"
           ],
+          "description": "Explicit shell argv array. Element 0 is the executable; the command string is appended last. Overrides Shell preference entirely when set.",
           "items": {
             "type": "string"
           }
         },
         "autoUpdate": {
+          "title": "Auto-update",
+          "description": "Settings for the gateway updating itself via the BotNexus CLI.",
           "oneOf": [
             {
               "type": "null"
@@ -380,6 +420,8 @@
           ]
         },
         "auxiliary": {
+          "title": "Auxiliary model",
+          "description": "Cheap, fast model used for background gateway tasks such as conversation title generation.",
           "oneOf": [
             {
               "type": "null"
@@ -404,6 +446,8 @@
           "default": false
         },
         "dateTimeInjection": {
+          "title": "Datetime injection",
+          "description": "World default for prepending the current datetime to user messages. Per-agent settings take precedence.",
           "oneOf": [
             {
               "type": "null"
@@ -414,10 +458,12 @@
           ]
         },
         "satellites": {
+          "title": "Satellites",
           "type": [
             "null",
             "object"
           ],
+          "description": "Registered satellite nodes keyed by satellite ID. Satellites connect for notifications, canvas rendering and optional remote execution.",
           "additionalProperties": {
             "$ref": "#/definitions/SatelliteConfig"
           }
@@ -726,6 +772,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "title": "Backend",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Embedding backend: 'none' for lexical-only retrieval, 'local' for on-box inference, or 'provider' to reuse a configured provider's embeddings endpoint. Defaults to 'none'."
+        },
         "enabled": {
           "title": "Enabled",
           "type": "boolean",
@@ -989,37 +1043,81 @@
       "additionalProperties": false,
       "properties": {
         "type": {
-          "type": "string"
+          "title": "Type",
+          "type": "string",
+          "description": "What kind of resource this is: filesystem, api, mcp-server, database or remote-node. Determines which of the fields below are required."
         },
         "path": {
+          "title": "Path",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Filesystem path. Required for filesystem locations. A leading ~ expands to the user's home directory."
         },
         "endpoint": {
+          "title": "Endpoint",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Absolute http or https URL. Required for api, mcp-server and remote-node locations."
         },
         "connectionString": {
+          "title": "Connection string",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Database connection string. Required for database locations. Held in full in config.json, so prefer credentialRef where the target supports it."
+        },
+        "username": {
+          "title": "Username",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Account to authenticate as, for example automation@pve. Stored in the clear - it is an identity, not a credential."
+        },
+        "credentialRef": {
+          "title": "Credential reference",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Where to find this location's credential, as scheme:identifier - for example env:PROXMOX_TOKEN or file:~/.botnexus/secrets/proxmox. This field holds a reference, never the credential itself."
+        },
+        "verifyTls": {
+          "title": "Verify TLS",
+          "type": "boolean",
+          "description": "Verify the endpoint's TLS certificate. Turn off only for a target using a self-signed certificate, and only for that target."
         },
         "description": {
+          "title": "Description",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "What this location is, in a few words. Shown wherever the location is listed."
+        },
+        "tags": {
+          "title": "Tags",
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Free-form labels for grouping and filtering, for example homelab or hypervisor.",
+          "items": {
+            "type": "string"
+          }
         },
         "properties": {
+          "title": "Properties",
           "type": [
             "null",
             "object"
           ],
+          "description": "Extra key/value settings a consumer of this location understands, for example a Proxmox node name.",
           "additionalProperties": {
             "type": "string"
           }
@@ -2115,82 +2213,109 @@
       "additionalProperties": false,
       "properties": {
         "name": {
+          "title": "Job name",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Human-readable name shown for this job in schedules and run reports."
         },
         "schedule": {
+          "title": "Schedule",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Five-field cron expression (minute hour day month weekday) controlling when the job fires."
         },
         "actionType": {
+          "title": "Action type",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "What the job does when it fires: agent-prompt sends a prompt to an agent; command runs a shell command."
         },
         "agentId": {
+          "title": "Target agent",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Agent that receives the prompt. Required for agent-prompt jobs."
         },
         "message": {
+          "title": "Prompt message",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Prompt text sent to the agent. Required for agent-prompt jobs unless a template is named."
         },
         "templateName": {
+          "title": "Prompt template",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Named prompt template rendered instead of a literal message."
         },
         "templateParameters": {
+          "title": "Template parameters",
           "type": [
             "null",
             "object"
           ],
+          "description": "Values substituted into the named prompt template's placeholders.",
           "additionalProperties": {
             "type": "string"
           }
         },
         "model": {
+          "title": "Model override",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Model this job runs on, overriding the agent's configured model."
         },
         "webhookUrl": {
+          "title": "Webhook URL",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Destination URL called when the job fires. Used by webhook jobs."
         },
         "shellCommand": {
+          "title": "Shell command",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Command or script executed when the job fires. Runs with the gateway's privileges - treat as a dangerous operation."
         },
         "enabled": {
-          "type": "boolean"
+          "title": "Enabled",
+          "type": "boolean",
+          "description": "Whether this job fires on its schedule. A disabled job stays defined but never runs.",
+          "default": true
         },
         "createdBy": {
+          "title": "Created by",
           "type": [
             "null",
             "string"
-          ]
+          ],
+          "description": "Label recording who or what created this job. Used for auditing only."
         },
         "metadata": {
+          "title": "Metadata",
           "type": [
             "null",
             "object"
           ],
+          "description": "Free-form key/value entries persisted alongside the job, such as a timeout override.",
           "additionalProperties": {
             "type": "string"
           }
