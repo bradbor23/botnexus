@@ -55,4 +55,21 @@ public sealed record InstalledPlugin
     /// </summary>
     [JsonPropertyName("files")]
     public IReadOnlyList<string> Files { get; init; } = [];
+
+    /// <summary>
+    /// Identifier of the gateway extension this plugin carried and deployed, or <c>null</c> for a
+    /// skills-only plugin. This is the provenance link that lets removal clean up the deployed
+    /// extension: the extensions root holds a separate copy of the content, so without a recorded
+    /// owner a deployed extension would outlive the plugin that installed it.
+    /// </summary>
+    [JsonPropertyName("deployedExtensionId")]
+    public string? DeployedExtensionId { get; init; }
+
+    /// <summary>
+    /// Files deployment wrote into the extension directory, as forward-slash paths relative to it.
+    /// Recorded for the same reason as <see cref="Files"/>: removal works from the exact set that
+    /// was written, never from whatever the directory happens to contain later.
+    /// </summary>
+    [JsonPropertyName("extensionFiles")]
+    public IReadOnlyList<string> ExtensionFiles { get; init; } = [];
 }

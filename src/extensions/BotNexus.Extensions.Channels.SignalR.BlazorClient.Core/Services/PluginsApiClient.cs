@@ -100,6 +100,97 @@ public sealed record PluginUpdatePreferenceDto
     public bool UpdatesEnabled { get; init; }
 }
 
+/// <summary>Request body for installing a plugin from a marketplace source.</summary>
+public sealed record PluginInstallRequestDto
+{
+    /// <summary>Repository URL to install from.</summary>
+    [JsonPropertyName("source")]
+    public string Source { get; init; } = string.Empty;
+
+    /// <summary>Branch, tag or commit to install, or <c>null</c> for the default branch.</summary>
+    [JsonPropertyName("reference")]
+    public string? Reference { get; init; }
+
+    /// <summary>Whether the caller accepts a plugin that carries a gateway extension.</summary>
+    [JsonPropertyName("acknowledgeCarriedExtension")]
+    public bool AcknowledgeCarriedExtension { get; init; }
+}
+
+/// <summary>Gateway response to an install, update or remove.</summary>
+public sealed record PluginOperationResponseDto
+{
+    /// <summary>Lifecycle outcome name.</summary>
+    [JsonPropertyName("outcome")]
+    public string Outcome { get; init; } = string.Empty;
+
+    /// <summary>Plugin identifier.</summary>
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Revision now on disk.</summary>
+    [JsonPropertyName("resolvedVersion")]
+    public string? ResolvedVersion { get; init; }
+
+    /// <summary>Whether a gateway restart is needed before the result takes effect.</summary>
+    [JsonPropertyName("restartRequired")]
+    public bool RestartRequired { get; init; }
+
+    /// <summary>The plugin's row, when it is still installed.</summary>
+    [JsonPropertyName("plugin")]
+    public PluginRowDto? Plugin { get; init; }
+}
+
+/// <summary>One field-named failure from the gateway.</summary>
+public sealed record PluginErrorDetailDto
+{
+    /// <summary>Manifest or request field at fault.</summary>
+    [JsonPropertyName("field")]
+    public string? Field { get; init; }
+
+    /// <summary>Human-readable reason.</summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+}
+
+/// <summary>Gateway error body for a refused plugin operation.</summary>
+public sealed record PluginErrorResponseDto
+{
+    /// <summary>Primary failure message.</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>Every failure, each naming its field.</summary>
+    [JsonPropertyName("errors")]
+    public IReadOnlyList<PluginErrorDetailDto>? Errors { get; init; }
+}
+
+/// <summary>
+/// Outcome of a plugin lifecycle call, as the page needs to render it.
+/// </summary>
+/// <remarks>
+/// <see cref="ConsentRequired"/> is deliberately its own state rather than a flavour of failure.
+/// A refusal for want of consent is the one error the page should re-offer to the operator, and
+/// telling it apart from a broken plugin by reading prose would break the moment the wording
+/// changed - so it is keyed off the gateway's <c>extension.consent</c> field instead.
+/// </remarks>
+public sealed record PluginOperationOutcomeDto
+{
+    /// <summary>Whether the operation succeeded.</summary>
+    public bool Succeeded { get; init; }
+
+    /// <summary>Whether the gateway refused because a carried extension was not acknowledged.</summary>
+    public bool ConsentRequired { get; init; }
+
+    /// <summary>Whether a gateway restart is needed before the result takes effect.</summary>
+    public bool RestartRequired { get; init; }
+
+    /// <summary>Failure message, when the operation did not succeed.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>Gateway response on success.</summary>
+    public PluginOperationResponseDto? Response { get; init; }
+}
+
 /// <summary>
 /// Client for the gateway plugins REST API (<c>/api/plugins</c>, #2687, slice 8 of #2623).
 /// </summary>
@@ -160,5 +251,113 @@ public sealed class PluginsApiClient
         }
 
         return await response.Content.ReadFromJsonAsync<PluginRowDto>(JsonOptions, ct);
+    }
+
+    /// <summary>
+    /// Installs a plugin from a repository URL.
+    /// </summary>
+    /// <param name="source">Repository URL.</param>
+    /// <param name="reference">Branch, tag or commit, or <c>null</c> for the default branch.</param>
+    /// <param name="acknowledgeCarriedExtension">
+    /// Whether the operator has accepted that the plugin may carry code. Left false on the first
+    /// attempt: whether a source carries an extension is only knowable after the gateway fetches
+    /// it, so consent is asked for in response to a refusal, not guessed at up front.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<PluginOperationOutcomeDto> InstallAsync(
+        string source,
+        string? reference = null,
+        bool acknowledgeCarriedExtension = false,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return new PluginOperationOutcomeDto { Error = "A repository URL is required." };
+        }
+
+        using var response = await _http.PostAsJsonAsync(
+            "/api/plugins/install",
+            new PluginInstallRequestDto
+            {
+                Source = source.Trim(),
+                Reference = string.IsNullOrWhiteSpace(reference) ? null : reference.Trim(),
+                AcknowledgeCarriedExtension = acknowledgeCarriedExtension,
+            },
+            JsonOptions,
+            ct);
+
+        return await ReadOutcomeAsync(response, ct);
+    }
+
+    /// <summary>Re-resolves a plugin's source and replaces its content if the source moved.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<PluginOperationOutcomeDto> UpdateAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return new PluginOperationOutcomeDto { Error = "A plugin name is required." };
+        }
+
+        using var response = await _http.PostAsync(
+            $"/api/plugins/{Uri.EscapeDataString(name)}/update", content: null, ct);
+
+        return await ReadOutcomeAsync(response, ct);
+    }
+
+    /// <summary>Removes an installed plugin and any extension it deployed.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<PluginOperationOutcomeDto> RemoveAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return new PluginOperationOutcomeDto { Error = "A plugin name is required." };
+        }
+
+        using var response = await _http.DeleteAsync(
+            $"/api/plugins/{Uri.EscapeDataString(name)}", ct);
+
+        return await ReadOutcomeAsync(response, ct);
+    }
+
+    /// <summary>
+    /// Projects an HTTP response onto the outcome the page renders, preserving the gateway's own
+    /// field-named error rather than flattening it to a status code.
+    /// </summary>
+    private static async Task<PluginOperationOutcomeDto> ReadOutcomeAsync(
+        HttpResponseMessage response,
+        CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadFromJsonAsync<PluginOperationResponseDto>(JsonOptions, ct);
+            return new PluginOperationOutcomeDto
+            {
+                Succeeded = true,
+                RestartRequired = body?.RestartRequired ?? false,
+                Response = body,
+            };
+        }
+
+        PluginErrorResponseDto? error = null;
+        try
+        {
+            error = await response.Content.ReadFromJsonAsync<PluginErrorResponseDto>(JsonOptions, ct);
+        }
+        catch (JsonException)
+        {
+            // A non-JSON error body is still a failure; it just cannot name a field.
+        }
+
+        var consentRequired = error?.Errors?.Any(e =>
+            string.Equals(e.Field, "extension.consent", StringComparison.Ordinal)) ?? false;
+
+        return new PluginOperationOutcomeDto
+        {
+            Succeeded = false,
+            ConsentRequired = consentRequired,
+            Error = error?.Error ?? $"The gateway refused the request ({(int)response.StatusCode}).",
+        };
     }
 }

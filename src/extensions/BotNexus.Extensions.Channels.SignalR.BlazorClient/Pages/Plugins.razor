@@ -20,6 +20,67 @@
         </div>
     </header>
 
+    <section class="cron-page-card" data-testid="plugin-install">
+        <h3>Install from a repository</h3>
+        <div class="plugin-install-form">
+            <input type="url"
+                   class="plugin-install-source"
+                   placeholder="https://github.com/owner/repo.git"
+                   aria-label="Repository URL"
+                   data-testid="plugin-install-source"
+                   disabled="@_installing"
+                   @bind="_installSource" />
+            <input type="text"
+                   class="plugin-install-reference"
+                   placeholder="branch, tag or commit (optional)"
+                   aria-label="Reference"
+                   data-testid="plugin-install-reference"
+                   disabled="@_installing"
+                   @bind="_installReference" />
+            <button class="toolbar-btn"
+                    data-testid="plugin-install-submit"
+                    disabled="@(_installing || string.IsNullOrWhiteSpace(_installSource))"
+                    @onclick="() => InstallAsync(acknowledgeCarriedExtension: false)">
+                @(_installing ? "Installing." : "Install")
+            </button>
+        </div>
+
+        @* Consent is asked for in RESPONSE to the gateway's refusal, never as a checkbox ticked in
+           advance: whether a source carries code is only knowable once it has been fetched, so a
+           pre-ticked box would be consent given before there was anything to consent to. *@
+        @if (_consentPrompt is not null)
+        {
+            <div class="agents-status warning" role="alert" data-testid="plugin-consent-prompt">
+                <p data-testid="plugin-consent-message">@_consentPrompt</p>
+                <p>
+                    A carried extension runs code inside the gateway process at full trust, with no
+                    sandbox. It stays inert until the gateway is restarted.
+                </p>
+                <button class="toolbar-btn"
+                        data-testid="plugin-consent-confirm"
+                        disabled="@_installing"
+                        @onclick="() => InstallAsync(acknowledgeCarriedExtension: true)">
+                    Install anyway
+                </button>
+                <button class="toolbar-btn"
+                        data-testid="plugin-consent-cancel"
+                        disabled="@_installing"
+                        @onclick="CancelConsent">
+                    Cancel
+                </button>
+            </div>
+        }
+    </section>
+
+    @* "Installed" and "installed and working" are different claims. Extension endpoints are mapped
+       once at startup, so a carried extension is on disk but doing nothing until a restart. *@
+    @if (_restartRequiredFor is not null)
+    {
+        <div class="agents-status warning" role="status" data-testid="plugin-restart-notice">
+            '@_restartRequiredFor' deployed a gateway extension. Restart the gateway to activate it.
+        </div>
+    }
+
     @* AC4 sad path. An id that is not installed is a non-fatal notice above the ordinary list,
        never an error page: a stale bookmark or a plugin removed since the link was shared is a
        normal thing to happen, and blanking the page would hide the very list that answers it. *@
@@ -44,7 +105,7 @@
     else if (_plugins.Count == 0)
     {
         <div class="agents-empty" data-testid="plugins-empty">
-            <p>No plugins installed. Plugins are installed from the CLI against a marketplace source.</p>
+            <p>No plugins installed. Paste a repository URL above to install one.</p>
         </div>
     }
     else
@@ -57,6 +118,7 @@
                     <th>Update</th>
                     <th>Trust</th>
                     <th>Auto-update</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -80,6 +142,35 @@
                                        @onchange="@(e => ToggleAutoUpdateAsync(plugin, e))" />
                                 <span>@(plugin.UpdatesEnabled ? "Enabled" : "Pinned")</span>
                             </label>
+                        </td>
+                        <td class="plugin-row-actions">
+                            @if (plugin.UpdateState == PluginUpdateStateDto.UpdateAvailable)
+                            {
+                                <button class="toolbar-btn"
+                                        data-testid="plugin-update-btn"
+                                        disabled="@(_busyPlugin is not null)"
+                                        @onclick="() => UpdatePluginAsync(plugin)">Update</button>
+                            }
+                            @* Two-click confirm rather than a JS dialog: removal deletes recorded
+                               content and any extension the plugin deployed, and the second click
+                               is the only thing standing between a mis-click and that. *@
+                            @if (string.Equals(_confirmRemove, plugin.Name, StringComparison.Ordinal))
+                            {
+                                <button class="toolbar-btn danger"
+                                        data-testid="plugin-remove-confirm"
+                                        disabled="@(_busyPlugin is not null)"
+                                        @onclick="() => RemovePluginAsync(plugin)">Confirm remove</button>
+                                <button class="toolbar-btn"
+                                        data-testid="plugin-remove-cancel"
+                                        @onclick="() => _confirmRemove = null">Cancel</button>
+                            }
+                            else
+                            {
+                                <button class="toolbar-btn"
+                                        data-testid="plugin-remove-btn"
+                                        disabled="@(_busyPlugin is not null)"
+                                        @onclick="() => _confirmRemove = plugin.Name">Remove</button>
+                            }
                         </td>
                     </tr>
                 }
@@ -127,6 +218,14 @@
     private string? _savingPlugin;
     private string? _statusMessage;
     private string _statusClass = "";
+
+    private string _installSource = string.Empty;
+    private string _installReference = string.Empty;
+    private bool _installing;
+    private string? _consentPrompt;
+    private string? _restartRequiredFor;
+    private string? _confirmRemove;
+    private string? _busyPlugin;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -237,6 +336,132 @@
         finally
         {
             _savingPlugin = null;
+        }
+    }
+
+    /// <summary>
+    /// Installs the entered source. Called twice for a code plugin: once unacknowledged, and again
+    /// with consent if the gateway refuses for want of it.
+    /// </summary>
+    private async Task InstallAsync(bool acknowledgeCarriedExtension)
+    {
+        if (string.IsNullOrWhiteSpace(_installSource))
+        {
+            return;
+        }
+
+        _installing = true;
+        _consentPrompt = null;
+        StateHasChanged();
+
+        try
+        {
+            var outcome = await PluginsApi.InstallAsync(
+                _installSource, _installReference, acknowledgeCarriedExtension);
+
+            if (outcome.ConsentRequired)
+            {
+                // Not an error state: the operator is being asked a question, and the form keeps
+                // its values so answering it does not mean retyping the URL.
+                _consentPrompt = outcome.Error;
+                return;
+            }
+
+            if (!outcome.Succeeded)
+            {
+                SetStatus(outcome.Error ?? "The install failed.", "error");
+                return;
+            }
+
+            var installed = outcome.Response?.Name ?? "the plugin";
+            _restartRequiredFor = outcome.RestartRequired ? installed : null;
+            SetStatus(
+                outcome.RestartRequired
+                    ? $"Installed '{installed}'. Restart the gateway to activate its extension."
+                    : $"Installed '{installed}'.",
+                "success");
+
+            _installSource = string.Empty;
+            _installReference = string.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"The install failed: {ex.Message}", "error");
+        }
+        finally
+        {
+            _installing = false;
+        }
+    }
+
+    private void CancelConsent()
+    {
+        _consentPrompt = null;
+        SetStatus("Install cancelled.", "");
+    }
+
+    private async Task UpdatePluginAsync(PluginRowDto plugin)
+    {
+        _busyPlugin = plugin.Name;
+        try
+        {
+            var outcome = await PluginsApi.UpdateAsync(plugin.Name);
+            if (!outcome.Succeeded)
+            {
+                SetStatus(outcome.Error ?? $"Could not update '{plugin.Name}'.", "error");
+                return;
+            }
+
+            SetStatus($"Updated '{plugin.Name}'.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not update '{plugin.Name}': {ex.Message}", "error");
+        }
+        finally
+        {
+            _busyPlugin = null;
+        }
+    }
+
+    private async Task RemovePluginAsync(PluginRowDto plugin)
+    {
+        _busyPlugin = plugin.Name;
+        try
+        {
+            var outcome = await PluginsApi.RemoveAsync(plugin.Name);
+            if (!outcome.Succeeded)
+            {
+                SetStatus(outcome.Error ?? $"Could not remove '{plugin.Name}'.", "error");
+                return;
+            }
+
+            SetStatus($"Removed '{plugin.Name}'.", "success");
+
+            // A removed plugin cannot stay selected, and a stale restart notice about it would
+            // outlive the thing it referred to.
+            if (string.Equals(_restartRequiredFor, plugin.Name, StringComparison.Ordinal))
+            {
+                _restartRequiredFor = null;
+            }
+
+            if (string.Equals(PluginId, plugin.Name, StringComparison.Ordinal))
+            {
+                Nav.NavigateTo("plugins");
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not remove '{plugin.Name}': {ex.Message}", "error");
+        }
+        finally
+        {
+            _busyPlugin = null;
+            _confirmRemove = null;
         }
     }
 
