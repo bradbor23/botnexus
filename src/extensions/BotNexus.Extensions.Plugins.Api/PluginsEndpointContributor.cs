@@ -13,8 +13,10 @@ namespace BotNexus.Extensions.Plugins.Api;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Read and preference-toggle only. Installing a plugin from the portal is out of scope for this
-/// slice - install remains a CLI operation, so there is deliberately no <c>POST</c> here.
+/// Install, update and remove are exposed alongside the read and preference routes. These are
+/// endpoint-routed rather than middleware, so they execute after <c>GatewayAuthMiddleware</c> and
+/// are subject to the gateway's authentication like every other API route - unlike a contributor
+/// that registers <c>app.Use</c>, which maps ahead of it.
 /// </para>
 /// <para>
 /// Registered as an <see cref="IEndpointContributor"/> in an extension rather than as a
@@ -35,6 +37,209 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
         group.MapGet("/{name}", (string name) => Get(name));
         group.MapPut("/{name}/update-preference",
             (string name, PluginUpdatePreferenceRequest request) => SetUpdatePreference(name, request));
+        group.MapPost("/install", (PluginInstallApiRequest request) => InstallAsync(request));
+        group.MapPost("/{name}/update", (string name) => UpdateAsync(name));
+        group.MapDelete("/{name}", (string name) => Remove(name));
+    }
+
+    /// <summary>
+    /// Absolute path of the deployed-extensions root: <c>~/.botnexus/extensions</c>, honouring the
+    /// same <c>BOTNEXUS_HOME</c> override as <see cref="GetPluginRootPath"/>.
+    /// </summary>
+    internal static string GetExtensionsRootPath()
+    {
+        var homeOverride = Environment.GetEnvironmentVariable("BOTNEXUS_HOME");
+        if (!string.IsNullOrWhiteSpace(homeOverride))
+        {
+            return Path.Combine(Path.GetFullPath(homeOverride), "extensions");
+        }
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".botnexus", "extensions");
+    }
+
+    /// <summary>
+    /// Composes a lifecycle manager over the real git transport. Built per request rather than
+    /// injected, matching how every other route here constructs its store: these operations are
+    /// rare, and a cached manager would pin the plugin root read at startup.
+    /// </summary>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <param name="extensionsRoot">Directory holding deployed extensions.</param>
+    internal static PluginLifecycleManager CreateManager(string pluginRoot, string extensionsRoot) =>
+        new(new PluginStateStore(pluginRoot),
+            new GitPluginSourceFetcher(new ProcessGitCommandRunner()),
+            extensionsRoot: extensionsRoot);
+
+    /// <summary>Installs a plugin from a marketplace source.</summary>
+    /// <param name="request">What to install.</param>
+    internal static Task<IResult> InstallAsync(PluginInstallApiRequest request) =>
+        InstallAsync(request, GetPluginRootPath(), GetExtensionsRootPath());
+
+    /// <summary>
+    /// Installs a plugin under explicit roots.
+    /// </summary>
+    /// <remarks>
+    /// A failure is a 400 carrying the operation's own field-named errors rather than a bare
+    /// message. The lifecycle manager already names the offending manifest field, and flattening
+    /// that to a string would throw away the only thing that tells an author what to fix.
+    /// </remarks>
+    /// <param name="request">What to install.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <param name="extensionsRoot">Directory holding deployed extensions.</param>
+    internal static async Task<IResult> InstallAsync(
+        PluginInstallApiRequest request,
+        string pluginRoot,
+        string extensionsRoot)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Source))
+        {
+            return Results.BadRequest(new { error = "A plugin source is required." });
+        }
+
+        return await InstallAsync(request, CreateManager(pluginRoot, extensionsRoot), pluginRoot);
+    }
+
+    /// <summary>
+    /// Installs through a supplied lifecycle manager, so the route's validation and response
+    /// shaping can be pinned without a git binary or a network.
+    /// </summary>
+    /// <param name="request">What to install.</param>
+    /// <param name="manager">Lifecycle manager to install through.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    internal static async Task<IResult> InstallAsync(
+        PluginInstallApiRequest request,
+        PluginLifecycleManager manager,
+        string pluginRoot)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Source))
+        {
+            return Results.BadRequest(new { error = "A plugin source is required." });
+        }
+
+        var result = await manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = request.Source,
+            Name = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name,
+            Reference = string.IsNullOrWhiteSpace(request.Reference) ? null : request.Reference,
+            UpdatesEnabled = request.UpdatesEnabled ?? true,
+            AllowCarriedExtension = request.AcknowledgeCarriedExtension,
+        });
+
+        return Respond(result, pluginRoot);
+    }
+
+    /// <summary>Re-resolves a plugin's source and replaces its content if the source moved.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    internal static Task<IResult> UpdateAsync(string name) =>
+        UpdateAsync(name, GetPluginRootPath(), GetExtensionsRootPath());
+
+    /// <summary>Updates a plugin under explicit roots.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <param name="extensionsRoot">Directory holding deployed extensions.</param>
+    internal static async Task<IResult> UpdateAsync(string name, string pluginRoot, string extensionsRoot)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new { error = "A plugin name is required." });
+        }
+
+        return await UpdateAsync(name, CreateManager(pluginRoot, extensionsRoot), pluginRoot);
+    }
+
+    /// <summary>Updates through a supplied lifecycle manager.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="manager">Lifecycle manager to update through.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    internal static async Task<IResult> UpdateAsync(
+        string name,
+        PluginLifecycleManager manager,
+        string pluginRoot)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new { error = "A plugin name is required." });
+        }
+
+        return Respond(await manager.UpdateAsync(name), pluginRoot);
+    }
+
+    /// <summary>Removes an installed plugin and any extension it deployed.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    internal static IResult Remove(string name) =>
+        Remove(name, GetPluginRootPath(), GetExtensionsRootPath());
+
+    /// <summary>Removes a plugin under explicit roots.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <param name="extensionsRoot">Directory holding deployed extensions.</param>
+    internal static IResult Remove(string name, string pluginRoot, string extensionsRoot)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new { error = "A plugin name is required." });
+        }
+
+        return Remove(name, CreateManager(pluginRoot, extensionsRoot));
+    }
+
+    /// <summary>Removes through a supplied lifecycle manager.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="manager">Lifecycle manager to remove through.</param>
+    internal static IResult Remove(string name, PluginLifecycleManager manager)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new { error = "A plugin name is required." });
+        }
+
+        var result = manager.Remove(name);
+        if (result.Outcome == PluginOperationOutcome.Failed)
+        {
+            // "Not installed" is the only way remove fails, and a 404 says that more precisely
+            // than a 400 would.
+            return Results.NotFound(new { error = result.Errors[0].Message });
+        }
+
+        return Results.Ok(new PluginOperationResponse(
+            result.Outcome.ToString(),
+            name,
+            result.PreviousVersion,
+            null,
+            RestartRequired: false,
+            Plugin: null));
+    }
+
+    /// <summary>
+    /// Projects a lifecycle outcome onto an HTTP result, carrying the portal's own row shape on
+    /// success so a caller can render the result without a second round trip.
+    /// </summary>
+    private static IResult Respond(PluginOperationResult result, string pluginRoot)
+    {
+        if (result.Outcome == PluginOperationOutcome.Failed)
+        {
+            return Results.BadRequest(new
+            {
+                error = result.Errors.Count > 0 ? result.Errors[0].Message : "The operation failed.",
+                errors = result.Errors.Select(e => new { field = e.Field, message = e.Message }),
+            });
+        }
+
+        var store = new PluginStateStore(pluginRoot);
+        var record = store.Find(result.Name);
+
+        // Activation is a startup concern: extension endpoints are mapped once, post-build, so a
+        // carried extension is on disk but inert until the gateway restarts. Saying so in the
+        // response is the difference between "installed" and "installed and working".
+        var restartRequired = record?.DeployedExtensionId is not null;
+
+        return Results.Ok(new PluginOperationResponse(
+            result.Outcome.ToString(),
+            result.Name,
+            result.PreviousVersion,
+            record?.ResolvedVersion,
+            restartRequired,
+            new PluginPortalProjector(store).Find(result.Name)));
     }
 
     /// <summary>
@@ -134,3 +339,39 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
 /// <summary>Request body for toggling a plugin's auto-update preference.</summary>
 /// <param name="UpdatesEnabled">Whether scheduled updates may replace this plugin's content.</param>
 public sealed record PluginUpdatePreferenceRequest(bool UpdatesEnabled);
+
+/// <summary>Request body for installing a plugin from a marketplace source.</summary>
+/// <param name="Source">Repository URL to install from.</param>
+/// <param name="Name">Expected plugin name, or <c>null</c> to accept whatever the manifest declares.</param>
+/// <param name="Reference">Branch, tag or commit to install, or <c>null</c> for the default branch.</param>
+/// <param name="UpdatesEnabled">Whether scheduled updates may replace the content; defaults to true.</param>
+/// <param name="AcknowledgeCarriedExtension">
+/// Whether the caller accepts a plugin that carries a gateway extension - code loaded in-process at
+/// full trust. Defaults to false, so install refuses an unacknowledged code plugin and the caller
+/// re-issues knowing what it is agreeing to.
+/// </param>
+public sealed record PluginInstallApiRequest(
+    string Source,
+    string? Name = null,
+    string? Reference = null,
+    bool? UpdatesEnabled = null,
+    bool AcknowledgeCarriedExtension = false);
+
+/// <summary>Result of an install, update or remove.</summary>
+/// <param name="Outcome">Lifecycle outcome name.</param>
+/// <param name="Name">Plugin identifier.</param>
+/// <param name="PreviousVersion">Revision that was installed before, when there was one.</param>
+/// <param name="ResolvedVersion">Revision now on disk.</param>
+/// <param name="RestartRequired">
+/// Whether a gateway restart is needed before the result takes effect. True when a carried
+/// extension was deployed: extension endpoints are mapped once at startup, so it is on disk but
+/// inert until then.
+/// </param>
+/// <param name="Plugin">The installed plugin's portal row, when it is still installed.</param>
+public sealed record PluginOperationResponse(
+    string Outcome,
+    string Name,
+    string? PreviousVersion,
+    string? ResolvedVersion,
+    bool RestartRequired,
+    PluginPortalRow? Plugin);

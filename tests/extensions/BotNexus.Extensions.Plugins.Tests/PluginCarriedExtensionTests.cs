@@ -204,6 +204,7 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         var result = await _manager.InstallAsync(new PluginInstallRequest
         {
             Source = "https://example.com/code-plugin.git",
+            AllowCarriedExtension = true,
         });
 
         Assert.Equal(PluginOperationOutcome.Installed, result.Outcome);
@@ -225,6 +226,7 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         var result = await _manager.InstallAsync(new PluginInstallRequest
         {
             Source = "https://example.com/code-plugin.git",
+            AllowCarriedExtension = true,
         });
 
         Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
@@ -243,6 +245,7 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         var result = await manager.InstallAsync(new PluginInstallRequest
         {
             Source = "https://example.com/code-plugin.git",
+            AllowCarriedExtension = true,
         });
 
         Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
@@ -256,7 +259,11 @@ public sealed class PluginCarriedExtensionTests : IDisposable
     public async Task RemoveDeletesTheDeployedExtensionAlongsideThePlugin()
     {
         _fetcher.Enqueue("sha-1", CarriedPluginContent());
-        await _manager.InstallAsync(new PluginInstallRequest { Source = "https://example.com/code-plugin.git" });
+        await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/code-plugin.git",
+            AllowCarriedExtension = true,
+        });
         Assert.True(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));
 
         var result = _manager.Remove("code-plugin");
@@ -266,13 +273,55 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         Assert.Null(_store.Find("code-plugin"));
     }
 
+    // Whether a source carries code is only knowable after it is fetched, so consent cannot be
+    // resolved from the URL. Refusal must happen before anything reaches disk.
+    [Fact]
+    public async Task InstallRefusesACarriedExtensionThatWasNotAcknowledged()
+    {
+        _fetcher.Enqueue("sha-1", CarriedPluginContent());
+
+        var result = await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/code-plugin.git",
+        });
+
+        Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
+        Assert.Contains("runs code in the gateway process", result.Errors[0].Message);
+        Assert.False(Directory.Exists(Path.Combine(_pluginRoot, "code-plugin")));
+        Assert.False(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));
+        Assert.Null(_store.Find("code-plugin"));
+    }
+
+    // A skills-only plugin must stay low-friction: the gate is for code, not for every install.
+    [Fact]
+    public async Task InstallOfASkillsOnlyPluginNeedsNoAcknowledgement()
+    {
+        _fetcher.Enqueue("sha-1", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [".botnexus-plugin/plugin.json"] = PluginManifestJson("skills-plugin", extensionManifestPath: null),
+            ["skills/greet/SKILL.md"] = "# greet",
+        });
+
+        var result = await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/skills-plugin.git",
+        });
+
+        Assert.Equal(PluginOperationOutcome.Installed, result.Outcome);
+        Assert.Null(_store.Find("skills-plugin")!.DeployedExtensionId);
+    }
+
     // A partial update that replaced the plugin but not its loaded extension would leave the two
     // disagreeing about which build is installed.
     [Fact]
     public async Task UpdateRefusesAPluginThatCarriesADeployedExtension()
     {
         _fetcher.Enqueue("sha-1", CarriedPluginContent());
-        await _manager.InstallAsync(new PluginInstallRequest { Source = "https://example.com/code-plugin.git" });
+        await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/code-plugin.git",
+            AllowCarriedExtension = true,
+        });
 
         var result = await _manager.UpdateAsync("code-plugin");
 

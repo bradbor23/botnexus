@@ -124,6 +124,16 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                     $"Plugin directory '{destination}' already exists but is not recorded as installed. It was not overwritten.");
             }
 
+            // Consent gate. Refused BEFORE promote so an unacknowledged code plugin never reaches
+            // disk at all, rather than being written and then rolled back.
+            if (manifest.Extension is not null && !request.AllowCarriedExtension)
+            {
+                return PluginOperationResult.Failure(
+                    manifest.Name,
+                    "extension",
+                    $"Plugin '{manifest.Name}' carries a gateway extension, which runs code in the gateway process at full trust. Re-issue the install acknowledging the carried extension to proceed.");
+            }
+
             var files = Promote(staged.Directory!, destination);
 
             // A carried extension is deployed only after the plugin itself is on disk, because the
