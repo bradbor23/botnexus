@@ -286,6 +286,7 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         });
 
         Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
+        Assert.Equal("extension.consent", result.Errors[0].Field);
         Assert.Contains("runs code in the gateway process", result.Errors[0].Message);
         Assert.False(Directory.Exists(Path.Combine(_pluginRoot, "code-plugin")));
         Assert.False(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));

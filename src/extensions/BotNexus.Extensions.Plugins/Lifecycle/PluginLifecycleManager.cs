@@ -128,9 +128,12 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
             // disk at all, rather than being written and then rolled back.
             if (manifest.Extension is not null && !request.AllowCarriedExtension)
             {
+                // A DISTINCT field, not the general "extension" one: a caller must be able to tell
+                // "you have not consented yet" from "the extension is broken" without parsing
+                // prose, because only the first is worth re-offering to a human.
                 return PluginOperationResult.Failure(
                     manifest.Name,
-                    "extension",
+                    "extension.consent",
                     $"Plugin '{manifest.Name}' carries a gateway extension, which runs code in the gateway process at full trust. Re-issue the install acknowledging the carried extension to proceed.");
             }
 

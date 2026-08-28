@@ -7687,3 +7687,91 @@ h3.conversation-title.editable:hover {
 /* Where an icon must read as part of its label rather than as its own object. */
 .bn-icon-inherit { color: inherit; stroke: currentColor; }
 /* END generated icon tones */
+
+/* ── Plugins: install form and row actions ──────────────────────────────────
+   The install form is a single row on desktop and stacks below the agents
+   breakpoint, because the URL field is the long one and squeezing it beside a
+   reference field makes the thing you actually paste the hardest to read. */
+
+.plugin-install-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}
+
+.plugin-install-form input[type="url"],
+.plugin-install-form input[type="text"] {
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    padding: 0.35rem 0.6rem;
+    font-size: var(--text-body);
+    font-family: var(--font-sans);
+    transition: border-color 0.15s;
+}
+
+.plugin-install-form input[type="url"]:focus,
+.plugin-install-form input[type="text"]:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+/* The URL grows, the reference stays a fixed hint-sized field. */
+.plugin-install-form .plugin-install-source {
+    flex: 1 1 22rem;
+    min-width: 0;
+    font-family: var(--font-mono, monospace);
+}
+
+.plugin-install-form .plugin-install-reference {
+    flex: 0 1 16rem;
+    min-width: 0;
+}
+
+.plugin-row-actions {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    white-space: nowrap;
+}
+
+/* Destructive actions read as destructive before they are clicked, not after. */
+.toolbar-btn.danger {
+    border-color: var(--error);
+    color: var(--error);
+}
+
+.toolbar-btn.danger:hover:not(:disabled) {
+    background: var(--error);
+    border-color: var(--error);
+    color: var(--bg-base, #fff);
+}
+
+/* The consent prompt is a decision, not a toast: its buttons need room to sit
+   under the explanation rather than inline with it. */
+[data-testid="plugin-consent-prompt"] {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+[data-testid="plugin-consent-prompt"] p {
+    margin: 0;
+}
+
+@media (max-width: 720px) {
+    .plugin-install-form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .plugin-install-form .plugin-install-source,
+    .plugin-install-form .plugin-install-reference {
+        flex: 1 1 auto;
+    }
+}
