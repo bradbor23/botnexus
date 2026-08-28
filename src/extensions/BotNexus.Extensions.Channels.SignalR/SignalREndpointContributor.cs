@@ -38,21 +38,30 @@ public class SignalREndpointContributor : IEndpointContributor
     private static IReadOnlyList<string> ResolveClaimedPaths(WebApplication app)
     {
         var loader = app.Services.GetService<IExtensionLoader>();
-        if (loader is null)
-            return [];
+        return loader is null ? [] : ResolveClaimedPaths(loader.GetLoaded());
+    }
 
-        return [.. loader.GetLoaded()
-            .Where(extension => !string.Equals(extension.ExtensionId, "botnexus-signalr", StringComparison.OrdinalIgnoreCase))
+    /// <summary>
+    /// Derives the claimed paths from a set of loaded extensions.
+    /// </summary>
+    /// <param name="extensions">Loaded extensions.</param>
+    internal static IReadOnlyList<string> ResolveClaimedPaths(IEnumerable<LoadedExtension> extensions) =>
+        [.. extensions
+            .Where(extension => !string.Equals(extension.ExtensionId, PortalExtensionId, StringComparison.OrdinalIgnoreCase))
             .SelectMany(extension => extension.Nav)
             .Select(nav => nav.Path?.Trim())
             .Where(p => !string.IsNullOrWhiteSpace(p) && p!.StartsWith('/'))
             .Select(p => p!.TrimEnd('/'))
+            // Length > 1 drops a claim of "/" - claiming the root would make the portal itself
+            // unreachable, which is the one mistake here that takes the whole UI down.
             .Where(p => p.Length > 1)
             .Distinct(StringComparer.OrdinalIgnoreCase)];
-    }
+
+    /// <summary>This extension's own id, excluded so the portal cannot claim a path against itself.</summary>
+    internal const string PortalExtensionId = "botnexus-signalr";
 
     // A claim covers the path itself and everything beneath it, because a UI serves its own assets.
-    private static bool ClaimsPath(IReadOnlyList<string> claimed, string path)
+    internal static bool ClaimsPath(IReadOnlyList<string> claimed, string path)
     {
         foreach (var claim in claimed)
         {
