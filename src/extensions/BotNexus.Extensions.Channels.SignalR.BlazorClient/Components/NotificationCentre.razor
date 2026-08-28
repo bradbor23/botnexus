@@ -125,8 +125,8 @@
                                     <li>
                                         reach it on <strong>localhost</strong>, which browsers treat as
                                         secure even over plain http — for example
-                                        <code>ssh -L 5005:localhost:5005 your-gateway-host</code>, then
-                                        open <code>http://localhost:5005</code>.
+                                        <code>@TunnelCommand()</code>, then open
+                                        <code>@TunnelUrl()</code>.
                                     </li>
                                 </ul>
                             </details>
@@ -353,6 +353,35 @@
         // re-read on open rather than trusted from initialisation.
         if (_notifier is not null)
             _desktop = await _notifier.GetStatusAsync();
+    }
+
+    // Built from the origin actually in the address bar rather than from "localhost", because a
+    // gateway that binds only its LAN address has nothing listening on its own loopback - the
+    // textbook `ssh -L 5005:localhost:5005` form then forwards to a closed port and appears
+    // broken. Forwarding to the host's own address works whether it binds loopback, that address,
+    // or everything. Verified against a gateway bound to its LAN address only.
+    private string TunnelCommand()
+    {
+        if (!TryOrigin(out var host, out var port))
+            return "ssh -L 5005:localhost:5005 your-gateway-host";
+
+        return $"ssh -L {port}:{host}:{port} {host}";
+    }
+
+    private string TunnelUrl() =>
+        TryOrigin(out _, out var port) ? $"http://localhost:{port}" : "http://localhost:5005";
+
+    private bool TryOrigin(out string host, out int port)
+    {
+        host = string.Empty;
+        port = 5005;
+
+        if (!Uri.TryCreate(_desktop?.Origin, UriKind.Absolute, out var uri))
+            return false;
+
+        host = uri.Host;
+        port = uri.Port;
+        return true;
     }
 
     // Named per browser family, because "open your site settings" is not instructions - the menu

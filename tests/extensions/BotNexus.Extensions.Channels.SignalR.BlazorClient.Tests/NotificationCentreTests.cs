@@ -522,6 +522,28 @@ public sealed class NotificationCentreTests : IDisposable
         Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-toggle']"));
     }
 
+    // The textbook `ssh -L 5005:localhost:5005` form forwards to the gateway's own loopback, and a
+    // gateway that binds only its LAN address has nothing listening there - so the suggested
+    // command has to target the host's own address. Confirmed against a live gateway: the
+    // localhost form refused the connection, this one served the portal.
+    [Fact]
+    public void The_tunnel_command_targets_the_host_not_its_loopback()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "denied", enabled: false,
+            secure: false, origin: "http://192.168.0.10:5005");
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        var help = cut.Find("[data-testid='desktop-alerts-insecure']").ParentElement!.TextContent;
+        Assert.Contains("ssh -L 5005:192.168.0.10:5005 192.168.0.10", help);
+        Assert.Contains("http://localhost:5005", help);
+        Assert.DoesNotContain("5005:localhost:5005", help);
+    }
+
     [Theory]
     [InlineData("chrome", "Site settings")]
     [InlineData("edge", "Permissions for this site")]
