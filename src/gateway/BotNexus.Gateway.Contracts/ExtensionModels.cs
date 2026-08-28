@@ -62,6 +62,63 @@ public sealed record ExtensionManifest
     /// which gateways it is safe on.
     /// </remarks>
     public ExtensionCompatibility? Compatibility { get; init; }
+
+    /// <summary>
+    /// Where this extension's endpoints and middleware map in the request pipeline.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="ExtensionEndpointPhase.BeforeAuthentication"/>, which is where every
+    /// contributor has always mapped. The default is deliberately the existing behaviour rather
+    /// than the safer value: changing it wholesale would move the portal's own contributor - which
+    /// serves the shell and the auth interstitial - behind the authentication it exists to let a
+    /// user get through.
+    /// <para>
+    /// Third-party code does not get that default by accident. A plugin-carried extension must
+    /// declare <see cref="ExtensionEndpointPhase.AfterAuthentication"/>, and the installer refuses
+    /// it otherwise, so mapping ahead of authentication is an explicit, acknowledged choice.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// A STRING on the wire, parsed leniently, rather than a JSON enum. The manifest deserialiser
+    /// carries no string-enum converter, so a typed enum here would throw on the very first
+    /// manifest that wrote a human-readable value - taking the whole manifest, and therefore the
+    /// whole extension, down over a presentational field.
+    /// </remarks>
+    public string? EndpointPhase { get; init; }
+
+    /// <summary>The parsed phase, defaulting to before-authentication.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ExtensionEndpointPhase ResolvedEndpointPhase => ParseEndpointPhase(EndpointPhase);
+
+    /// <summary>
+    /// Parses a declared phase. Accepts <c>after-authentication</c>, <c>afterauthentication</c> and
+    /// <c>AfterAuthentication</c>; anything else - including null and nonsense - means
+    /// before-authentication, which is where contributors have always mapped.
+    /// </summary>
+    /// <param name="value">Declared value, or <c>null</c>.</param>
+    public static ExtensionEndpointPhase ParseEndpointPhase(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? ExtensionEndpointPhase.BeforeAuthentication
+            : value.Trim().Replace("-", string.Empty, StringComparison.Ordinal)
+                .Equals("afterauthentication", StringComparison.OrdinalIgnoreCase)
+                ? ExtensionEndpointPhase.AfterAuthentication
+                : ExtensionEndpointPhase.BeforeAuthentication;
+}
+
+/// <summary>Where an extension's endpoints map relative to the authentication middleware.</summary>
+public enum ExtensionEndpointPhase
+{
+    /// <summary>
+    /// Ahead of authentication. Required by surfaces that must be reachable to authenticate at
+    /// all, such as the portal shell.
+    /// </summary>
+    BeforeAuthentication = 0,
+
+    /// <summary>
+    /// Behind authentication, so the extension's routes are subject to the gateway's auth and its
+    /// origin checks like any other API route.
+    /// </summary>
+    AfterAuthentication = 1,
 }
 
 /// <summary>
@@ -247,4 +304,13 @@ public sealed record LoadedExtension
 
     /// <summary>Left-nav entries this extension contributes to the portal.</summary>
     public IReadOnlyList<ExtensionNavEntry> Nav { get; init; } = [];
+
+    /// <summary>Where this extension's endpoints map in the request pipeline.</summary>
+    public ExtensionEndpointPhase EndpointPhase { get; init; } = ExtensionEndpointPhase.BeforeAuthentication;
+
+    /// <summary>
+    /// Full type names of the services this extension registered, used to attribute a contributor
+    /// instance back to the extension that supplied it.
+    /// </summary>
+    public IReadOnlyList<string> RegisteredImplementationTypes { get; init; } = [];
 }

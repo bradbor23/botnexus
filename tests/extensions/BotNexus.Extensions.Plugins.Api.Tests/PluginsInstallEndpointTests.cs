@@ -52,8 +52,11 @@ public sealed class PluginsInstallEndpointTests : IDisposable
     {
         [".botnexus-plugin/plugin.json"] =
             "{ \"name\": \"" + name + "\", \"extension\": { \"manifest\": \"botnexus-extension.json\" } }",
+        // A carried extension must declare that it sits behind authentication, or the deployer
+        // refuses it - third-party code does not inherit a pre-auth position by default.
         ["botnexus-extension.json"] =
-            "{ \"id\": \"carried-ext\", \"entryAssembly\": \"lib/Carried.dll\" }",
+            "{ \"id\": \"carried-ext\", \"entryAssembly\": \"lib/Carried.dll\","
+            + " \"endpointPhase\": \"after-authentication\" }",
         ["lib/Carried.dll"] = "prebuilt",
     };
 

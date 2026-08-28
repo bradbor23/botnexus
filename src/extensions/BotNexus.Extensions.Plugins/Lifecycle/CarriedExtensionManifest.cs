@@ -51,6 +51,13 @@ public sealed record CarriedExtensionManifest
     /// <summary>Left-nav entries the extension declares, disclosed as paths it will serve.</summary>
     [JsonPropertyName("nav")]
     public IReadOnlyList<CarriedExtensionNav>? Nav { get; init; }
+
+    /// <summary>
+    /// Where the extension asks to map in the request pipeline. A carried extension must declare
+    /// <c>after-authentication</c>; see <c>PluginExtensionDeployer</c> for why.
+    /// </summary>
+    [JsonPropertyName("endpointPhase")]
+    public string? EndpointPhase { get; init; }
 }
 
 /// <summary>The parts of a carried nav entry worth showing an operator before they consent.</summary>

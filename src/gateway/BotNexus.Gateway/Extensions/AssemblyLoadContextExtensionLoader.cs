@@ -178,7 +178,16 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
                     : " — no discoverable types found");
 
             var hookHandlerTypes = DiscoverHookHandlers(assembly);
+            // Attribution by delta rather than by an out-parameter: every registration path already
+            // appends to _registeredExtensionServices, and a reflective test pins RegisterServices'
+            // signature, so widening it to report the same information twice would break that test
+            // to say something the loader already knows.
+            var registeredBefore = _registeredExtensionServices.Count;
             var registeredServiceNames = RegisterServices(discoveredImplementations, extension.Manifest);
+            var implementationTypeNames = _registeredExtensionServices
+                .Skip(registeredBefore)
+                .Select(entry => entry.Implementation.FullName ?? entry.Implementation.Name)
+                .ToList();
             RegisterHookHandlers(hookHandlerTypes, registeredServiceNames);
             InvokeServiceContributors(assembly, registeredServiceNames);
 
@@ -194,6 +203,8 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
                 RegisteredServices = registeredServiceNames,
                 Enabled = extension.Manifest.Enabled,
                 Nav = extension.Manifest.Nav,
+                EndpointPhase = extension.Manifest.ResolvedEndpointPhase,
+                RegisteredImplementationTypes = implementationTypeNames,
                 ConfigSchema = extension.Manifest.ConfigSchema
             };
 
@@ -262,10 +273,7 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
     /// </summary>
     public static void MapExtensionEndpoints(WebApplication app)
     {
-        // Ordered, not registration order. OrderBy is stable, so contributors sharing an Order
-        // keep their previous relative sequence and only a contributor that asks to move moves.
-        foreach (var contributor in app.Services.GetServices<IEndpointContributor>().OrderBy(c => c.Order))
-            contributor.MapEndpoints(app);
+        MapEndpointContributors(app, ExtensionEndpointPhase.BeforeAuthentication);
 
         foreach (var apiContributor in app.Services.GetServices<IApiContributor>())
         {
@@ -275,6 +283,65 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
             var group = app.MapGroup($"/api/extensions/{extId}");
             apiContributor.MapApiRoutes(group);
         }
+    }
+
+    /// <summary>
+    /// Maps the endpoints of every extension that asked to run BEHIND authentication.
+    /// </summary>
+    /// <remarks>
+    /// Called after the authentication middleware, so these routes are subject to the gateway's
+    /// auth and its origin checks like any other API route. Separate from
+    /// <see cref="MapExtensionEndpoints"/> rather than a flag on it, because the two calls have to
+    /// happen at different points in the pipeline and a single call cannot be in two places.
+    /// </remarks>
+    /// <param name="app">The application being built.</param>
+    public static void MapExtensionEndpointsAfterAuthentication(WebApplication app)
+    {
+        MapEndpointContributors(app, ExtensionEndpointPhase.AfterAuthentication);
+    }
+
+    /// <summary>
+    /// Invokes the contributors belonging to one pipeline phase, in <c>Order</c> sequence.
+    /// </summary>
+    /// <remarks>
+    /// A contributor is attributed to an extension by its implementation type name, recorded when
+    /// the extension registered it. A contributor that matches no loaded extension - anything the
+    /// gateway registered directly - is treated as BeforeAuthentication, which is exactly where it
+    /// has always mapped. That default is what keeps this change invisible to everything that was
+    /// working before it.
+    /// </remarks>
+    private static void MapEndpointContributors(WebApplication app, ExtensionEndpointPhase phase)
+    {
+        var phaseByType = BuildPhaseLookup(app);
+
+        // Ordered, not registration order. OrderBy is stable, so contributors sharing an Order keep
+        // their previous relative sequence and only a contributor that asks to move moves.
+        foreach (var contributor in app.Services.GetServices<IEndpointContributor>().OrderBy(c => c.Order))
+        {
+            var name = contributor.GetType().FullName;
+            var contributorPhase = name is not null && phaseByType.TryGetValue(name, out var declared)
+                ? declared
+                : ExtensionEndpointPhase.BeforeAuthentication;
+
+            if (contributorPhase == phase)
+                contributor.MapEndpoints(app);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, ExtensionEndpointPhase> BuildPhaseLookup(WebApplication app)
+    {
+        var lookup = new Dictionary<string, ExtensionEndpointPhase>(StringComparer.Ordinal);
+        var loader = app.Services.GetService<IExtensionLoader>();
+        if (loader is null)
+            return lookup;
+
+        foreach (var extension in loader.GetLoaded())
+        {
+            foreach (var typeName in extension.RegisteredImplementationTypes)
+                lookup[typeName] = extension.EndpointPhase;
+        }
+
+        return lookup;
     }
 
     private static ExtensionManifest ReadAndValidateManifest(IFileSystem fileSystem, string manifestPath, string extensionDirectory)

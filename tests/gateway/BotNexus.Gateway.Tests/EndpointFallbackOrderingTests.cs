@@ -1,4 +1,6 @@
 using BotNexus.Gateway.Abstractions.Extensions;
+using BotNexus.Gateway.Extensions;
+using NSubstitute;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -98,6 +100,90 @@ public sealed class EndpointFallbackOrderingTests
         IEndpointContributor contributor = new DefaultOrderContributor();
 
         Assert.Equal(0, contributor.Order);
+    }
+
+    // Third-party code must not land ahead of the gateway's authentication. The two passes are what
+    // make that possible without moving the portal's own contributor, which has to stay in front to
+    // serve the page a user authenticates from.
+    [Fact]
+    public void An_extension_declaring_post_auth_maps_only_in_the_post_auth_pass()
+    {
+        var log = new List<string>();
+        var app = AppWith(log);
+
+        AssemblyLoadContextExtensionLoader.MapExtensionEndpoints(app);
+        Assert.Equal(["Pre"], log);
+
+        AssemblyLoadContextExtensionLoader.MapExtensionEndpointsAfterAuthentication(app);
+        Assert.Equal(["Pre", "Post"], log);
+    }
+
+    // The default keeps everything that was working where it was. A contributor the gateway
+    // registered directly matches no extension, and must still map before authentication.
+    [Fact]
+    public void A_contributor_belonging_to_no_extension_maps_before_authentication()
+    {
+        var log = new List<string>();
+        var services = new ServiceCollection();
+        services.AddSingleton<IEndpointContributor>(new RecordingContributor("Unattributed", 0, log));
+        var app = BuildApp(services);
+
+        AssemblyLoadContextExtensionLoader.MapExtensionEndpoints(app);
+
+        Assert.Equal(["Unattributed"], log);
+    }
+
+    /// <summary>
+    /// Builds an application whose contributors are attributed to extensions declaring the given
+    /// phases, mirroring how the loader records implementation type names at registration.
+    /// </summary>
+    private static WebApplication AppWith(List<string> log)
+    {
+        var services = new ServiceCollection();
+        IEndpointContributor pre = new PreAuthContributor(log);
+        IEndpointContributor post = new PostAuthContributor(log);
+        services.AddSingleton(pre);
+        services.AddSingleton(post);
+
+        var loader = Substitute.For<IExtensionLoader>();
+        loader.GetLoaded().Returns(new List<LoadedExtension>
+        {
+            Extension("pre", ExtensionEndpointPhase.BeforeAuthentication, pre.GetType().FullName!),
+            Extension("post", ExtensionEndpointPhase.AfterAuthentication, post.GetType().FullName!),
+        });
+        services.AddSingleton(loader);
+
+        return BuildApp(services);
+    }
+
+    private static LoadedExtension Extension(string id, ExtensionEndpointPhase phase, string typeName) => new()
+    {
+        ExtensionId = id,
+        Name = id,
+        Version = "1.0.0",
+        DirectoryPath = "/tmp/" + id,
+        EntryAssemblyPath = "/tmp/" + id + "/x.dll",
+        LoadedAtUtc = DateTimeOffset.UnixEpoch,
+        EndpointPhase = phase,
+        RegisteredImplementationTypes = [typeName],
+    };
+
+    private sealed class PreAuthContributor(List<string> log) : IEndpointContributor
+    {
+        public void MapEndpoints(WebApplication app) => log.Add("Pre");
+    }
+
+    private sealed class PostAuthContributor(List<string> log) : IEndpointContributor
+    {
+        public void MapEndpoints(WebApplication app) => log.Add("Post");
+    }
+
+    private static WebApplication BuildApp(ServiceCollection services)
+    {
+        var builder = WebApplication.CreateBuilder();
+        foreach (var descriptor in services)
+            builder.Services.Add(descriptor);
+        return builder.Build();
     }
 
     private sealed class RecordingContributor(string name, int order, List<string> log) : IEndpointContributor

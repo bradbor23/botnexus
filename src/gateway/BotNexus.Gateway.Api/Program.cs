@@ -652,6 +652,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Extensions that asked to run behind authentication map here, after the auth and rate-limiting
+// middleware above, so their routes are subject to the same checks as any other API route. The
+// pre-auth pass ran before UseCors, because the portal shell has to be reachable to authenticate.
+AssemblyLoadContextExtensionLoader.MapExtensionEndpointsAfterAuthentication(app);
+
 app.MapControllers();
 app.MapGet("/health", async (IServiceProvider sp) =>
 {

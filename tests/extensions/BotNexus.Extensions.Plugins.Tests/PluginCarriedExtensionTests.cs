@@ -57,6 +57,7 @@ public sealed class PluginCarriedExtensionTests : IDisposable
     private static string ExtensionManifestJson(string id, string entryAssembly) =>
         "{ \"id\": \"" + id + "\", \"name\": \"Test Extension\", \"version\": \"1.0.0\", \"entryAssembly\": \""
         + entryAssembly + "\", \"extensionTypes\": [\"endpoint-contributor\"], \"enabled\": true,"
+        + " \"endpointPhase\": \"after-authentication\","
         + " \"nav\": [{ \"id\": \"test\", \"label\": \"Test\", \"path\": \"/test\" }] }";
 
     /// <summary>Writes a plugin directory on disk, bypassing install, for deployer-only tests.</summary>
@@ -176,6 +177,44 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         Assert.Equal("extension.entryAssembly", result.Field);
         Assert.Contains("prebuilt and committed", result.Message);
         Assert.False(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));
+    }
+
+    // Contributors map ahead of authentication by default, so a plugin that says nothing would
+    // inherit an unauthenticated position by accident. Requiring the declaration makes the
+    // placement a decision rather than an inheritance.
+    [Fact]
+    public void DeployRefusesACarriedExtensionThatDoesNotSitBehindAuthentication()
+    {
+        var files = CarriedPluginContent();
+        files["botnexus-extension.json"] =
+            "{ \"id\": \"test-extension\", \"entryAssembly\": \"lib/Test.Extension.dll\" }";
+        var pluginDir = WritePluginDirectory("code-plugin", files);
+
+        var result = new PluginExtensionDeployer().Deploy(
+            "code-plugin", pluginDir, new PluginExtensionRef { Manifest = "botnexus-extension.json" }, _extensionsRoot);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("extension.endpointPhase", result.Field);
+        Assert.Contains("after-authentication", result.Message);
+        Assert.False(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));
+    }
+
+    // An explicit pre-auth declaration is refused just as firmly as an absent one - the point is
+    // where the code runs, not whether the author wrote something.
+    [Fact]
+    public void DeployRefusesAnExplicitBeforeAuthenticationDeclaration()
+    {
+        var files = CarriedPluginContent();
+        files["botnexus-extension.json"] =
+            "{ \"id\": \"test-extension\", \"entryAssembly\": \"lib/Test.Extension.dll\","
+            + " \"endpointPhase\": \"before-authentication\" }";
+        var pluginDir = WritePluginDirectory("code-plugin", files);
+
+        var result = new PluginExtensionDeployer().Deploy(
+            "code-plugin", pluginDir, new PluginExtensionRef { Manifest = "botnexus-extension.json" }, _extensionsRoot);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("extension.endpointPhase", result.Field);
     }
 
     // Install runs inside the gateway process, which has loaded extensions' assemblies mapped.

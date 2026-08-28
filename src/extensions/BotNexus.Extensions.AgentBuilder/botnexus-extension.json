@@ -17,5 +17,6 @@
       "order": 65,
       "external": true
     }
-  ]
+  ],
+  "endpointPhase": "after-authentication"
 }

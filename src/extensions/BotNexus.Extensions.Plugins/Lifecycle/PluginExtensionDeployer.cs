@@ -149,6 +149,19 @@ public sealed class PluginExtensionDeployer
                 $"Carried extension '{manifest.Id}' names entry assembly '{manifest.EntryAssembly}', which is not present in the plugin. A carried extension must be prebuilt and committed.");
         }
 
+        // Third-party code must not land ahead of the gateway's authentication. Contributors map
+        // before it by default - that is where they have always mapped, and the portal shell needs
+        // it to serve the page a user authenticates from - so a plugin that says nothing would
+        // inherit an unauthenticated position by accident. Requiring the declaration makes the
+        // placement a decision its author had to make rather than one they fell into.
+        if (!IsAfterAuthentication(manifest.EndpointPhase))
+        {
+            return Fail(
+                pluginName,
+                "extension.endpointPhase",
+                $"Carried extension '{manifest.Id}' must declare \"endpointPhase\": \"after-authentication\" so its routes sit behind the gateway's authentication. Extensions mapping ahead of authentication cannot be installed as plugins.");
+        }
+
         var destination = Path.Combine(extensionsRoot, manifest.Id);
         if (Directory.Exists(destination))
         {
@@ -308,6 +321,13 @@ public sealed class PluginExtensionDeployer
     private static bool IsExcluded(string relativePath) =>
         ExcludedTopLevelDirectories.Any(dir =>
             relativePath.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase));
+
+    // Mirrors the gateway's own lenient parse: "after-authentication", "afterauthentication" and
+    // "AfterAuthentication" all count. Anything else, including absent, does not.
+    private static bool IsAfterAuthentication(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Trim().Replace("-", string.Empty, StringComparison.Ordinal)
+            .Equals("afterauthentication", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSafeSegment(string? value) =>
         !string.IsNullOrWhiteSpace(value)
