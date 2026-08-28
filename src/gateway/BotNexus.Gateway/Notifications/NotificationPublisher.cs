@@ -9,9 +9,11 @@ namespace BotNexus.Gateway.Notifications;
 /// </summary>
 public sealed class NotificationPublisher(
     INotificationStore store,
+    INotificationBroadcaster? broadcaster = null,
     ILogger<NotificationPublisher>? logger = null) : INotificationPublisher
 {
     private readonly INotificationStore _store = store;
+    private readonly INotificationBroadcaster? _broadcaster = broadcaster;
     private readonly ILogger<NotificationPublisher> _logger = logger ?? NullLogger<NotificationPublisher>.Instance;
 
     /// <inheritdoc />
@@ -22,7 +24,13 @@ public sealed class NotificationPublisher(
 
         try
         {
-            await _store.AppendAsync(notification, ct).ConfigureAwait(false);
+            // Stored FIRST, then broadcast. A client that misses the push still finds it on the
+            // next read; a client pushed something that was never stored would show a notification
+            // that vanishes on refresh.
+            var stored = await _store.AppendAsync(notification, ct).ConfigureAwait(false);
+
+            if (_broadcaster is not null)
+                await _broadcaster.PublishAsync(stored, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -1,0 +1,216 @@
+@using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services
+@implements IDisposable
+@inject IServiceProvider Services
+@inject NavigationManager Nav
+
+@*
+    The notification centre: a bell, an unread count, and the list behind it.
+
+    Notifications arrive two ways and both are handled here. A push over SignalR updates the badge
+    live for a connected portal; a read on open covers everything that happened while this browser
+    was closed, on another device, or disconnected. The store is authoritative either way, which is
+    what lets the push be lossy without anything going missing.
+*@
+
+@* Absent when the notifications client is not registered. The banner is on EVERY page, so a
+   component that threw on a missing service would take the whole layout down rather than just
+   itself - which is how a portal ends up rendering nothing at all. *@
+@if (_api is not null)
+{
+<div class="notification-centre" data-testid="notification-centre">
+    <button class="banner-notifications-btn"
+            data-testid="notification-bell"
+            title="@(_unread > 0 ? $"{_unread} unread notification(s)" : "Notifications")"
+            aria-label="@(_unread > 0 ? $"Notifications, {_unread} unread" : "Notifications")"
+            @onclick="ToggleAsync">
+        <Icon Name="notifications" Size="16" Class="bn-icon-inherit" />
+        @if (_unread > 0)
+        {
+            <span class="notification-badge" data-testid="notification-badge">@(_unread > 99 ? "99+" : _unread.ToString())</span>
+        }
+    </button>
+
+    @if (_open)
+    {
+        <div class="notification-panel" data-testid="notification-panel">
+            <header class="notification-panel-header">
+                <span class="t-label">Notifications</span>
+                <div class="notification-panel-actions">
+                    @if (_unread > 0)
+                    {
+                        <button class="toolbar-btn"
+                                data-testid="notification-mark-all"
+                                @onclick="MarkAllReadAsync">Mark all read</button>
+                    }
+                    <button class="toolbar-btn"
+                            data-testid="notification-close"
+                            @onclick="() => _open = false">Close</button>
+                </div>
+            </header>
+
+            @if (_loading)
+            {
+                <div class="config-loading" aria-live="polite" data-testid="notification-loading">
+                    <div class="loading-spinner small"></div>
+                    <span>Loading.</span>
+                </div>
+            }
+            else if (_items.Count == 0)
+            {
+                @* An empty feed is the ordinary state of a healthy gateway, so it reads as
+                   reassurance rather than as an error or an empty-table shrug. *@
+                <div class="notification-empty" data-testid="notification-empty">
+                    <p>Nothing to report. Agent failures, blocked agents and failed scheduled runs appear here.</p>
+                </div>
+            }
+            else
+            {
+                <ul class="notification-list">
+                    @foreach (var item in _items)
+                    {
+                        <li class="notification-item @(item.IsUnread ? "unread" : null) severity-@item.Severity.ToLowerInvariant()"
+                            data-testid="notification-item"
+                            data-notification-id="@item.Id"
+                            data-unread="@(item.IsUnread ? "true" : "false")">
+                            <div class="notification-item-main" @onclick="() => OpenAsync(item)">
+                                <span class="notification-item-title t-label">@item.Title</span>
+                                @if (!string.IsNullOrWhiteSpace(item.Body))
+                                {
+                                    <span class="notification-item-body t-caption">@item.Body</span>
+                                }
+                                <span class="notification-item-time t-caption">@Relative(item.CreatedAtUtc)</span>
+                            </div>
+                            <button class="toolbar-btn notification-dismiss"
+                                    data-testid="notification-dismiss"
+                                    title="Dismiss"
+                                    aria-label="Dismiss @item.Title"
+                                    @onclick="() => DismissAsync(item)">&times;</button>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    }
+</div>
+
+}
+
+@code {
+    private NotificationsApiClient? _api;
+    private GatewayHubConnection? _hub;
+    private IReadOnlyList<NotificationDto> _items = [];
+    private int _unread;
+    private bool _open;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _api = Services.GetService(typeof(NotificationsApiClient)) as NotificationsApiClient;
+        _hub = Services.GetService(typeof(GatewayHubConnection)) as GatewayHubConnection;
+
+        if (_api is null)
+            return;
+
+        _api.Changed += HandleChanged;
+
+        // The live push is a bonus, not a requirement: without it the badge is still correct on
+        // open, it just does not update between opens.
+        if (_hub is not null)
+            _hub.OnNotificationRaised += HandleRaised;
+
+        // The badge is correct before the panel is ever opened, and covers everything raised while
+        // this browser was closed or on another device.
+        _unread = await _api.UnreadCountAsync();
+    }
+
+    public void Dispose()
+    {
+        if (_hub is not null)
+            _hub.OnNotificationRaised -= HandleRaised;
+
+        if (_api is not null)
+            _api.Changed -= HandleChanged;
+    }
+
+    // A push updates the badge without a round trip. The list itself is only refreshed when the
+    // panel is open, so a closed panel costs nothing.
+    private void HandleRaised(NotificationRaisedPayload payload) => _ = InvokeAsync(async () =>
+    {
+        _unread++;
+
+        if (_open)
+        {
+            _items = [payload.ToDto(), .. _items];
+        }
+
+        await Task.CompletedTask;
+        StateHasChanged();
+    });
+
+    private void HandleChanged() => _ = InvokeAsync(async () =>
+    {
+        _unread = await _api!.UnreadCountAsync();
+        StateHasChanged();
+    });
+
+    private async Task ToggleAsync()
+    {
+        _open = !_open;
+
+        if (!_open)
+            return;
+
+        _loading = true;
+        StateHasChanged();
+
+        _items = await _api!.ListAsync(includeRead: true, limit: 50);
+        _unread = await _api!.UnreadCountAsync();
+        _loading = false;
+    }
+
+    // Opening a notification is the act of having seen it, so it is marked read here rather than
+    // requiring a separate gesture nobody would make.
+    private async Task OpenAsync(NotificationDto item)
+    {
+        if (item.IsUnread)
+            await _api!.MarkReadAsync(item.Id);
+
+        if (!string.IsNullOrWhiteSpace(item.Link))
+        {
+            _open = false;
+            Nav.NavigateTo(item.Link!);
+        }
+        else
+        {
+            _items = await _api!.ListAsync(includeRead: true, limit: 50);
+        }
+    }
+
+    private async Task DismissAsync(NotificationDto item)
+    {
+        if (await _api!.DeleteAsync(item.Id))
+            _items = [.. _items.Where(i => !string.Equals(i.Id, item.Id, StringComparison.Ordinal))];
+    }
+
+    private async Task MarkAllReadAsync()
+    {
+        if (await _api!.MarkAllReadAsync())
+            _items = await _api!.ListAsync(includeRead: true, limit: 50);
+    }
+
+    // Relative time, because "what happened while I was away" is a question about recency, not
+    // about clock times.
+    private static string Relative(DateTimeOffset when)
+    {
+        var elapsed = DateTimeOffset.UtcNow - when;
+
+        return elapsed switch
+        {
+            { TotalSeconds: < 60 } => "just now",
+            { TotalMinutes: < 60 } => $"{(int)elapsed.TotalMinutes}m ago",
+            { TotalHours: < 24 } => $"{(int)elapsed.TotalHours}h ago",
+            { TotalDays: < 7 } => $"{(int)elapsed.TotalDays}d ago",
+            _ => when.UtcDateTime.ToString("d MMM"),
+        };
+    }
+}

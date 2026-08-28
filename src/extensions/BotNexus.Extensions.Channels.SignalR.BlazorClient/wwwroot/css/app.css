@@ -7687,6 +7687,7 @@ h3.conversation-title.editable:hover {
 .bn-icon-guide { color: #3B82F6; }
 .bn-icon-help { color: #3B82F6; }
 .bn-icon-light-mode { color: #F59E0B; }
+.bn-icon-notifications { color: #22C55E; }
 .bn-icon-pause { color: #F59E0B; }
 .bn-icon-pin { color: #F59E0B; }
 .bn-icon-plugins { color: #14B8A6; }
@@ -7816,4 +7817,141 @@ h3.conversation-title.editable:hover {
     min-height: 0;
     border: 0;
     background: var(--bg-base);
+}
+
+/* ── Notification centre ────────────────────────────────────────────────────
+   The bell sits in the banner beside the other header actions; the panel hangs
+   from it as a positioned dropdown rather than a modal, because glancing at
+   what happened should not take the page away from you. */
+
+.notification-centre {
+    position: relative;
+    display: inline-flex;
+}
+
+.banner-notifications-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.banner-notifications-btn:hover {
+    background: var(--bg-surface);
+    border-color: var(--border);
+}
+
+/* The badge is the whole point of the bell: it has to read at a glance without
+   being loud enough to nag when it is empty - so it only exists when non-zero. */
+.notification-badge {
+    position: absolute;
+    top: -0.15rem;
+    right: -0.15rem;
+    min-width: 1rem;
+    padding: 0 0.2rem;
+    border-radius: 999px;
+    background: var(--error);
+    color: #fff;
+    font-size: 0.625rem;
+    line-height: 1rem;
+    text-align: center;
+    font-weight: var(--weight-medium, 600);
+}
+
+.notification-panel {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    right: 0;
+    z-index: 60;
+    width: min(24rem, calc(100vw - 2rem));
+    max-height: min(28rem, 70vh);
+    overflow-y: auto;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.notification-panel-header {
+    position: sticky;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.notification-panel-actions {
+    display: flex;
+    gap: 0.35rem;
+}
+
+.notification-empty {
+    padding: 1rem 0.75rem;
+    color: var(--text-muted);
+}
+
+.notification-empty p {
+    margin: 0;
+}
+
+.notification-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.notification-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.55rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.notification-item:last-child {
+    border-bottom: 0;
+}
+
+/* Unread is carried by a leading accent bar rather than a background wash: the
+   list stays legible in both themes and an unread item does not look disabled. */
+.notification-item.unread {
+    box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.notification-item.severity-error {
+    box-shadow: inset 3px 0 0 0 var(--error);
+}
+
+.notification-item-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.notification-item-title {
+    color: var(--text-primary);
+}
+
+.notification-item-body,
+.notification-item-time {
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.notification-dismiss {
+    flex: 0 0 auto;
+    line-height: 1;
 }

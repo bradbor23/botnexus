@@ -36,9 +36,12 @@ public static class NotificationStoreServiceCollectionExtensions
 
         // Advisory publisher over that store. Registered here so a caller raising a notification
         // never has to know where notifications are kept.
+        services.TryAddSingleton<INotificationBroadcaster, InMemoryNotificationBroadcaster>();
+
         services.TryAddSingleton<INotificationPublisher>(sp =>
             new NotificationPublisher(
                 sp.GetRequiredService<INotificationStore>(),
+                sp.GetService<INotificationBroadcaster>(),
                 sp.GetService<ILogger<NotificationPublisher>>()));
 
         return services;

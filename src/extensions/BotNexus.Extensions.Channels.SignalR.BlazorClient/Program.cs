@@ -39,6 +39,7 @@ builder.Services.AddScoped<ToolsApiClient>();
 // "No registered service of type 'PluginsApiClient'" and the page never rendered at all.
 builder.Services.AddScoped<PluginsApiClient>();
 builder.Services.AddScoped<NavOrderApiClient>();
+builder.Services.AddScoped<NotificationsApiClient>();
 builder.Services.AddScoped<IPortalPreferencesService, PortalPreferencesService>();
 
 await builder.Build().RunAsync();
