@@ -74,6 +74,39 @@ browser will ask for permission; granting it also opts you in.
 That button is the only way in, and that is a browser rule rather than a choice — a permission
 prompt raised any other way is ignored by Chrome and refused outright by Safari.
 
+**If there is no button, the panel says why.** There are two quite different reasons it can be
+missing, and they have opposite remedies — the panel tells them apart, and so do the two sections
+below.
+
+### The portal must be served securely
+
+This is the one that catches most people, and it is not a browser setting.
+
+Browsers only expose the Notification API in a **secure context**: HTTPS, or `localhost`. A portal
+served over plain `http://` to a LAN address or hostname is neither. In that case the browser
+reports the permission as *denied* before anyone has been asked, and **no site setting, flag or
+re-prompt can change it**. Chasing it through browser settings is wasted effort.
+
+Two things fix it:
+
+- **Serve the gateway over HTTPS**, or
+- **reach it on `localhost`**, which browsers treat as secure even over plain http.
+
+The second is usually a port-forward. The panel prints the exact command for your gateway; note
+that it forwards to the gateway's *own address* rather than to `localhost`:
+
+```bash
+ssh -L 5005:192.168.1.10:5005 192.168.1.10
+```
+
+The textbook `ssh -L 5005:localhost:5005 host` form looks equivalent and often is not: a gateway
+bound only to its LAN address has nothing listening on its own loopback, so that tunnel forwards to
+a closed port and the portal simply never loads. Forwarding to the host's own address works whether
+it binds loopback, that address, or everything.
+
+Then open `http://localhost:5005` and enable alerts there. The permission belongs to that origin,
+so it is remembered for the tunnelled address rather than the LAN one.
+
 ### What you will and will not be interrupted by
 
 An alert is **suppressed while the portal is visible and focused**. You are already looking at the
@@ -101,11 +134,23 @@ public machine cannot inherit your choice.
 Click **Desktop alerts on** to turn them off again. That only clears your opt-in — the browser
 permission is left alone, so turning them back on later does not re-prompt.
 
-### If the panel says alerts are blocked
+### If the permission was refused
+
+This is the other case: the portal *is* served securely, the prompt appeared, and it was dismissed
+or refused.
 
 Once a browser permission has been **denied**, no site can ever ask again from script. There is
-nothing the portal can offer you at that point, so it says so instead of showing a button that
-cannot work. Clear it in your browser's own site settings for the gateway's address, then reload.
+nothing the portal can offer at that point, so it says so instead of showing a button that cannot
+work, and gives the steps for your browser:
+
+| Browser | Where to clear it |
+| --- | --- |
+| Chrome | The icon at the left of the address bar → Site settings → Notifications → Allow |
+| Edge | The icon at the left of the address bar → Permissions for this site → Notifications → Allow |
+| Firefox | The padlock at the left of the address bar → clear the blocked Notifications permission |
+| Safari | Safari → Settings → Websites → Notifications → find the site → Allow |
+
+Reload afterwards.
 
 ### Browsers that cannot do this
 
@@ -115,6 +160,28 @@ nothing to enable.
 **Android Chrome is the notable case.** It permits notifications only through a service worker, so
 this layer does not work there — the alert fails silently and the notification still arrives in the
 bell as normal. Reaching an Android phone properly needs web push, which is not built yet.
+
+## Checking that it works
+
+Every real notification is raised by something going wrong, which makes the feature awkward to
+verify — you would have to break something to find out whether being told works.
+
+**Send test** in the panel footer raises one on purpose:
+
+```bash
+curl -X POST http://your-gateway:5005/api/notifications/test
+```
+
+It goes through the same publisher as everything else, so what it proves is the real path: the
+notification is stored, pushed over SignalR to every connected portal, counted in the badge, and
+raised as a desktop alert if this browser is set up for one. A test that wrote straight to the
+store would prove nothing about the parts that actually fail.
+
+The button is offered even where desktop alerts cannot work, because the store, the push and the
+badge are worth checking on their own.
+
+If the badge moves but no toast appears, the delivery chain is fine and the problem is in this
+browser — see the two sections above.
 
 ## Where notifications live
 
@@ -146,6 +213,7 @@ other endpoint.
 | `POST` | `/api/notifications/{id}/read` | Mark one read |
 | `POST` | `/api/notifications/read-all` | Mark everything read |
 | `DELETE` | `/api/notifications/{id}` | Delete one permanently |
+| `POST` | `/api/notifications/test` | Raise a test notification through the real publisher |
 
 `GET /api/notifications` takes two query parameters:
 
@@ -201,6 +269,10 @@ served by a gateway without the notifications API. Check `GET /api/notifications
 arriving. The badge is still correct on open, so nothing is lost. Check the gateway log for
 `NotificationSignalRBridge started.` — and note that the console only shows warnings and above, so
 look in `~/.botnexus/logs/` rather than at the terminal.
+
+**There is no Enable desktop alerts button.** Either the portal is not served over a secure
+connection, or the permission was refused — the panel says which, and they are covered above. The
+first cannot be fixed in browser settings; the second cannot be fixed anywhere else.
 
 **Alerts are on, but I get no toast.** Check the four cases in the table above first — a portal that
 is visible and focused is *supposed* to stay quiet. Then check your OS: macOS Focus, Windows Focus
