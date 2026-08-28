@@ -33,6 +33,13 @@ public static class NotificationStoreServiceCollectionExtensions
                 sp.GetService<TimeProvider>(),
                 sp.GetService<ILogger<SqliteNotificationStore>>()));
 
+        // Advisory publisher over that store. Registered here so a caller raising a notification
+        // never has to know where notifications are kept.
+        services.TryAddSingleton<INotificationPublisher>(sp =>
+            new NotificationPublisher(
+                sp.GetRequiredService<INotificationStore>(),
+                sp.GetService<ILogger<NotificationPublisher>>()));
+
         return services;
     }
 }
