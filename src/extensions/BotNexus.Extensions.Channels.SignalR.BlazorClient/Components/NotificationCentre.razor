@@ -29,12 +29,21 @@
             <span class="notification-badge" data-testid="notification-badge">@(_unread > 99 ? "99+" : _unread.ToString())</span>
         }
     </button>
+</div>
+}
 
-    @if (_open)
-    {
-        <div class="notification-panel" data-testid="notification-panel">
+@* The panel lives OUTSIDE the bell, in a viewport-fixed overlay, because the top bar clips its own
+   overflow - a dropdown parented to the bell is cut off at the bar's edge. This is the same shape
+   the provider usage popover uses, and it buys click-anywhere-to-dismiss for free. The overlay is
+   transparent: this is a glanceable readout, not a decision that should dim the app behind it. *@
+@if (_api is not null && _open)
+{
+    <div class="notification-overlay" @onclick="Close" @onkeydown="HandleKeyDown" tabindex="-1">
+        <div class="notification-panel" role="dialog" aria-modal="true"
+             aria-labelledby="notification-panel-title"
+             data-testid="notification-panel" @onclick:stopPropagation="true">
             <header class="notification-panel-header">
-                <span class="t-label">Notifications</span>
+                <span id="notification-panel-title" class="t-label">Notifications</span>
                 <div class="notification-panel-actions">
                     @if (_unread > 0)
                     {
@@ -44,7 +53,7 @@
                     }
                     <button class="toolbar-btn"
                             data-testid="notification-close"
-                            @onclick="() => _open = false">Close</button>
+                            @onclick="Close">Close</button>
                 </div>
             </header>
 
@@ -90,9 +99,7 @@
                 </ul>
             }
         </div>
-    }
-</div>
-
+    </div>
 }
 
 @code {
@@ -152,6 +159,16 @@
         _unread = await _api!.UnreadCountAsync();
         StateHasChanged();
     });
+
+    private void Close() => _open = false;
+
+    // Escape closes it like any other transient surface; the overlay carries the handler because it
+    // is the element that holds focus while the panel is open.
+    private void HandleKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            Close();
+    }
 
     private async Task ToggleAsync()
     {

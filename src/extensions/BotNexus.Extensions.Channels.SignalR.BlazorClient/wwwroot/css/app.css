@@ -7821,8 +7821,13 @@ h3.conversation-title.editable:hover {
 
 /* ── Notification centre ────────────────────────────────────────────────────
    The bell sits in the banner beside the other header actions; the panel hangs
-   from it as a positioned dropdown rather than a modal, because glancing at
-   what happened should not take the page away from you. */
+   under the bar rather than opening a modal, because glancing at what happened
+   should not take the page away from you.
+
+   The panel cannot be parented to the bell: .banner-header clips its own
+   overflow, so an absolutely-positioned dropdown is cut off at the bar's edge.
+   It hangs from a viewport-fixed overlay instead - the same shape the provider
+   usage popover uses, anchored to the same edge so the two line up. */
 
 .notification-centre {
     position: relative;
@@ -7864,13 +7869,21 @@ h3.conversation-title.editable:hover {
     font-weight: var(--weight-medium, 600);
 }
 
+/* Transparent, not dimmed: a click anywhere closes the panel, but the app behind
+   it is still readable while the list is open. */
+.notification-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: transparent;
+}
+
 .notification-panel {
     position: absolute;
-    top: calc(100% + 0.4rem);
-    right: 0;
-    z-index: 60;
-    width: min(24rem, calc(100vw - 2rem));
-    max-height: min(28rem, 70vh);
+    top: calc(var(--density-bar-h) + 8px);
+    right: 12px;
+    width: min(24rem, calc(100vw - 24px));
+    max-height: min(28rem, calc(100vh - var(--density-bar-h) - 24px));
     overflow-y: auto;
     background: var(--bg-surface);
     border: 1px solid var(--border);

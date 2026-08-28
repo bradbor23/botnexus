@@ -222,6 +222,44 @@ public sealed class NotificationCentreTests : IDisposable
         Assert.Empty(cut.FindAll("[data-testid='notification-panel']"));
     }
 
+    // The bug this guards: the panel was a child of the bell, and .banner-header clips its own
+    // overflow, so the list was sliced off at the bottom edge of the top bar and appeared to sit
+    // behind the page. It has to hang from the fixed overlay, outside the clipped bar, instead.
+    [Fact]
+    public void The_panel_hangs_outside_the_clipped_banner()
+    {
+        WithApi();
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        cut.Find("[data-testid='notification-bell']").Click();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-panel']").Count > 0);
+
+        var bell = cut.Find("[data-testid='notification-centre']");
+        Assert.Null(bell.QuerySelector("[data-testid='notification-panel']"));
+        Assert.NotNull(cut.Find(".notification-overlay [data-testid='notification-panel']"));
+    }
+
+    // The overlay covers the viewport so a click anywhere dismisses the panel; the panel itself
+    // must not close when clicked, or the list would vanish on the way to an item.
+    [Fact]
+    public void Clicking_away_closes_the_panel_but_clicking_it_does_not()
+    {
+        WithApi();
+        _handler.ListJson = "[" + Item("a", "Agent run failed", unread: false) + "]";
+
+        var cut = Render();
+        cut.Find("[data-testid='notification-bell']").Click();
+        cut.WaitForState(() => cut.FindAll("[data-testid='notification-item']").Count == 1);
+
+        // Reading an item is a click INSIDE the panel: it must not reach the overlay behind it.
+        cut.Find("[data-testid='notification-item'] .notification-item-main").Click();
+        Assert.Single(cut.FindAll("[data-testid='notification-panel']"));
+
+        cut.Find(".notification-overlay").Click();
+        Assert.Empty(cut.FindAll("[data-testid='notification-panel']"));
+    }
+
     /// <summary>Answers the notification endpoints and records what was called.</summary>
     private sealed class StubHandler : HttpMessageHandler
     {
