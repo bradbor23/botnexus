@@ -26,6 +26,46 @@ public class SignalREndpointContributor : IEndpointContributor
     /// </remarks>
     public int Order => int.MaxValue;
 
+    /// <summary>
+    /// Site-relative paths other loaded extensions declare they serve, which this catch-all must
+    /// leave alone.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the nav entries extensions publish, so a UI extension that already tells the
+    /// portal where it lives does not have to say it twice. The portal's own contribution is
+    /// excluded - claiming a path against itself would make the fallback unreachable.
+    /// </remarks>
+    private static IReadOnlyList<string> ResolveClaimedPaths(WebApplication app)
+    {
+        var loader = app.Services.GetService<IExtensionLoader>();
+        if (loader is null)
+            return [];
+
+        return [.. loader.GetLoaded()
+            .Where(extension => !string.Equals(extension.ExtensionId, "botnexus-signalr", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(extension => extension.Nav)
+            .Select(nav => nav.Path?.Trim())
+            .Where(p => !string.IsNullOrWhiteSpace(p) && p!.StartsWith('/'))
+            .Select(p => p!.TrimEnd('/'))
+            .Where(p => p.Length > 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    // A claim covers the path itself and everything beneath it, because a UI serves its own assets.
+    private static bool ClaimsPath(IReadOnlyList<string> claimed, string path)
+    {
+        foreach (var claim in claimed)
+        {
+            if (path.Equals(claim, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(claim + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public void MapEndpoints(WebApplication app)
     {
         app.MapHub<GatewayHub>("/hub/gateway");
@@ -53,6 +93,11 @@ public class SignalREndpointContributor : IEndpointContributor
 
         var fileProvider = new PhysicalFileProvider(blazorPath);
         var prefix = pathPrefix ?? string.Empty;
+
+        // Resolved once at registration: extensions are loaded before endpoints are mapped, so the
+        // set cannot change afterwards without a restart - which is already required to activate an
+        // extension at all.
+        var claimedPaths = ResolveClaimedPaths(app);
 
         app.Use(async (context, next) =>
         {
@@ -82,10 +127,21 @@ public class SignalREndpointContributor : IEndpointContributor
                     return;
                 }
 
+                // Paths another extension DECLARED are its own, even though nothing has matched
+                // them yet. Ordering alone cannot cover this: it sorts contributors within a
+                // pipeline phase, and an extension that maps AFTER authentication registers its
+                // middleware after this catch-all, which would otherwise answer first and swallow
+                // the route. Reading the declaration keeps that data-driven rather than returning
+                // to a hardcoded list.
+                if (claimedPaths.Count > 0 && ClaimsPath(claimedPaths, path))
+                {
+                    await next();
+                    return;
+                }
+
                 // Paths served by MIDDLEWARE rather than by an endpoint still need naming, because
                 // there is nothing for routing to have matched. The list is limited to surfaces the
-                // gateway itself owns: a UI extension no longer belongs here, because Order =
-                // int.MaxValue means its middleware already ran and short-circuited before this.
+                // gateway itself owns.
                 if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("/hub/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase) ||
