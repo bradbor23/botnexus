@@ -316,9 +316,11 @@ public sealed class NotificationCentreTests : IDisposable
         bool enabled,
         bool secure = true,
         string? browser = "chrome",
-        string? origin = "https://gateway.example")
+        string? origin = "https://gateway.example",
+        bool pushSupported = false,
+        bool pushSubscribed = false)
     {
-        _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.status")
+        _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.statusWithPush")
             .SetResult(new DesktopNotificationStatus
             {
                 Supported = supported,
@@ -327,6 +329,8 @@ public sealed class NotificationCentreTests : IDisposable
                 Secure = secure,
                 Browser = browser,
                 Origin = origin,
+                PushSupported = pushSupported,
+                PushSubscribed = pushSubscribed,
             });
     }
 
@@ -595,6 +599,119 @@ public sealed class NotificationCentreTests : IDisposable
         Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-blocked']"));
         Assert.Empty(cut.FindAll("[data-testid='desktop-alerts-pitch']"));
         Assert.Equal("Desktop alerts on", cut.Find("[data-testid='desktop-alerts-toggle']").TextContent.Trim());
+    }
+
+    // ── Web push ────────────────────────────────────────────────────────────────────────────
+
+    // The distinction that decides whether someone can close the tab. Two transports, one toggle,
+    // so the panel has to say which one is actually running.
+    [Fact]
+    public void Says_when_alerts_only_work_while_the_portal_is_open()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "granted", enabled: true,
+            pushSupported: false, pushSubscribed: false);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Equal(
+            "only while the portal is open",
+            cut.Find("[data-testid='desktop-alerts-transport']").TextContent.Trim());
+    }
+
+    [Fact]
+    public void Says_when_alerts_survive_the_portal_being_closed()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "granted", enabled: true,
+            pushSupported: true, pushSubscribed: true);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+
+        Assert.Equal(
+            "including when the portal is closed",
+            cut.Find("[data-testid='desktop-alerts-transport']").TextContent.Trim());
+    }
+
+    // Push is strictly better than the in-page alert, so it is taken whenever the browser allows
+    // it rather than hidden behind a second switch the reader would have to find.
+    [Fact]
+    public void Enabling_subscribes_to_push_when_the_browser_supports_it()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "default", enabled: false, pushSupported: true);
+        var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
+        request.SetResult(new DesktopNotificationStatus
+        {
+            Supported = true, Permission = "granted", Enabled = true, Secure = true, PushSupported = true,
+        });
+        var enablePush = _ctx.JSInterop.Setup<bool>("botnexusDesktopNotifications.enablePush");
+        enablePush.SetResult(true);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='desktop-alerts-toggle']").Click();
+
+        cut.WaitForState(() => enablePush.Invocations.Count == 1);
+    }
+
+    // A browser without a push manager must not be asked to subscribe - the call would fail and
+    // the in-page alert it CAN do would look like it had failed too.
+    [Fact]
+    public void Enabling_does_not_reach_for_push_when_the_browser_lacks_it()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "default", enabled: false, pushSupported: false);
+        var request = _ctx.JSInterop.Setup<DesktopNotificationStatus>("botnexusDesktopNotifications.request");
+        request.SetResult(new DesktopNotificationStatus
+        {
+            Supported = true, Permission = "granted", Enabled = true, Secure = true, PushSupported = false,
+        });
+        var enablePush = _ctx.JSInterop.Setup<bool>("botnexusDesktopNotifications.enablePush");
+        enablePush.SetResult(true);
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='desktop-alerts-toggle']").Click();
+
+        cut.WaitForState(() => request.Invocations.Count == 1);
+        Assert.Empty(enablePush.Invocations);
+    }
+
+    // Turning alerts off has to drop the subscription too, or the gateway would keep pushing to a
+    // device whose owner just said they did not want to hear from it.
+    [Fact]
+    public void Turning_alerts_off_also_unsubscribes_from_push()
+    {
+        WithApi();
+        WithDesktop(
+            supported: true, permission: "granted", enabled: true,
+            pushSupported: true, pushSubscribed: true);
+        var disablePush = _ctx.JSInterop.Setup<bool>("botnexusDesktopNotifications.disablePush");
+        disablePush.SetResult(true);
+        var setEnabled = _ctx.JSInterop.Setup<DesktopNotificationStatus>(
+            "botnexusDesktopNotifications.setEnabled", _ => true);
+        setEnabled.SetResult(new DesktopNotificationStatus
+        {
+            Supported = true, Permission = "granted", Enabled = false, Secure = true,
+        });
+        _handler.ListJson = "[]";
+
+        var cut = Render();
+        OpenPanel(cut);
+        cut.Find("[data-testid='desktop-alerts-toggle']").Click();
+
+        cut.WaitForState(() => disablePush.Invocations.Count == 1);
     }
 
     // ── Test notification ───────────────────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ using Serilog;
 using System.Reflection;
 using BotNexus.Gateway.Nav;
 using BotNexus.Gateway.Notifications;
+using BotNexus.Gateway.Notifications.Push;
 using BotNexus.Gateway.Tools;
 using BotNexus.Gateway.Webhooks;
 
@@ -277,6 +278,15 @@ builder.Services.AddBotNexusNavOrder(navOrderDbPath);
 // includes being on another device.
 var notificationsDbPath = System.IO.Path.Combine(webhookDataDir, "notifications.sqlite");
 builder.Services.AddBotNexusNotifications(notificationsDbPath);
+
+// Web push - the delivery layer that reaches a device with the portal closed, and the one a phone
+// or desktop client subscribes to in exactly the same way. The VAPID pair is the gateway's
+// identity to every push service and is generated once on first use; regenerating it would
+// silently invalidate every subscription, which is why it lives in a file rather than in memory.
+builder.Services.AddBotNexusWebPush(
+    System.IO.Path.Combine(webhookDataDir, "push-subscriptions.sqlite"),
+    System.IO.Path.Combine(webhookDataDir, "vapid.json"),
+    builder.Configuration["gateway:push:subject"] ?? "https://github.com/sytone/botnexus");
 
 static string? ResolveCronModel(CronJobConfig config)
 {

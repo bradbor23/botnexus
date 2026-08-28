@@ -171,6 +171,18 @@
                         </button>
                     }
 
+                    @* Which transport is running matters: one survives the portal being closed and
+                       the other does not, and a reader deciding whether to shut the tab needs to
+                       know which one they have. *@
+                    @if (_desktop is { IsActive: true })
+                    {
+                        <span class="t-caption notification-transport" data-testid="desktop-alerts-transport">
+                            @(_desktop.PushSubscribed
+                                ? "including when the portal is closed"
+                                : "only while the portal is open")
+                        </span>
+                    }
+
                     @* Offered whatever the desktop-alert state, because it tests the bell and the
                        live push too - not only the toast. *@
                     <button class="toolbar-btn"
@@ -431,11 +443,25 @@
         if (_notifier is null)
             return;
 
-        _desktop = _desktop is { IsActive: true }
-            ? await _notifier.SetEnabledAsync(false)
-            : _desktop is { CanAsk: true }
-                ? await _notifier.RequestAsync()
-                : await _notifier.SetEnabledAsync(true);
+        if (_desktop is { IsActive: true })
+        {
+            await _notifier.DisablePushAsync();
+            _desktop = await _notifier.SetEnabledAsync(false);
+            return;
+        }
+
+        _desktop = _desktop is { CanAsk: true }
+            ? await _notifier.RequestAsync()
+            : await _notifier.SetEnabledAsync(true);
+
+        // Push is strictly better than the in-page alert - it survives the portal being closed -
+        // so it is taken whenever the browser will give it, without a second thing to turn on.
+        // Failing is ordinary: the in-page alert still works, and the panel says which is running.
+        if (_desktop is { IsActive: true, PushSupported: true })
+        {
+            if (await _notifier.EnablePushAsync())
+                _desktop = await _notifier.GetStatusAsync();
+        }
     }
 
     // Opening a notification is the act of having seen it, so it is marked read here rather than

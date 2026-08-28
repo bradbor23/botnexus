@@ -8028,6 +8028,12 @@ h3.conversation-title.editable:hover {
     color: var(--accent);
 }
 
+/* Reads as a caption on the toggle rather than another control. */
+.notification-transport {
+    margin-right: auto;
+    color: var(--text-muted);
+}
+
 .notification-help-error {
     margin: 0;
     color: var(--error);

@@ -29,6 +29,15 @@ public sealed class DesktopNotificationStatus
     /// <summary>Coarse browser family - chrome, edge, firefox, safari or other.</summary>
     [JsonPropertyName("browser")] public string? Browser { get; set; }
 
+    /// <summary>Whether this browser has a service worker and a push manager at all.</summary>
+    [JsonPropertyName("pushSupported")] public bool PushSupported { get; set; }
+
+    /// <summary>
+    /// Whether this browser currently holds a push subscription, which is what lets a notification
+    /// arrive with the portal closed.
+    /// </summary>
+    [JsonPropertyName("pushSubscribed")] public bool PushSubscribed { get; set; }
+
     /// <summary>Toasts will actually be raised: supported, permitted, and opted in.</summary>
     [JsonIgnore]
     public bool IsActive => Supported && Enabled
@@ -73,9 +82,45 @@ public sealed class DesktopNotifier
 
     public DesktopNotifier(IJSRuntime js) => _js = js;
 
-    /// <summary>Reads the current permission and opt-in without prompting for anything.</summary>
+    /// <summary>
+    /// Reads the current permission, opt-in and push subscription without prompting for anything.
+    /// </summary>
     public Task<DesktopNotificationStatus> GetStatusAsync() =>
-        CallAsync("botnexusDesktopNotifications.status");
+        CallAsync("botnexusDesktopNotifications.statusWithPush");
+
+    /// <summary>
+    /// Subscribes this browser to push, so notifications arrive with the portal closed.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort on top of the permission. Push needs a service worker, which needs a secure
+    /// context, and Safari adds conditions of its own - so a false here is ordinary rather than
+    /// exceptional, and simply means alerts work only while the portal is open.
+    /// </remarks>
+    public async Task<bool> EnablePushAsync()
+    {
+        try
+        {
+            return await _js.InvokeAsync<bool>("botnexusDesktopNotifications.enablePush");
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Drops this browser's push subscription, telling the gateway on the way out.</summary>
+    public async Task DisablePushAsync()
+    {
+        try
+        {
+            await _js.InvokeAsync<bool>("botnexusDesktopNotifications.disablePush");
+        }
+        catch
+        {
+            // The gateway prunes an endpoint the push service reports as gone, so a failure here
+            // is self-healing rather than a leak.
+        }
+    }
 
     /// <summary>
     /// Prompts for permission. MUST be called from a user gesture: a prompt raised on load is

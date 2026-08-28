@@ -49,6 +49,110 @@ window.botnexusDesktopNotifications = window.botnexusDesktopNotifications || {
         return 'other';
     },
 
+    // ── Web push ────────────────────────────────────────────────────────────────────────
+    //
+    // The in-page path above only works while the portal is open. Push works when it is closed:
+    // the browser wakes the service worker and IT draws the notification. Both need the same
+    // permission, so the one toggle drives both and push is simply used when it is available.
+
+    _pushSupported: function () {
+        return 'serviceWorker' in navigator && 'PushManager' in window;
+    },
+
+    // Whether THIS browser currently holds a push subscription.
+    pushSubscribed: async function () {
+        if (!this._pushSupported()) return false;
+
+        try {
+            var registration = await navigator.serviceWorker.getRegistration();
+            if (!registration) return false;
+
+            return (await registration.pushManager.getSubscription()) !== null;
+        } catch (e) {
+            return false;
+        }
+    },
+
+    // Subscribes and registers with the gateway. Returns true only if BOTH happened - a
+    // subscription the gateway does not know about would silently never be pushed to.
+    enablePush: async function () {
+        if (!this._pushSupported() || window.Notification.permission !== 'granted') return false;
+
+        try {
+            var registration = await navigator.serviceWorker.ready;
+            var existing = await registration.pushManager.getSubscription();
+
+            var subscription = existing || await registration.pushManager.subscribe({
+                // Required, and a promise: every push MUST result in something the user sees.
+                // The service worker keeps that promise; breaking it costs the subscription.
+                userVisibleOnly: true,
+                applicationServerKey: this._toUint8((await (await fetch('/api/notifications/push/key')).json()).publicKey)
+            });
+
+            var json = subscription.toJSON();
+
+            var response = await fetch('/api/notifications/push/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    endpoint: subscription.endpoint,
+                    p256dh: json.keys ? json.keys.p256dh : null,
+                    auth: json.keys ? json.keys.auth : null
+                })
+            });
+
+            if (!response.ok) {
+                // Do not leave a browser subscribed to a gateway that refused it: the browser
+                // would report itself as subscribed and nothing would ever arrive.
+                if (!existing) await subscription.unsubscribe();
+                return false;
+            }
+
+            return true;
+        } catch (e) {
+            console.warn('[BotNexus] push subscribe failed:', e);
+            return false;
+        }
+    },
+
+    disablePush: async function () {
+        if (!this._pushSupported()) return true;
+
+        try {
+            var registration = await navigator.serviceWorker.getRegistration();
+            if (!registration) return true;
+
+            var subscription = await registration.pushManager.getSubscription();
+            if (!subscription) return true;
+
+            // Tell the gateway first. If this browser dropped the subscription and then failed to
+            // say so, the gateway would keep pushing to a dead endpoint until the push service
+            // reported it gone.
+            await fetch('/api/notifications/push/unsubscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: subscription.endpoint })
+            });
+
+            return await subscription.unsubscribe();
+        } catch (e) {
+            console.warn('[BotNexus] push unsubscribe failed:', e);
+            return false;
+        }
+    },
+
+    // The VAPID key travels as base64url and applicationServerKey wants raw bytes.
+    _toUint8: function (base64url) {
+        var padded = (base64url + '='.repeat((4 - base64url.length % 4) % 4))
+            .replace(/-/g, '+').replace(/_/g, '/');
+        var raw = atob(padded);
+        var out = new Uint8Array(raw.length);
+
+        for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+
+        return out;
+    },
+
     status: function () {
         return {
             supported: this._supported(),
@@ -60,8 +164,18 @@ window.botnexusDesktopNotifications = window.botnexusDesktopNotifications || {
             // sending people to a browser setting that cannot fix it.
             secure: window.isSecureContext === true,
             origin: window.location.origin,
-            browser: this._browser()
+            browser: this._browser(),
+            pushSupported: this._pushSupported()
         };
+    },
+
+    // Status including the push subscription, which can only be read asynchronously. Kept separate
+    // from status() so the synchronous parts stay cheap for the common render.
+    statusWithPush: async function () {
+        var status = this.status();
+        status.pushSubscribed = await this.pushSubscribed();
+
+        return status;
     },
 
     setEnabled: function (on) {
