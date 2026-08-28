@@ -24,6 +24,7 @@ public sealed class PortalNavContributionTests : IDisposable
     private string _navOrderJson = DefaultNavOrderJson;
     private string _contributionsJson = "[]";
     private string _pluginsJson = "[]";
+    private readonly PluginsApiClient _pluginsApi;
 
     private const string DefaultNavOrderJson = """
         [
@@ -86,8 +87,9 @@ public sealed class PortalNavContributionTests : IDisposable
         _ctx.Services.AddSingleton(new SectionsApiClient(http));
         _ctx.Services.AddSingleton(sp => new ConversationSectionsState(sp.GetRequiredService<SectionsApiClient>()));
         _ctx.Services.AddSingleton(new ToolsApiClient(new HttpClient(new FixedJsonHandler(() => "[]")) { BaseAddress = new Uri("http://localhost/") }));
-        _ctx.Services.AddSingleton(new PluginsApiClient(
-            new HttpClient(new FixedJsonHandler(() => _pluginsJson)) { BaseAddress = new Uri("http://localhost/") }));
+        _pluginsApi = new PluginsApiClient(
+            new HttpClient(new PluginsHandler(() => _pluginsJson)) { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddSingleton(_pluginsApi);
         _ctx.Services.AddSingleton(new NavOrderApiClient(
             new HttpClient(new RoutingJsonHandler(() => _navOrderJson, () => _contributionsJson))
             { BaseAddress = new Uri("http://localhost/") }));
@@ -278,6 +280,49 @@ public sealed class PortalNavContributionTests : IDisposable
 
         Assert.DoesNotContain("nav-agent-builder", ids);
         Assert.Contains("nav-other", ids);
+    }
+
+    // Hiding a plugin's entry has to repaint the sidebar in place. Asserting on the SAME rendered
+    // component - never a fresh render - is what makes this about live update rather than about
+    // the filter, which its own tests already cover.
+    [Fact]
+    public async Task The_sidebar_repaints_when_a_plugin_hides_its_entry()
+    {
+        _contributionsJson = AgentBuilderContribution;
+        var cut = RenderLayout();
+        Assert.NotEmpty(cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']"));
+
+        // The real write path, so the event is raised by the code that ships rather than by a
+        // test-only hook.
+        _pluginsJson = """
+            [{"name":"botnexus-agent-builder","source":"/x","resolvedVersion":"abc",
+              "updatesEnabled":true,"installedAtUtc":"2026-08-27T00:00:00Z","fileCount":1,
+              "trustState":1,"updateState":1,
+              "deployedExtensionId":"botnexus-agent-builder","navHidden":true}]
+            """;
+        await _pluginsApi.SetNavVisibilityAsync("botnexus-agent-builder", navHidden: true);
+
+        cut.WaitForState(() => cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']").Count == 0);
+        Assert.NotEmpty(cut.FindAll("a.sidebar-nav-item[data-testid='nav-plugins']"));
+    }
+
+    /// <summary>Answers the plugin list and the nav-visibility write distinctly.</summary>
+    private sealed class PluginsHandler(Func<string> list) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            var json = path.EndsWith("/nav-visibility", StringComparison.Ordinal)
+                ? """{"name":"botnexus-agent-builder","source":"/x","resolvedVersion":"abc","updatesEnabled":true,"installedAtUtc":"2026-08-27T00:00:00Z","fileCount":1,"trustState":1,"updateState":1,"deployedExtensionId":"botnexus-agent-builder","navHidden":true}"""
+                : list();
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     /// <summary>Returns one JSON body for any request; used for the unrelated tools call.</summary>

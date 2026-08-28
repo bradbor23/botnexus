@@ -223,6 +223,10 @@
     private IReadOnlyDictionary<string, int> _navOrderNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<NavContributionDto> _navContributions = [];
 
+    // Resolved once rather than per load: the sidebar subscribes to it, and resolving a different
+    // instance later would leave the subscription attached to an object nothing raises.
+    private PluginsApiClient? _pluginsApi;
+
     private record Announcement(string Id, string Text, string Type = "info");
     private record SidebarAgentItem(string AgentId, string DisplayLabel);
     private List<Announcement> _announcements = [];
@@ -775,6 +779,12 @@
         Store.OnChanged += HandleStateChanged;
         Nav.LocationChanged += OnLocationChanged;
         ToolsApi.Changed += HandleToolsChanged;
+
+        // Optional, for the same reason it is resolved rather than injected: the sidebar must
+        // render where the plugins client is absent.
+        _pluginsApi = Services.GetService(typeof(PluginsApiClient)) as PluginsApiClient;
+        if (_pluginsApi is not null)
+            _pluginsApi.Changed += HandlePluginsChanged;
         PortalLoad.OnReadyChanged += HandleReadyChanged;
         // #2624: the terminal-close re-dial loop raises this so the indicator can show
         // "Reconnecting" during a gateway restart instead of a terminal "Disconnected".
@@ -1489,6 +1499,8 @@
         Store.OnChanged -= HandleStateChanged;
         Nav.LocationChanged -= OnLocationChanged;
         ToolsApi.Changed -= HandleToolsChanged;
+        if (_pluginsApi is not null)
+            _pluginsApi.Changed -= HandlePluginsChanged;
         PortalLoad.OnReadyChanged -= HandleReadyChanged;
         PortalLoad.OnConnectionStateChanged -= HandleStateChanged;
         UpdateStatus.StatusChanged -= HandleStateChanged;
@@ -1567,21 +1579,37 @@
         // A plugin can hide its own contributed entries. The gateway does not filter them, because
         // the nav endpoint reads loaded EXTENSIONS and knows nothing about which plugin installed
         // which - the ownership link lives on the plugin record, so the join happens here.
-        // Resolved optionally rather than injected: the sidebar must render even where the plugins
-        // client is absent, and a hard dependency here would make every layout render depend on a
-        // service that only affects which contributed entries are shown.
-        var pluginsApi = Services.GetService(typeof(PluginsApiClient)) as PluginsApiClient;
-        var hidden = pluginsApi is null
-            ? []
-            : (await pluginsApi.ListAsync())
-                .Where(p => p.NavHidden && !string.IsNullOrWhiteSpace(p.DeployedExtensionId))
-                .Select(p => p.DeployedExtensionId!)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _navContributions = FilterHidden(contributions, await HiddenExtensionIdsAsync());
+    }
 
-        _navContributions = hidden.Count == 0
+    /// <summary>
+    /// Re-reads contributed nav entries and the hidden set, without touching the built-in order.
+    /// </summary>
+    private async Task LoadNavContributionsAsync()
+    {
+        var contributions = await NavOrderApi.ListContributionsAsync();
+        _navContributions = FilterHidden(contributions, await HiddenExtensionIdsAsync());
+    }
+
+    // The gateway's nav endpoint reads loaded EXTENSIONS and knows nothing about which plugin
+    // installed which, so the ownership join happens here.
+    private async Task<HashSet<string>> HiddenExtensionIdsAsync()
+    {
+        if (_pluginsApi is null)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        return (await _pluginsApi.ListAsync())
+            .Where(p => p.NavHidden && !string.IsNullOrWhiteSpace(p.DeployedExtensionId))
+            .Select(p => p.DeployedExtensionId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<NavContributionDto> FilterHidden(
+        IReadOnlyList<NavContributionDto> contributions,
+        HashSet<string> hidden) =>
+        hidden.Count == 0
             ? contributions
             : contributions.Where(c => !hidden.Contains(c.ExtensionId)).ToList();
-    }
 
     /// <summary>
     /// The sidebar's render list: built-in sections merged with extension-contributed entries by
@@ -1675,6 +1703,15 @@
     private void HandleToolsChanged() => _ = InvokeAsync(async () =>
     {
         await LoadToolsAsync();
+        StateHasChanged();
+    });
+
+    // Hiding or showing a plugin's menu entry repaints the sidebar immediately. Only the
+    // contributions are re-read; the built-in order has not moved and refetching it would make a
+    // menu toggle cost two requests to answer a question about one.
+    private void HandlePluginsChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadNavContributionsAsync();
         StateHasChanged();
     });
 

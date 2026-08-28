@@ -226,6 +226,18 @@ public sealed class PluginsApiClient
 
     private readonly HttpClient _http;
 
+    /// <summary>
+    /// Raised after any change that can alter which plugins contribute left-nav entries, so the
+    /// sidebar repaints instead of waiting for a portal reload.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors <c>ToolsApiClient.Changed</c>, which exists for the same reason: the management page
+    /// and the nav read through one client, so the write side can tell the nav side that its input
+    /// moved. Raised only on a SUCCESSFUL write - announcing a change the gateway refused would
+    /// make the sidebar disagree with what is stored.
+    /// </remarks>
+    public event Action? Changed;
+
     /// <summary>Initialises the client over the portal's configured <see cref="HttpClient"/>.</summary>
     /// <param name="http">Portal HTTP client.</param>
     public PluginsApiClient(HttpClient http) => _http = http;
@@ -292,9 +304,14 @@ public sealed class PluginsApiClient
             JsonOptions,
             ct);
 
-        return response.IsSuccessStatusCode
-            ? await response.Content.ReadFromJsonAsync<PluginRowDto>(JsonOptions, ct)
-            : null;
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        var row = await response.Content.ReadFromJsonAsync<PluginRowDto>(JsonOptions, ct);
+        Changed?.Invoke();
+        return row;
     }
 
     /// <summary>
@@ -330,7 +347,7 @@ public sealed class PluginsApiClient
             JsonOptions,
             ct);
 
-        return await ReadOutcomeAsync(response, ct);
+        return await ReadOutcomeAsync(response, ct, () => Changed?.Invoke());
     }
 
     /// <summary>Re-resolves a plugin's source and replaces its content if the source moved.</summary>
@@ -346,7 +363,7 @@ public sealed class PluginsApiClient
         using var response = await _http.PostAsync(
             $"/api/plugins/{Uri.EscapeDataString(name)}/update", content: null, ct);
 
-        return await ReadOutcomeAsync(response, ct);
+        return await ReadOutcomeAsync(response, ct, () => Changed?.Invoke());
     }
 
     /// <summary>Removes an installed plugin and any extension it deployed.</summary>
@@ -362,7 +379,7 @@ public sealed class PluginsApiClient
         using var response = await _http.DeleteAsync(
             $"/api/plugins/{Uri.EscapeDataString(name)}", ct);
 
-        return await ReadOutcomeAsync(response, ct);
+        return await ReadOutcomeAsync(response, ct, () => Changed?.Invoke());
     }
 
     /// <summary>
@@ -371,11 +388,13 @@ public sealed class PluginsApiClient
     /// </summary>
     private static async Task<PluginOperationOutcomeDto> ReadOutcomeAsync(
         HttpResponseMessage response,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action? onChanged = null)
     {
         if (response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadFromJsonAsync<PluginOperationResponseDto>(JsonOptions, ct);
+            onChanged?.Invoke();
             return new PluginOperationOutcomeDto
             {
                 Succeeded = true,
