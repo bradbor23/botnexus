@@ -39,6 +39,7 @@ using BotNexus.Gateway.Telemetry;
 using Serilog;
 using System.Reflection;
 using BotNexus.Gateway.Nav;
+using BotNexus.Gateway.Notifications;
 using BotNexus.Gateway.Tools;
 using BotNexus.Gateway.Webhooks;
 
@@ -270,6 +271,12 @@ builder.Services.AddBotNexusTools(toolsDbPath);
 // ordering overrides survive gateway restarts and roam with the user (#2236, slice 5 of #2231).
 var navOrderDbPath = System.IO.Path.Combine(webhookDataDir, "nav-order.sqlite");
 builder.Services.AddBotNexusNavOrder(navOrderDbPath);
+
+// Notifications - SQLite alongside the other stores. Server-side rather than in the browser
+// because the point is to report what happened while nobody was watching, and "not watching"
+// includes being on another device.
+var notificationsDbPath = System.IO.Path.Combine(webhookDataDir, "notifications.sqlite");
+builder.Services.AddBotNexusNotifications(notificationsDbPath);
 
 static string? ResolveCronModel(CronJobConfig config)
 {
