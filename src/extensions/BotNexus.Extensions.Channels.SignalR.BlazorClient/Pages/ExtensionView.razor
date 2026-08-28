@@ -1,6 +1,9 @@
 @page "/extension/{ViewId}"
 @using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services
+@using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services.Abstractions
+@implements IDisposable
 @inject NavOrderApiClient NavOrderApi
+@inject IPortalPreferencesService Prefs
 
 @*
     Hosts an extension-served view inside the portal shell.
@@ -33,8 +36,14 @@
     }
     else
     {
+        @* color-scheme on the IFRAME ELEMENT propagates into the embedded document and drives its
+           prefers-color-scheme, which is what lets a view follow the portal's theme without the
+           extension knowing the portal exists. Setting it inside the embedded document does
+           nothing - verified empirically; the host element is the lever. *@
         <iframe class="extension-view-frame"
                 data-testid="extension-view-frame"
+                data-theme-scheme="@ThemeScheme"
+                style="color-scheme: @ThemeScheme;"
                 src="@_contribution.Path"
                 title="@_contribution.Label"></iframe>
     }
@@ -46,6 +55,24 @@
 
     private NavContributionDto? _contribution;
     private bool _loading = true;
+
+    /// <summary>
+    /// The portal's theme expressed as a CSS <c>color-scheme</c> value. A hosted view that styles
+    /// itself from <c>prefers-color-scheme</c> - the ordinary way a standalone web app does it -
+    /// then follows the portal toggle with no code of its own.
+    /// </summary>
+    private string ThemeScheme =>
+        string.Equals(Prefs.Current.Theme, PortalTheme.Light, StringComparison.OrdinalIgnoreCase)
+            ? "light"
+            : "dark";
+
+    protected override void OnInitialized() => Prefs.OnChanged += OnPrefsChanged;
+
+    public void Dispose() => Prefs.OnChanged -= OnPrefsChanged;
+
+    // Repaint on a theme toggle so the frame's colour scheme tracks the portal live rather than
+    // only on the next navigation.
+    private void OnPrefsChanged() => InvokeAsync(StateHasChanged);
 
     protected override async Task OnParametersSetAsync()
     {

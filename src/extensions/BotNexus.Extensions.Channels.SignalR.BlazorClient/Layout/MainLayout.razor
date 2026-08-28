@@ -15,6 +15,7 @@
 @inject ConversationSectionsState SectionsState
 @inject ToolsApiClient ToolsApi
 @inject NavOrderApiClient NavOrderApi
+@inject IServiceProvider Services
 @implements IDisposable
 @implements IAsyncDisposable
 
@@ -1561,7 +1562,25 @@
             _navOrderNumbers = items.ToDictionary(i => i.Key, i => i.Order, StringComparer.OrdinalIgnoreCase);
         }
 
-        _navContributions = await NavOrderApi.ListContributionsAsync();
+        var contributions = await NavOrderApi.ListContributionsAsync();
+
+        // A plugin can hide its own contributed entries. The gateway does not filter them, because
+        // the nav endpoint reads loaded EXTENSIONS and knows nothing about which plugin installed
+        // which - the ownership link lives on the plugin record, so the join happens here.
+        // Resolved optionally rather than injected: the sidebar must render even where the plugins
+        // client is absent, and a hard dependency here would make every layout render depend on a
+        // service that only affects which contributed entries are shown.
+        var pluginsApi = Services.GetService(typeof(PluginsApiClient)) as PluginsApiClient;
+        var hidden = pluginsApi is null
+            ? []
+            : (await pluginsApi.ListAsync())
+                .Where(p => p.NavHidden && !string.IsNullOrWhiteSpace(p.DeployedExtensionId))
+                .Select(p => p.DeployedExtensionId!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _navContributions = hidden.Count == 0
+            ? contributions
+            : contributions.Where(c => !hidden.Contains(c.ExtensionId)).ToList();
     }
 
     /// <summary>

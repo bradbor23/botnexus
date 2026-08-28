@@ -23,6 +23,7 @@ public sealed class PortalNavContributionTests : IDisposable
 
     private string _navOrderJson = DefaultNavOrderJson;
     private string _contributionsJson = "[]";
+    private string _pluginsJson = "[]";
 
     private const string DefaultNavOrderJson = """
         [
@@ -85,6 +86,8 @@ public sealed class PortalNavContributionTests : IDisposable
         _ctx.Services.AddSingleton(new SectionsApiClient(http));
         _ctx.Services.AddSingleton(sp => new ConversationSectionsState(sp.GetRequiredService<SectionsApiClient>()));
         _ctx.Services.AddSingleton(new ToolsApiClient(new HttpClient(new FixedJsonHandler(() => "[]")) { BaseAddress = new Uri("http://localhost/") }));
+        _ctx.Services.AddSingleton(new PluginsApiClient(
+            new HttpClient(new FixedJsonHandler(() => _pluginsJson)) { BaseAddress = new Uri("http://localhost/") }));
         _ctx.Services.AddSingleton(new NavOrderApiClient(
             new HttpClient(new RoutingJsonHandler(() => _navOrderJson, () => _contributionsJson))
             { BaseAddress = new Uri("http://localhost/") }));
@@ -214,6 +217,67 @@ public sealed class PortalNavContributionTests : IDisposable
         Assert.Contains("nav-ok", ids);
         Assert.DoesNotContain("nav-evil", ids);
         Assert.DoesNotContain("nav-", ids);
+    }
+
+    // The sidebar can get long. A plugin's own entries can be hidden without uninstalling it, and
+    // the join happens in the portal because the nav endpoint reads loaded EXTENSIONS and knows
+    // nothing about which plugin installed which.
+    [Fact]
+    public void A_plugin_marked_hidden_drops_its_contributed_entry()
+    {
+        _contributionsJson = AgentBuilderContribution;
+        _pluginsJson = """
+            [{"name":"botnexus-agent-builder","source":"/x","resolvedVersion":"abc",
+              "updatesEnabled":true,"installedAtUtc":"2026-08-27T00:00:00Z","fileCount":1,
+              "trustState":1,"updateState":1,
+              "deployedExtensionId":"botnexus-agent-builder","navHidden":true}]
+            """;
+
+        var ids = NavTestIdsInRenderOrder();
+
+        Assert.NotEmpty(ids);
+        Assert.DoesNotContain("nav-agent-builder", ids);
+    }
+
+    // Non-vacuity: the SAME contribution renders when the plugin is not hidden, so the test above
+    // proves the flag rather than a broken fetch.
+    [Fact]
+    public void The_same_entry_renders_when_its_plugin_is_not_hidden()
+    {
+        _contributionsJson = AgentBuilderContribution;
+        _pluginsJson = """
+            [{"name":"botnexus-agent-builder","source":"/x","resolvedVersion":"abc",
+              "updatesEnabled":true,"installedAtUtc":"2026-08-27T00:00:00Z","fileCount":1,
+              "trustState":1,"updateState":1,
+              "deployedExtensionId":"botnexus-agent-builder","navHidden":false}]
+            """;
+
+        Assert.Contains("nav-agent-builder", NavTestIdsInRenderOrder());
+    }
+
+    // Hiding one plugin must not hide an unrelated extension's entry.
+    [Fact]
+    public void Hiding_one_plugin_leaves_another_extensions_entry_alone()
+    {
+        _contributionsJson = """
+            [
+              { "id": "agent-builder", "label": "AB", "path": "/agent-builder",
+                "order": 65, "external": true, "extensionId": "botnexus-agent-builder" },
+              { "id": "other", "label": "Other", "path": "/other",
+                "order": 66, "external": true, "extensionId": "botnexus-other" }
+            ]
+            """;
+        _pluginsJson = """
+            [{"name":"botnexus-agent-builder","source":"/x","resolvedVersion":"abc",
+              "updatesEnabled":true,"installedAtUtc":"2026-08-27T00:00:00Z","fileCount":1,
+              "trustState":1,"updateState":1,
+              "deployedExtensionId":"botnexus-agent-builder","navHidden":true}]
+            """;
+
+        var ids = NavTestIdsInRenderOrder();
+
+        Assert.DoesNotContain("nav-agent-builder", ids);
+        Assert.Contains("nav-other", ids);
     }
 
     /// <summary>Returns one JSON body for any request; used for the unrelated tools call.</summary>

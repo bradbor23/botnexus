@@ -118,6 +118,7 @@
                     <th>Update</th>
                     <th>Trust</th>
                     <th>Auto-update</th>
+                    <th>In menu</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -142,6 +143,27 @@
                                        @onchange="@(e => ToggleAutoUpdateAsync(plugin, e))" />
                                 <span>@(plugin.UpdatesEnabled ? "Enabled" : "Pinned")</span>
                             </label>
+                        </td>
+                        <td>
+                            @* Only a plugin that deployed an extension can contribute a menu entry,
+                               so the control is absent rather than disabled for a skills-only
+                               plugin - a dead toggle invites the question of what it would do. *@
+                            @if (plugin.DeployedExtensionId is { Length: > 0 })
+                            {
+                                <label class="plugin-autoupdate-toggle">
+                                    <input type="checkbox"
+                                           data-testid="plugin-nav-toggle"
+                                           aria-label="Show @plugin.Name in the menu"
+                                           checked="@(!plugin.NavHidden)"
+                                           disabled="@(_savingPlugin == plugin.Name)"
+                                           @onchange="@(e => ToggleNavVisibilityAsync(plugin, e))" />
+                                    <span>@(plugin.NavHidden ? "Hidden" : "Shown")</span>
+                                </label>
+                            }
+                            else
+                            {
+                                <span class="plugin-nav-na" data-testid="plugin-nav-na">&mdash;</span>
+                            }
                         </td>
                         <td class="plugin-row-actions">
                             @if (plugin.UpdateState == PluginUpdateStateDto.UpdateAvailable)
@@ -462,6 +484,41 @@
         {
             _busyPlugin = null;
             _confirmRemove = null;
+        }
+    }
+
+    // Presentation only: hiding an entry does not disable the plugin or make its path
+    // unreachable, so the wording says "menu" rather than anything that implies disabling.
+    private async Task ToggleNavVisibilityAsync(PluginRowDto plugin, ChangeEventArgs args)
+    {
+        var shown = args.Value is bool value ? value : plugin.NavHidden;
+        _savingPlugin = plugin.Name;
+        try
+        {
+            var updated = await PluginsApi.SetNavVisibilityAsync(plugin.Name, navHidden: !shown);
+            if (updated is null)
+            {
+                SetStatus($"Could not change the menu setting for '{plugin.Name}'.", "error");
+                return;
+            }
+
+            _plugins = _plugins
+                .Select(p => string.Equals(p.Name, updated.Name, StringComparison.Ordinal) ? updated : p)
+                .ToList();
+            ResolveSelection();
+            SetStatus(
+                updated.NavHidden
+                    ? $"'{updated.Name}' is hidden from the menu. Reload the portal to see the change."
+                    : $"'{updated.Name}' will appear in the menu. Reload the portal to see the change.",
+                "success");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not change the menu setting: {ex.Message}", "error");
+        }
+        finally
+        {
+            _savingPlugin = null;
         }
     }
 

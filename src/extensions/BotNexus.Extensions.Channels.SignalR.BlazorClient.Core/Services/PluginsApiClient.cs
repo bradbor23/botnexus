@@ -90,6 +90,14 @@ public sealed record PluginRowDto
     /// <summary>Why an update probe failed.</summary>
     [JsonPropertyName("updateProbeError")]
     public string? UpdateProbeError { get; init; }
+
+    /// <summary>Extension this plugin deployed, or <c>null</c> for a skills-only plugin.</summary>
+    [JsonPropertyName("deployedExtensionId")]
+    public string? DeployedExtensionId { get; init; }
+
+    /// <summary>Whether this plugin's contributed nav entries are hidden from the sidebar.</summary>
+    [JsonPropertyName("navHidden")]
+    public bool NavHidden { get; init; }
 }
 
 /// <summary>Request body for toggling a plugin's auto-update preference.</summary>
@@ -98,6 +106,14 @@ public sealed record PluginUpdatePreferenceDto
     /// <summary>Whether scheduled updates may replace this plugin's content.</summary>
     [JsonPropertyName("updatesEnabled")]
     public bool UpdatesEnabled { get; init; }
+}
+
+/// <summary>Request body for showing or hiding a plugin's contributed nav entries.</summary>
+public sealed record PluginNavVisibilityDto
+{
+    /// <summary>Whether to hide this plugin's nav entries.</summary>
+    [JsonPropertyName("navHidden")]
+    public bool NavHidden { get; init; }
 }
 
 /// <summary>Request body for installing a plugin from a marketplace source.</summary>
@@ -251,6 +267,34 @@ public sealed class PluginsApiClient
         }
 
         return await response.Content.ReadFromJsonAsync<PluginRowDto>(JsonOptions, ct);
+    }
+
+    /// <summary>
+    /// Shows or hides a plugin's contributed nav entries, returning the refreshed row, or
+    /// <c>null</c> when the gateway refused the write.
+    /// </summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="navHidden">Whether to hide the entries.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<PluginRowDto?> SetNavVisibilityAsync(
+        string name,
+        bool navHidden,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        using var response = await _http.PutAsJsonAsync(
+            $"/api/plugins/{Uri.EscapeDataString(name)}/nav-visibility",
+            new PluginNavVisibilityDto { NavHidden = navHidden },
+            JsonOptions,
+            ct);
+
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadFromJsonAsync<PluginRowDto>(JsonOptions, ct)
+            : null;
     }
 
     /// <summary>

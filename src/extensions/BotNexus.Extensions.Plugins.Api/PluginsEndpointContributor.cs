@@ -37,6 +37,8 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
         group.MapGet("/{name}", (string name) => Get(name));
         group.MapPut("/{name}/update-preference",
             (string name, PluginUpdatePreferenceRequest request) => SetUpdatePreference(name, request));
+        group.MapPut("/{name}/nav-visibility",
+            (string name, PluginNavVisibilityRequest request) => SetNavVisibility(name, request));
         group.MapPost("/install", (PluginInstallApiRequest request) => InstallAsync(request));
         group.MapPost("/{name}/update", (string name) => UpdateAsync(name));
         group.MapDelete("/{name}", (string name) => Remove(name));
@@ -69,6 +71,49 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
         new(new PluginStateStore(pluginRoot),
             new GitPluginSourceFetcher(new ProcessGitCommandRunner()),
             extensionsRoot: extensionsRoot);
+
+    /// <summary>Shows or hides a plugin's contributed nav entries.</summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="request">New visibility.</param>
+    internal static IResult SetNavVisibility(string name, PluginNavVisibilityRequest request) =>
+        SetNavVisibility(name, request, GetPluginRootPath());
+
+    /// <summary>
+    /// Sets nav visibility under an explicit plugin root. Written back to the installed record
+    /// rather than held in memory, for the same reason the auto-update preference is: a toggle
+    /// that did not survive a restart would assert something the gateway never stored.
+    /// </summary>
+    /// <param name="name">Plugin identifier.</param>
+    /// <param name="request">New visibility.</param>
+    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    internal static IResult SetNavVisibility(
+        string name,
+        PluginNavVisibilityRequest request,
+        string pluginRoot)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new { error = "A plugin name is required." });
+        }
+
+        if (request is null)
+        {
+            return Results.BadRequest(new { error = "A request body is required." });
+        }
+
+        var store = new PluginStateStore(pluginRoot);
+        var existing = store.Find(name);
+        if (existing is null)
+        {
+            return Results.NotFound(new { error = $"Plugin '{name}' is not installed." });
+        }
+
+        // `with` preserves the recorded file sets: they are the only description of what the
+        // plugin owns, and a preference write that dropped them would orphan every file it wrote.
+        store.Upsert(existing with { NavHidden = request.NavHidden });
+
+        return Results.Ok(new PluginPortalProjector(store).Find(name));
+    }
 
     /// <summary>Installs a plugin from a marketplace source.</summary>
     /// <param name="request">What to install.</param>
@@ -339,6 +384,10 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
 /// <summary>Request body for toggling a plugin's auto-update preference.</summary>
 /// <param name="UpdatesEnabled">Whether scheduled updates may replace this plugin's content.</param>
 public sealed record PluginUpdatePreferenceRequest(bool UpdatesEnabled);
+
+/// <summary>Request body for showing or hiding a plugin's contributed nav entries.</summary>
+/// <param name="NavHidden">Whether to hide this plugin's nav entries from the sidebar.</param>
+public sealed record PluginNavVisibilityRequest(bool NavHidden);
 
 /// <summary>Request body for installing a plugin from a marketplace source.</summary>
 /// <param name="Source">Repository URL to install from.</param>

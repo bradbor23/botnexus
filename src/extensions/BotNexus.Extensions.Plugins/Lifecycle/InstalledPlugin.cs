@@ -66,6 +66,18 @@ public sealed record InstalledPlugin
     public string? DeployedExtensionId { get; init; }
 
     /// <summary>
+    /// Whether this plugin's contributed left-nav entries are hidden from the portal sidebar.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>false</c> - a plugin that contributes nav shows it. This is presentation
+    /// only: hiding an entry does not disable the plugin, unload its extension, or make its path
+    /// unreachable. It exists so an operator can keep a long sidebar readable without uninstalling
+    /// something they still use.
+    /// </remarks>
+    [JsonPropertyName("navHidden")]
+    public bool NavHidden { get; init; }
+
+    /// <summary>
     /// Files deployment wrote into the extension directory, as forward-slash paths relative to it.
     /// Recorded for the same reason as <see cref="Files"/>: removal works from the exact set that
     /// was written, never from whatever the directory happens to contain later.

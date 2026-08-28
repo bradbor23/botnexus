@@ -1,6 +1,8 @@
 using Bunit;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
+using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 
 using ExtensionViewPage = BotNexus.Extensions.Channels.SignalR.BlazorClient.Pages.ExtensionView;
 
@@ -18,10 +20,13 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
 public sealed class ExtensionViewPageTests : IDisposable
 {
     private readonly BunitContext _ctx = new();
+    private readonly IPortalPreferencesService _prefs = Substitute.For<IPortalPreferencesService>();
     private string _json = "[]";
 
     public ExtensionViewPageTests()
     {
+        _prefs.Current.Returns(new PortalPreferences { Theme = PortalTheme.Dark });
+        _ctx.Services.AddSingleton(_prefs);
         _ctx.Services.AddSingleton(new NavOrderApiClient(
             new HttpClient(new JsonHandler(() => _json)) { BaseAddress = new Uri("http://localhost/") }));
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -95,6 +100,40 @@ public sealed class ExtensionViewPageTests : IDisposable
 
         Assert.Empty(cut.FindAll("[data-testid='extension-view-frame']"));
         Assert.Single(cut.FindAll("[data-testid='extension-view-unknown']"));
+    }
+
+    // A hosted view styles itself from prefers-color-scheme, as any standalone web app would.
+    // color-scheme on the iframe ELEMENT propagates into the embedded document and drives that
+    // query, so the portal theme reaches the view without the extension knowing the portal exists.
+    [Theory]
+    [InlineData("dark", "dark")]
+    [InlineData("light", "light")]
+    public void The_frame_carries_the_portal_colour_scheme(string theme, string expected)
+    {
+        _prefs.Current.Returns(new PortalPreferences { Theme = theme });
+        _json = AgentBuilder;
+
+        var cut = RenderFor("agent-builder");
+
+        var frame = Assert.Single(cut.FindAll("[data-testid='extension-view-frame']"));
+        Assert.Equal(expected, frame.GetAttribute("data-theme-scheme"));
+        Assert.Contains($"color-scheme: {expected}", frame.GetAttribute("style"));
+    }
+
+    // Non-vacuity: the same component must render BOTH schemes, or the assertion above would pass
+    // for a frame with the value hard-coded.
+    [Fact]
+    public void The_colour_scheme_differs_between_themes()
+    {
+        _json = AgentBuilder;
+
+        _prefs.Current.Returns(new PortalPreferences { Theme = PortalTheme.Dark });
+        var dark = RenderFor("agent-builder").Find("[data-testid='extension-view-frame']").GetAttribute("data-theme-scheme");
+
+        _prefs.Current.Returns(new PortalPreferences { Theme = PortalTheme.Light });
+        var light = RenderFor("agent-builder").Find("[data-testid='extension-view-frame']").GetAttribute("data-theme-scheme");
+
+        Assert.NotEqual(dark, light);
     }
 
     private sealed class JsonHandler(Func<string> json) : HttpMessageHandler
