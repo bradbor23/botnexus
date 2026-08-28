@@ -55,8 +55,9 @@ public sealed class PluginCarriedExtensionTests : IDisposable
             : "{ \"name\": \"" + name + "\", \"extension\": { \"manifest\": \"" + extensionManifestPath + "\" } }";
 
     private static string ExtensionManifestJson(string id, string entryAssembly) =>
-        "{ \"id\": \"" + id + "\", \"name\": \"Test\", \"version\": \"1.0.0\", \"entryAssembly\": \""
-        + entryAssembly + "\", \"extensionTypes\": [\"endpoint-contributor\"], \"enabled\": true }";
+        "{ \"id\": \"" + id + "\", \"name\": \"Test Extension\", \"version\": \"1.0.0\", \"entryAssembly\": \""
+        + entryAssembly + "\", \"extensionTypes\": [\"endpoint-contributor\"], \"enabled\": true,"
+        + " \"nav\": [{ \"id\": \"test\", \"label\": \"Test\", \"path\": \"/test\" }] }";
 
     /// <summary>Writes a plugin directory on disk, bypassing install, for deployer-only tests.</summary>
     private string WritePluginDirectory(string name, IReadOnlyDictionary<string, string> files)
@@ -291,6 +292,45 @@ public sealed class PluginCarriedExtensionTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_pluginRoot, "code-plugin")));
         Assert.False(Directory.Exists(Path.Combine(_extensionsRoot, "test-extension")));
         Assert.Null(_store.Find("code-plugin"));
+    }
+
+    // "Runs code at full trust" states the risk; naming what the extension contributes is what
+    // lets an operator judge whether THIS plugin is worth it. A generic warning teaches nothing and
+    // gets click-through.
+    [Fact]
+    public async Task The_consent_refusal_discloses_what_the_extension_contributes()
+    {
+        _fetcher.Enqueue("sha-1", CarriedPluginContent());
+
+        var result = await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/code-plugin.git",
+        });
+
+        var message = result.Errors[0].Message;
+        Assert.Contains("Test Extension", message);
+        Assert.Contains("endpoint-contributor", message);
+        Assert.Contains("/test", message);
+        Assert.Contains("no sandbox", message);
+    }
+
+    // Disclosure is best effort: a manifest too malformed to describe must still refuse for
+    // consent, and must not fail differently. The deploy step rejects it properly a moment later.
+    [Fact]
+    public async Task An_undescribable_extension_still_refuses_for_consent()
+    {
+        var files = CarriedPluginContent();
+        files["botnexus-extension.json"] = "{ not valid json";
+        _fetcher.Enqueue("sha-1", files);
+
+        var result = await _manager.InstallAsync(new PluginInstallRequest
+        {
+            Source = "https://example.com/code-plugin.git",
+        });
+
+        Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
+        Assert.Equal("extension.consent", result.Errors[0].Field);
+        Assert.Contains("full trust", result.Errors[0].Message);
     }
 
     // A skills-only plugin must stay low-friction: the gate is for code, not for every install.

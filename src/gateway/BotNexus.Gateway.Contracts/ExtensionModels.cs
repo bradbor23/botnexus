@@ -50,7 +50,48 @@ public sealed record ExtensionManifest
     /// delivered it.
     /// </remarks>
     public IReadOnlyList<ExtensionNavEntry> Nav { get; init; } = [];
+
+    /// <summary>
+    /// Gateway contract range this extension was built against, or <c>null</c> to declare no
+    /// constraint.
+    /// </summary>
+    /// <remarks>
+    /// Absent means unconstrained, so every extension written before this field keeps loading
+    /// exactly as it did. Declaring a range is how a PREBUILT extension - one delivered by a
+    /// marketplace plugin, which was compiled somewhere else against some other gateway - says
+    /// which gateways it is safe on.
+    /// </remarks>
+    public ExtensionCompatibility? Compatibility { get; init; }
 }
+
+/// <summary>
+/// The range of gateway contract versions an extension supports.
+/// </summary>
+/// <remarks>
+/// Expressed against <c>BotNexus.Gateway.Abstractions</c> - the assembly whose types an extension
+/// actually binds to - rather than a product version, because that is the contract that breaks.
+/// Both bounds are optional and each is checked independently, so an extension can declare a floor
+/// without committing to a ceiling.
+/// </remarks>
+public sealed record ExtensionCompatibility
+{
+    /// <summary>
+    /// Lowest supported Abstractions version, INCLUSIVE. <c>null</c> means no lower bound.
+    /// </summary>
+    public string? MinAbstractionsVersion { get; init; }
+
+    /// <summary>
+    /// First Abstractions version that is NOT supported - an exclusive upper bound, so
+    /// <c>"1.0.0"</c> means "everything below 1.0.0". <c>null</c> means no upper bound.
+    /// </summary>
+    /// <remarks>
+    /// Exclusive rather than inclusive because a ceiling is nearly always "up to the next breaking
+    /// release", and an inclusive bound forces authors to write the largest version they can
+    /// imagine instead of the one they know breaks.
+    /// </remarks>
+    public string? MaxAbstractionsVersion { get; init; }
+}
+
 /// <summary>
 /// One left-nav entry contributed by an extension.
 /// </summary>

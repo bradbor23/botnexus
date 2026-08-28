@@ -156,6 +156,7 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
         try
         {
             ValidateDependencies(extension.Manifest);
+            ValidateCompatibility(extension.Manifest);
 
             var loadContext = new ExtensionAssemblyLoadContext(
                 extension.EntryAssemblyPath,
@@ -355,6 +356,85 @@ public sealed class AssemblyLoadContextExtensionLoader : IExtensionLoader
 
         throw new InvalidOperationException(
             $"Extension '{manifest.Id}' has unresolved dependencies: {string.Join(", ", missingDependencies)}.");
+    }
+
+    /// <summary>
+    /// The gateway contract version extensions are checked against: the version of the
+    /// <c>BotNexus.Gateway.Abstractions</c> assembly this process actually loaded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Read from the loaded assembly rather than a constant, so it cannot drift from the contract
+    /// actually in force. This repository versions every assembly from a single
+    /// <c>&lt;Version&gt;</c> property, so today it equals the product version; resolving the real
+    /// assembly is what keeps the check correct if that ever stops being true.
+    /// </para>
+    /// <para>
+    /// Resolved BY NAME rather than through <c>typeof(IExtensionLoader)</c>: that interface is
+    /// declared in <c>BotNexus.Gateway.Contracts</c> and merely type-forwarded from Abstractions,
+    /// so its assembly is not the one an extension binds against. Falling back to the declaring
+    /// assembly keeps a version available in the odd case where Abstractions is not yet loaded.
+    /// </para>
+    /// </remarks>
+    internal static Version AbstractionsVersion { get; } = ResolveAbstractionsVersion();
+
+    private static Version ResolveAbstractionsVersion()
+    {
+        var abstractions = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => string.Equals(
+                a.GetName().Name, "BotNexus.Gateway.Abstractions", StringComparison.Ordinal));
+
+        return abstractions?.GetName().Version
+            ?? typeof(IExtensionLoader).Assembly.GetName().Version
+            ?? new Version(0, 0, 0, 0);
+    }
+
+    /// <summary>
+    /// Refuses an extension built for a gateway contract this one does not satisfy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Checked BEFORE the assembly is loaded. A binary compiled against a different Abstractions
+    /// either fails with a type or method load error deep inside startup, or - worse - loads and
+    /// binds against a subtly different contract. Refusing up front turns that into one clear
+    /// sentence naming both versions.
+    /// </para>
+    /// <para>
+    /// An absent or unparseable bound is treated as NO constraint rather than as a failure. The
+    /// field is new, almost every extension omits it, and rejecting an extension because its
+    /// author wrote a version string this parser did not expect would break working deployments to
+    /// enforce a rule they never opted into.
+    /// </para>
+    /// </remarks>
+    internal static void ValidateCompatibility(ExtensionManifest manifest)
+    {
+        var compatibility = manifest.Compatibility;
+        if (compatibility is null)
+            return;
+
+        var current = AbstractionsVersion;
+
+        if (TryParseVersion(compatibility.MinAbstractionsVersion, out var min) && current < min)
+        {
+            throw new InvalidOperationException(
+                $"Extension '{manifest.Id}' requires BotNexus.Gateway.Abstractions {min} or newer, " +
+                $"but this gateway provides {current}. The extension was built for a newer gateway.");
+        }
+
+        if (TryParseVersion(compatibility.MaxAbstractionsVersion, out var max) && current >= max)
+        {
+            throw new InvalidOperationException(
+                $"Extension '{manifest.Id}' supports BotNexus.Gateway.Abstractions below {max}, " +
+                $"but this gateway provides {current}. The extension needs updating for this gateway.");
+        }
+    }
+
+    // Accepts the shapes an author actually writes - "1", "1.4", "1.4.0", "1.4.0.0" - by letting
+    // Version.TryParse handle them; anything else yields no constraint rather than a failure.
+    private static bool TryParseVersion(string? value, out Version version)
+    {
+        version = new Version(0, 0);
+        return !string.IsNullOrWhiteSpace(value) && Version.TryParse(value.Trim(), out version!);
     }
 
     /// <summary>

@@ -131,10 +131,20 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                 // A DISTINCT field, not the general "extension" one: a caller must be able to tell
                 // "you have not consented yet" from "the extension is broken" without parsing
                 // prose, because only the first is worth re-offering to a human.
+                //
+                // Disclose what it contributes, read from the staged content. "Runs code at full
+                // trust" is the risk; naming the contracts and menu entries is what lets an
+                // operator judge whether THIS plugin is worth that risk.
+                var carried = PluginExtensionDeployer.Describe(staged.Directory!, manifest.Extension);
+                var contributes = PluginExtensionDeployer.SummariseContributions(carried);
+                var named = string.IsNullOrWhiteSpace(carried?.Name) ? string.Empty : $" '{carried!.Name}'";
+
                 return PluginOperationResult.Failure(
                     manifest.Name,
                     "extension.consent",
-                    $"Plugin '{manifest.Name}' carries a gateway extension, which runs code in the gateway process at full trust. Re-issue the install acknowledging the carried extension to proceed.");
+                    $"Plugin '{manifest.Name}' carries a gateway extension{named}, which runs code in the gateway process at full trust, with no sandbox."
+                    + (contributes is null ? string.Empty : $" It contributes: {contributes}.")
+                    + " Re-issue the install acknowledging the carried extension to proceed.");
             }
 
             var files = Promote(staged.Directory!, destination);

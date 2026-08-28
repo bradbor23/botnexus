@@ -36,4 +36,31 @@ public sealed record CarriedExtensionManifest
     /// </summary>
     [JsonPropertyName("entryAssembly")]
     public string EntryAssembly { get; init; } = string.Empty;
+
+    /// <summary>Display name, used when telling an operator what they are about to install.</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// Contracts the extension implements - tools, channels, endpoints. Read only to DISCLOSE
+    /// them; the gateway loader remains the authority on what is actually activated.
+    /// </summary>
+    [JsonPropertyName("extensionTypes")]
+    public IReadOnlyList<string>? ExtensionTypes { get; init; }
+
+    /// <summary>Left-nav entries the extension declares, disclosed as paths it will serve.</summary>
+    [JsonPropertyName("nav")]
+    public IReadOnlyList<CarriedExtensionNav>? Nav { get; init; }
+}
+
+/// <summary>The parts of a carried nav entry worth showing an operator before they consent.</summary>
+public sealed record CarriedExtensionNav
+{
+    /// <summary>Sidebar text.</summary>
+    [JsonPropertyName("label")]
+    public string? Label { get; init; }
+
+    /// <summary>Path the entry will serve.</summary>
+    [JsonPropertyName("path")]
+    public string? Path { get; init; }
 }

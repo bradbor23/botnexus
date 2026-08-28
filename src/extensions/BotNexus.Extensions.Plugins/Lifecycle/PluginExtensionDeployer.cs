@@ -175,6 +175,76 @@ public sealed class PluginExtensionDeployer
     }
 
     /// <summary>
+    /// Reads what a carried extension would contribute, for disclosure BEFORE an operator consents.
+    /// </summary>
+    /// <remarks>
+    /// Best effort by design: this runs on content that has not been validated yet, and a manifest
+    /// too malformed to describe is not a reason to fail the install differently - the deploy step
+    /// will reject it in a moment with a message naming the actual field. Returning null here means
+    /// only that the consent prompt cannot be specific.
+    /// </remarks>
+    /// <param name="pluginDirectory">Directory holding the staged plugin content.</param>
+    /// <param name="reference">The manifest's <c>extension</c> block.</param>
+    public static CarriedExtensionManifest? Describe(string pluginDirectory, PluginExtensionRef? reference)
+    {
+        if (string.IsNullOrWhiteSpace(pluginDirectory)
+            || reference is null
+            || string.IsNullOrWhiteSpace(reference.Manifest))
+        {
+            return null;
+        }
+
+        try
+        {
+            var root = Path.GetFullPath(pluginDirectory);
+            var manifestPath = Path.GetFullPath(Path.Combine(root, reference.Manifest));
+            if (!IsInside(root, manifestPath) || !File.Exists(manifestPath))
+            {
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<CarriedExtensionManifest>(
+                File.ReadAllText(manifestPath), SerializerOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One sentence naming what a carried extension contributes, or <c>null</c> when nothing could
+    /// be read. Used to make the consent prompt specific rather than generic.
+    /// </summary>
+    /// <param name="manifest">Carried extension manifest, as read by <see cref="Describe"/>.</param>
+    public static string? SummariseContributions(CarriedExtensionManifest? manifest)
+    {
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        List<string> parts = [];
+
+        if (manifest.ExtensionTypes is { Count: > 0 } types)
+        {
+            parts.Add(string.Join(", ", types));
+        }
+
+        foreach (var nav in manifest.Nav ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(nav.Path))
+            {
+                parts.Add(string.IsNullOrWhiteSpace(nav.Label)
+                    ? $"a menu entry at {nav.Path}"
+                    : $"a menu entry '{nav.Label}' at {nav.Path}");
+            }
+        }
+
+        return parts.Count == 0 ? null : string.Join("; ", parts);
+    }
+
+    /// <summary>
     /// Removes a deployed extension's directory. Intended for rolling back a failed install, where
     /// the content was written moments earlier and cannot yet be loaded by anything.
     /// </summary>
