@@ -1,3 +1,4 @@
+using BotNexus.Gateway.Abstractions.Notifications;
 using BotNexus.Persistence.Sqlite;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;

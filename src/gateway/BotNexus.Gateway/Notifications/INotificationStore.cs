@@ -1,3 +1,5 @@
+using BotNexus.Gateway.Abstractions.Notifications;
+
 namespace BotNexus.Gateway.Notifications;
 
 /// <summary>

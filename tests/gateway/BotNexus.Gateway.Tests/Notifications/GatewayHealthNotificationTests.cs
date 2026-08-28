@@ -1,4 +1,5 @@
 using BotNexus.Gateway.Diagnostics;
+using BotNexus.Gateway.Abstractions.Notifications;
 using BotNexus.Gateway.Notifications;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;

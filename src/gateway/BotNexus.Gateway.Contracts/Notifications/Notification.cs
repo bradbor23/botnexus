@@ -1,4 +1,4 @@
-namespace BotNexus.Gateway.Notifications;
+namespace BotNexus.Gateway.Abstractions.Notifications;
 
 /// <summary>
 /// What a notification is about. Drives the icon and grouping a client shows, and lets a caller
