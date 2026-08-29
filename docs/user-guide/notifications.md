@@ -231,6 +231,15 @@ Anything else — a rate limit, an outage — is treated as temporary and the su
 Dropping one over a bad ten minutes would turn an outage into a device that never hears from the
 gateway again.
 
+## Writing your own client
+
+Notifications are readable by anything that can make an HTTP request, and the store is the single
+source of truth for every client — so a script, a status bar or a phone app all see the same
+history and the same read state as the portal.
+
+The wire contracts, authentication, the SignalR hub, and what each platform can and cannot do are
+in [Building a notification client](../development/notification-clients.md).
+
 ## Checking that it works
 
 Every real notification is raised by something going wrong, which makes the feature awkward to
