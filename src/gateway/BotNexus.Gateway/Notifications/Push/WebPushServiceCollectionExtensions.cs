@@ -47,4 +47,46 @@ public static class WebPushServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Registers the iOS device store, the APNs sender and its bridge.
+    /// </summary>
+    /// <remarks>
+    /// Registered whether or not APNs is configured, and inert when it is not. A gateway with no
+    /// Apple Developer account is the ordinary case rather than a misconfiguration, so the bridge
+    /// says once that it is idle and then does nothing - it does not warn, and it does not have to
+    /// be switched on later by someone who has to know it exists first.
+    /// </remarks>
+    /// <param name="services">Service collection.</param>
+    /// <param name="dbPath">Path to the device database.</param>
+    /// <param name="options">Apple credentials, from configuration.</param>
+    /// <param name="fileSystem">Filesystem abstraction; resolved from DI when omitted.</param>
+    public static IServiceCollection AddBotNexusApns(
+        this IServiceCollection services,
+        string dbPath,
+        ApnsOptions options,
+        IFileSystem? fileSystem = null)
+    {
+        services.TryAddSingleton<IApnsDeviceStore>(sp =>
+            new SqliteApnsDeviceStore(
+                dbPath,
+                fileSystem ?? sp.GetService<IFileSystem>(),
+                sp.GetService<TimeProvider>()));
+
+        services.TryAddSingleton(options);
+        services.TryAddSingleton(sp => new ApnsTokenProvider(options, sp.GetService<TimeProvider>()));
+
+        services.AddHttpClient<ApnsSender>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(15);
+
+            // APNs is HTTP/2 only and will not negotiate down.
+            client.DefaultRequestVersion = System.Net.HttpVersion.Version20;
+            client.DefaultVersionPolicy = System.Net.Http.HttpVersionPolicy.RequestVersionExact;
+        });
+
+        services.AddHostedService<ApnsBridge>();
+
+        return services;
+    }
 }

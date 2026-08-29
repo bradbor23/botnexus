@@ -283,6 +283,12 @@ builder.Services.AddBotNexusNotifications(notificationsDbPath);
 // or desktop client subscribes to in exactly the same way. The VAPID pair is the gateway's
 // identity to every push service and is generated once on first use; regenerating it would
 // silently invalidate every subscription, which is why it lives in a file rather than in memory.
+// APNs - the only way to wake a NATIVE iOS app, which web push cannot do. Inert unless
+// gateway:apns is configured with an Apple Developer team, key and bundle id.
+builder.Services.AddBotNexusApns(
+    System.IO.Path.Combine(webhookDataDir, "apns-devices.sqlite"),
+    ApnsOptions.FromConfiguration(key => builder.Configuration[key]));
+
 builder.Services.AddBotNexusWebPush(
     System.IO.Path.Combine(webhookDataDir, "push-subscriptions.sqlite"),
     System.IO.Path.Combine(webhookDataDir, "vapid.json"),
