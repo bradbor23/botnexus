@@ -441,7 +441,7 @@ world-level defaults that are field-merged into every agent; every other key def
 
 #### `agents.defaults` properties
 
-Backed by `AgentDefaultsConfig`. Only these four keys exist - a default that is not listed here is not
+Backed by `AgentDefaultsConfig`. Only these five keys exist - a default that is not listed here is not
 merged, because there is no property to merge it into.
 
 | Property | Type | Default | Description |
@@ -1052,6 +1052,30 @@ or `parent-override`) so operators can audit which authorization tier applied.
 | `subAgents.maxConcurrentPerSession` | int | 5 | Global running-child limit per parent session. |
 | `subAgents.parentOverrides.<parentAgentId>` | object | none | Trusted partial override of the five budget fields above. |
 | `subAgents.workspaceRoot` | string | ` ` (empty) | Temporary root directory under which each sub-agent's isolated workspace is created and later reclaimed. Empty preserves the historical default of `<OS temp>/botnexus-subagent-workspaces`. Supports `~` and environment-variable expansion and is normalized to an absolute path. The gateway (`FileAgentWorkspaceManager`) and the CLI (`botnexus subagent workspace list|prune` plus `doctor`) resolve this through the same shared resolver, so they can never target different directories. |
+
+#### Agent Exchange (`agentExchange`)
+
+Governs agent-to-agent conversations started with the `agent_converse` tool. Bound from `gateway:agentExchange`.
+
+```json
+{
+  "gateway": {
+    "agentExchange": {
+      "accessPolicy": "open",
+      "maxTurnsCeiling": 30,
+      "maxInboundQueueDepth": 8
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AgentExchange.AccessPolicy` | string | `open` | Which agents may initiate conversations with others. `open` lets any registered agent converse with any other; `whitelist` requires the initiator to have the target in its `SubAgentIds` list or a matching `SubAgentRoles` grant. Compared case-insensitively. |
+| `AgentExchange.MaxTurnsCeiling` | int | 30 | Upper bound applied to the `maxTurns` argument of a single `agent_converse` call, regardless of the value the agent requests. This is what stops one tool call from driving an unbounded number of provider round-trips — the conversation budget tracker caps exchanges per agent pair, not turns within an exchange. Values below 1 are treated as 1, so a misconfiguration can never disable exchanges entirely. |
+| `AgentExchange.MaxInboundQueueDepth` | int | 8 | How many inbound exchanges may **wait** for one agent's single execution slot before further callers are refused with explicit backpressure. An in-process agent runs one turn at a time; without a bound, a busy agent accumulates waiters until each expires on its own caller-side deadline, which is precisely the silent message loss this setting makes visible. The in-flight exchange itself does not count toward the bound — only genuinely blocked callers do. Values below 1 are treated as 1. |
+
+See [Agent Exchange](features/agent-exchange.md) for the tool surface and the budget system.
 
 #### SignalR Hub Limits
 
