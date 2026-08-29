@@ -4,13 +4,17 @@ An agent that fails at 2am, or one that stops halfway through a job waiting for 
 useful information if it reaches you. The notification manager is the part of BotNexus that carries
 that news out of the gateway and to wherever you actually are.
 
-It has three layers, and you can stop at whichever one suits you:
+It has four layers, and you can stop at whichever one suits you:
 
 | Layer | What it does | Needs |
 | --- | --- | --- |
 | The store | Records what happened, server-side, whether or not anyone is connected | Nothing |
 | The bell | Shows it in the portal, live, with an unread badge | The portal open |
-| Desktop alerts | Raises an OS notification when the portal is *not* what you are looking at | A one-time permission grant |
+| Desktop alerts | Raises an OS notification when the portal is not what you are looking at | Permission, and a secure connection |
+| Web push | Raises one with the portal **closed**, including on a phone | The same, plus a service worker |
+
+The last two share a single switch. Web push is strictly better — it survives the tab being closed
+— so it is used whenever the browser allows it, and the panel says which one you actually have.
 
 The important design choice is that notifications are stored **on the gateway**, not in your
 browser. Read state travels with them. Dismissing something on your laptop leaves it dismissed on
@@ -157,9 +161,75 @@ Reload afterwards.
 If the footer control is missing entirely, the browser has no Notification API at all and there is
 nothing to enable.
 
-**Android Chrome is the notable case.** It permits notifications only through a service worker, so
-this layer does not work there — the alert fails silently and the notification still arrives in the
-bell as normal. Reaching an Android phone properly needs web push, which is not built yet.
+## Web push
+
+Everything above only works while the portal is open in a tab. Web push is the layer that does not
+need it open at all — and the same one a phone or desktop app would use.
+
+**You do not turn it on separately.** The single **Enable desktop alerts** switch takes push
+whenever the browser offers it, because it is strictly better than the in-page alert. The panel
+reports which you ended up with:
+
+| What the panel says | What it means |
+| --- | --- |
+| including when the portal is closed | Push. Close the tab; alerts still arrive |
+| only while the portal is open | The in-page fallback. Closing the tab stops them |
+
+### How it reaches you
+
+The browser mints a **subscription** — an address at its own vendor's push service, plus a key pair
+— and hands it to the gateway. When a notification is raised, the gateway encrypts it to that key
+and posts it to the push service, which wakes a service worker in your browser to draw it. That
+worker runs whether or not the portal is open, which is the whole point.
+
+**The push service cannot read your notifications.** Google, Mozilla and Apple relay the message
+without being able to decrypt it: the payload is encrypted to a key only your browser holds, so
+which agent failed is not visible to whoever operates the relay. The gateway signs each request
+with its own identity (VAPID), which is what stops anyone who learns a subscription address from
+pushing to it.
+
+A push is held for **24 hours** for a device that is offline, then dropped by the push service.
+Nothing is lost: the notification is in the store, and the bell shows it whenever that device next
+opens the portal.
+
+### Reaching a phone
+
+**Android** works in Chrome and Firefox as an ordinary web page, once the portal is served over
+HTTPS.
+
+**iPhone and iPad need the portal installed to the Home Screen first.** Safari only grants push to
+a web app added via Share → Add to Home Screen; a page open in a normal Safari tab cannot subscribe,
+and the switch will report the in-page fallback instead. Open the installed app once and enable
+alerts from there.
+
+Each device is a separate subscription: enabling alerts on your laptop does nothing for your phone,
+and turning them off on one leaves the others running. That is the same rule as the permission
+itself.
+
+### What the gateway keeps
+
+| File | Holds |
+| --- | --- |
+| `~/.botnexus/push-subscriptions.sqlite` | One row per subscribed device |
+| `~/.botnexus/vapid.json` | The gateway's push identity, generated on first use, mode `0600` |
+
+**Do not delete `vapid.json`.** A subscription is bound to the public half of that key pair, so a
+new one silently invalidates every device already subscribed — they stay subscribed as far as the
+browser is concerned, and simply never hear anything again. Each would have to turn alerts off and
+on to recover. It is not a secret in the usual sense, but it is not replaceable either.
+
+The operator contact sent to push services defaults to the project URL and can be set with
+`gateway:push:subject` — a `mailto:` or `https:` URI, required by the spec so a push service can
+reach whoever runs a misbehaving gateway.
+
+### Devices that go away
+
+A phone gets wiped, a browser is uninstalled, a permission is revoked. The push service reports
+that endpoint as gone, and the gateway **deletes the subscription** rather than retrying it forever.
+
+Anything else — a rate limit, an outage — is treated as temporary and the subscription is kept.
+Dropping one over a bad ten minutes would turn an outage into a device that never hears from the
+gateway again.
 
 ## Checking that it works
 
@@ -214,6 +284,9 @@ other endpoint.
 | `POST` | `/api/notifications/read-all` | Mark everything read |
 | `DELETE` | `/api/notifications/{id}` | Delete one permanently |
 | `POST` | `/api/notifications/test` | Raise a test notification through the real publisher |
+| `GET` | `/api/notifications/push/key` | The gateway's VAPID public key, needed before subscribing |
+| `POST` | `/api/notifications/push/subscribe` | Register a device, or refresh one already held |
+| `POST` | `/api/notifications/push/unsubscribe` | Forget a device. Idempotent |
 
 `GET /api/notifications` takes two query parameters:
 
@@ -257,8 +330,15 @@ a gateway health notification, for instance, is not about any one page.
   failures but not scheduled-job failures.
 - **`AgentRunCompleted` is defined but never raised.** It exists in the API surface for clients to
   handle, and is reserved for an opt-in "tell me when it finishes" setting that does not exist yet.
-- **Alerts reach browsers only.** Web push — and with it iOS, Android and Windows clients — is the
-  next layer, and is not built.
+- **Subscribing needs HTTPS.** Service workers are refused on an insecure origin, so web push has
+  the same requirement as desktop alerts — and on a plain-http portal the switch quietly falls back
+  to the in-page alert rather than failing.
+- **A push carries the notice, not the history.** The service worker draws the title, body and
+  link; anything else needs the portal or the API. That is deliberate — the push service can see
+  the size of what it relays, so there is no reason to send it more than the notice.
+- **There is no native app yet.** The subscription model is the one an iOS, Android or Windows
+  client would use, and the REST surface is the one it would read, but nothing has been built
+  against them.
 
 ## Troubleshooting
 
@@ -277,6 +357,15 @@ first cannot be fixed in browser settings; the second cannot be fixed anywhere e
 **Alerts are on, but I get no toast.** Check the four cases in the table above first — a portal that
 is visible and focused is *supposed* to stay quiet. Then check your OS: macOS Focus, Windows Focus
 Assist and Do Not Disturb all swallow browser notifications without telling the page.
+
+**Alerts say "only while the portal is open" and I want push.** The browser refused the
+subscription. On a plain-http portal that is expected — see the secure-connection section. On
+iPhone or iPad it usually means the portal is open in a Safari tab rather than installed to the
+Home Screen, which Safari requires before it will grant push.
+
+**A device stopped receiving alerts and nothing changed.** Check whether `~/.botnexus/vapid.json`
+was replaced; every subscription made against the old key is silently dead. Turning alerts off and
+on again on that device re-subscribes it.
 
 **The bell is empty and I expected something.** Notifications are raised by failures. A quiet bell
 usually means a healthy gateway rather than a broken one. To confirm the pipeline end to end, let a
