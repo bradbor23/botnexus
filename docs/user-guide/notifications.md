@@ -345,9 +345,10 @@ a gateway health notification, for instance, is not about any one page.
 - **A push carries the notice, not the history.** The service worker draws the title, body and
   link; anything else needs the portal or the API. That is deliberate — the push service can see
   the size of what it relays, so there is no reason to send it more than the notice.
-- **There is no native app yet.** The subscription model is the one an iOS, Android or Windows
-  client would use, and the REST surface is the one it would read, but nothing has been built
-  against them.
+- **There is no native app yet.** The gateway can now push to a native iOS app over APNs, and the
+  REST surface is the one any client would read — but no app has been written against either, and
+  the APNs path has never sent to a real device. Android and Windows would each need their own
+  sender.
 
 ## Troubleshooting
 

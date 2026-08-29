@@ -18,24 +18,23 @@ by BotNexus.
 | Web page | SignalR | Web Push | Both already built |
 | PWA installed to a home screen | SignalR | Web Push | iOS included, but see below |
 | Native Android | SignalR | **Not built** — needs FCM | |
-| Native iOS | SignalR | **Not built** — needs APNs | |
+| Native iOS | SignalR | **APNs** | Needs an Apple Developer account — see below |
 | Native Windows / macOS / Linux | SignalR | **Not built** — needs WNS, or run in the background | |
 | Script, CI, status bar | Polling | n/a | Simplest thing that works |
 
-**Read this before planning a native mobile app.** The web push that exists cannot wake a native
-iOS or Android app. Those platforms only accept pushes from APNs and FCM respectively, and neither
-has a sender in the gateway. What a native client gets today is the full REST API and a live
-SignalR stream while it is running — which is enough for a desktop app that stays open, and not
-enough for a phone app expected to buzz overnight.
+**Web push cannot wake a native app.** Apple and Google only wake a native app for a push that came
+from APNs or FCM respectively — a web push subscription reaches the browser, and nothing else.
 
-Two honest routes to a phone that buzzes:
+For **iOS** that sender now exists; see [Native iOS over APNs](#native-ios-over-apns).
 
-1. **Ship a PWA instead of a native app.** Web Push works today. On iOS the portal must be added to
-   the Home Screen via Share → Add to Home Screen before Safari will grant push; a normal tab
-   cannot subscribe.
-2. **Add an APNs or FCM sender.** The shape is already there: `WebPushSender` subscribes to
-   `INotificationBroadcaster` and a platform sender would sit beside it on the same broadcaster,
-   with its own device-token store. The subscribe/unsubscribe endpoints are the model to copy.
+For **Android**, FCM is not built. A native Android client gets the REST API and a live SignalR
+stream while it is running, which is enough for an app in the foreground and not enough for one
+expected to buzz overnight. Adding it is the same shape as APNs: a sender beside `ApnsSender` on
+the same broadcaster with its own device-token store.
+
+The alternative on either platform is to **ship a PWA**, where web push works today. On iOS the
+portal must be added to the Home Screen via Share → Add to Home Screen before Safari will grant
+push; a normal tab cannot subscribe.
 
 ## Authentication
 
@@ -247,6 +246,115 @@ The gateway prunes a subscription when a push service reports it `404` or `410`,
 through anything else, so a client does not have to manage expiry — but it should still POST
 `unsubscribe` when the user opts out, rather than leaving the gateway to discover it.
 
+## Native iOS over APNs
+
+The gateway can push to a native iOS app, and this is the only route that wakes one.
+
+**It is off unless configured**, which is the ordinary state — a gateway with no Apple Developer
+account does nothing here and says so once at startup rather than warning. Ask before registering:
+
+```http
+GET /api/notifications/apns/status
+```
+
+```json
+{ "configured": true, "bundleId": "com.example.yourapp" }
+```
+
+`configured: false` means registering would achieve nothing; fall back to SignalR while the app is
+open, and tell the user push is unavailable rather than waiting silently for notifications that
+cannot arrive.
+
+### Gateway configuration
+
+Four values under `gateway.apns` in `config.json`, all from an Apple Developer account:
+
+| Key | What it is |
+| --- | --- |
+| `gateway:apns:teamId` | Team identifier, ten characters |
+| `gateway:apns:keyId` | Identifier of the .p8 signing key |
+| `gateway:apns:bundleId` | The app's bundle identifier, sent as the APNs topic |
+| `gateway:apns:privateKeyPath` | Path to the .p8 file |
+
+Token-based (`.p8`) rather than certificates: one key signs for every app under the team and does
+not expire, where a certificate is per-app and lapses annually — which is how push stops working on
+an anniversary nobody wrote down. Keep the `.p8` readable only by the gateway user; it can sign for
+every app you own.
+
+### Registering a device
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/notifications/apns/status` | Whether the gateway can push to iOS at all |
+| `POST` | `/api/notifications/apns/register` | Register a device token, or refresh one |
+| `POST` | `/api/notifications/apns/unregister` | Forget a device. Idempotent |
+
+```json
+{
+  "deviceToken": "a1b2c3d4...",
+  "environment": "sandbox",
+  "deviceName": "Brad's iPhone"
+}
+```
+
+**`environment` is required and must be `sandbox` or `production`.** The two are not
+interchangeable and the gateway will not guess: a sandbox token — which is what a build run from
+Xcode produces — is refused by the production host as `BadDeviceToken`, an error that reads like a
+bad token rather than the wrong address. Send `sandbox` for development and TestFlight-from-Xcode
+builds, `production` for App Store builds.
+
+Call `register` on **every launch**, from
+`application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`. iOS re-issues tokens without
+warning — after a restore, an update, or for no visible reason — and re-registering an unchanged
+one is expected and cheap.
+
+A 400 means the token is not hex, is the wrong length, or the environment was missing or
+unrecognised. Validated on the way in, because a token accepted now but malformed is refused by
+Apple on every future notification while the app goes on believing it is registered.
+
+### What arrives
+
+```json
+{
+  "aps": {
+    "alert": { "title": "Agent 'assistant' run failed", "body": "The provider returned 529." },
+    "sound": "default",
+    "category": "AgentRunFailed"
+  },
+  "id": "56d9bc3f...",
+  "kind": "AgentRunFailed",
+  "severity": "Error",
+  "link": "conversation/c1"
+}
+```
+
+`category` carries the kind so an app can attach notification actions to it. `id`, `kind`,
+`severity` and `link` sit alongside `aps` as custom keys, matching the REST and SignalR shapes, so
+one parser handles all three.
+
+The push carries the notice, not the notification — there is no `body` beyond the alert, no
+timestamps and no read state. Fetch `GET /api/notifications` when the app opens.
+
+Two behaviours to design around:
+
+- **`apns-collapse-id` is the notification id.** The same notification arriving twice replaces the
+  earlier alert rather than stacking a duplicate.
+- **A long body is trimmed.** Apple rejects a payload over 4KB outright rather than truncating it,
+  so the gateway halves the body until it fits. The title is never trimmed.
+
+A push is held for 24 hours for a device that is offline, then dropped. Nothing is lost — the
+notification is in the store, and the app sees it on its next read.
+
+### When a device goes away
+
+The gateway deletes a registration when Apple reports `410 Gone`, `Unregistered`, or
+`BadDeviceToken` — the app was deleted, or the token was never valid for that environment. It keeps
+the registration through everything else, including a rate limit or an Apple outage.
+
+A credential fault (`InvalidProviderToken`, `ExpiredProviderToken`, `TopicDisallowed`) is logged as
+an **error** and deletes nothing: it affects every device at once and means `gateway:apns` is
+wrong, not that anyone's phone is.
+
 ## Testing a client
 
 `POST /api/notifications/test` raises a real notification through the ordinary publisher. It is
@@ -269,7 +377,12 @@ Worth testing explicitly, because these are the paths that break quietly:
 
 Stated plainly so it is not discovered halfway through an implementation.
 
-- **No APNs, FCM or WNS sender.** Native mobile clients cannot be woken.
+- **No FCM or WNS sender.** A native Android or Windows client cannot be woken; iOS can, over
+  APNs.
+- **APNs is untested against Apple.** Everything the gateway decides on its own is covered by
+  tests — the request, the signed token, which refusals are permanent — but no push has been sent
+  to a real device, because that needs an Apple Developer account and a registered bundle id.
+  Expect to shake out the first real send.
 - **No per-kind subscription or muting.** A client receives everything and filters locally.
 - **No server-side pagination cursor.** `limit` caps at 500 and there is no offset; the store is
   not designed to be paged through.
