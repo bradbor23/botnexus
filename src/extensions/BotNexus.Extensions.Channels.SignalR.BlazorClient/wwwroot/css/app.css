@@ -66,6 +66,10 @@
    ──────────────────────────────────────────────────────────────────────── */
 
 :root {
+    /* Tells the browser which palette to draw its OWN chrome in - select popups,
+       scrollbars, checkboxes, date pickers, spinners. Without it those render in light
+       chrome against the dark surface, and no amount of CSS on our side reaches them. */
+    color-scheme: dark;
     /* ── 1. Colour ─────────────────────────────────────────────────────── */
 
     /* Surface ladder. Each step is a lightness increment on a near-neutral
@@ -337,6 +341,7 @@
    rather than inverted — the accent darkens so it still passes against white,
    and --color-on-accent flips to suit it. */
 [data-theme="light"] {
+    color-scheme: light;
     --color-canvas: #f6f8fa;
     --color-surface: #ffffff;
     --color-surface-2: #eef2f6;
@@ -7948,7 +7953,7 @@ h3.conversation-title.editable:hover {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+    box-shadow: var(--shadow-overlay);
 }
 
 .notification-panel-header {

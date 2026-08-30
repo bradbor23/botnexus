@@ -756,6 +756,12 @@ handles it. If you find yourself wanting "white here but dark there", you want a
 
 Documented honestly, so a designer knows where the system does not yet hold.
 
+> Counting emoji: a sweep of `[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]` misses
+> `⏹` (U+23F9), `✏️` (U+270F), `⏳` (U+23F3) and the arrows and geometric shapes.
+> An "emoji: 0" result from too narrow a range is how this document came to claim
+> the migration was finished when it was not. Sweep U+2190–U+2BFF as well as the
+> emoji planes.
+
 | Gap | Impact |
 |---|---|
 | **Icon sizing is not tokenised.** `<Icon Size>` takes a raw px number; call sites pass 12, 13, 14, 15, 16, 18 and 24 while only `--icon-sm` (16) and `--icon-md` (18) exist. | Icons are visually inconsistent between dense rows. Specify sizes from the two tokens and treat the others as legacy. |
@@ -764,9 +770,7 @@ Documented honestly, so a designer knows where the system does not yet hold.
 | **`--radius` legacy alias** still used at many call sites. | Prefer `--radius-sm` / `--radius-lg` explicitly. |
 | **The mobile client does not share these tokens.** `BlazorClient.Mobile` has its own stylesheet and palette. | Anything designed for `/mobile` is a separate visual system today. Do not assume a portal token exists there. |
 | **No "follow system" theme option.** | A light-mode OS user gets dark until they toggle. |
-| **`color-scheme` is never declared.** No `color-scheme` on `:root` anywhere in `app.css`. | Browser-drawn UI — select popups, scrollbars, checkboxes, date pickers — renders in light chrome against the dark theme. One line to fix: `color-scheme: dark` on `:root`, `light` in the `[data-theme="light"]` block. |
 | **The mobile client's top bar overflows at 375px.** `.top-bar` measures 609px against a 375px viewport; `refresh-btn` and `overflow-btn` sit entirely off-screen. | Not cosmetic — that functionality cannot be reached on the most common phone width. Mobile-client work, since it does not share this stylesheet. |
-| **`.notification-panel` keeps a raw shadow.** `box-shadow: 0 8px 24px rgb(0 0 0 / 35%)` where `--shadow-raised` and `--shadow-overlay` exist and do theme. | A dark-theme shadow on a white page. |
 
 ---
 
@@ -834,7 +838,7 @@ rather than as the explanation.
   migrated, 0 remain
 - 144 dead `var(--x, #hex)` fallbacks removed
 - White-on-accent contrast fixed: 13 call sites moved from ~2:1 to ~8.5:1
-- Hardcoded radii 62 → 18; ad-hoc shadows 7 → 1 (`.notification-panel`, see gaps)
+- Hardcoded radii 62 → 18; ad-hoc shadows 7 → 0
 - Global `:focus-visible`, `prefers-reduced-motion`, `prefers-reduced-transparency`
 - Light/dark toggle in the top bar and Settings, persisted per browser and applied
   before first paint
@@ -842,11 +846,10 @@ rather than as the explanation.
 - Type scale applied: 250 raw font sizes across 37 values collapsed onto seven
   roles (7 relative `em` values left by design)
 - Both themes verified WCAG AA by measurement
-- Icon set at 45, generated. Emoji in portal chrome 2 remain, not 0: the `🔀 Steer`
-  button (`ChatPanel.razor:554`) and the `⏳ Running` / `✅ Completed` sub-agent
-  status strings (`ChatPanel.razor:1810`). A third, `@(agent.Emoji ?? "🤖")` in
-  `AgentDashboard.razor:22`, is a fallback for user-supplied agent emoji and is
-  deliberate
+- Icon set at 45, generated. The composer toolbar is now emoji-free: `Steer` is
+  text (matching its `Redirect` sibling), `Stop` takes the `stop` icon, and the
+  `⏳ Running` / `✅ Completed` strings turned out to be dead code and were deleted
+- `color-scheme` declared in both themes, so browser-drawn controls follow the theme
 - "Can delegate" capability chip on the agent roster, reading both delegation tools
 
 **Next**
@@ -857,6 +860,8 @@ rather than as the explanation.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
 5. Bring the mobile client onto the same token layer, and fix its 375px top-bar
    overflow while doing so.
-6. Declare `color-scheme` so native controls follow the theme.
-7. Move `.notification-panel` onto `--shadow-overlay`.
-8. Finish the emoji migration: the Steer button and the sub-agent status strings.
+6. Decide what to do about `ToolDescriptionFormatter` — it still maps 22 tool names
+   onto emoji (`📄` read, `💻` exec, `🗣️` agent_converse …) and those render in the
+   chat tool chips and the todo panel. This is the largest emoji surface left, and
+   several have no equivalent in the 45-icon set, so it needs a design decision
+   rather than a mechanical swap.

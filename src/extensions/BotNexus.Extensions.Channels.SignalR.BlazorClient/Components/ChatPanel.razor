@@ -551,7 +551,7 @@
                             @onclick="SteerAgent"
                             disabled="@(string.IsNullOrWhiteSpace(_inputText))"
                             title="Steer: inject this guidance at the next turn boundary (Enter)">
-                        🔀 Steer
+                        Steer
                     </button>
                     <button class="interrupt-steer-btn" data-testid="chat-redirect-btn"
                             @onclick="InterruptAndSteer"
@@ -568,7 +568,7 @@
                     <button class="abort-btn" data-testid="chat-abort-btn"
                             @onclick="AbortAgent"
                             title="Stop the agent (Escape)">
-                        ⏹ Stop
+                        <Icon Name="stop" Size="14" /> Stop
                     </button>
                 }
                 else
@@ -1806,6 +1806,4 @@ private bool IsStreaming =>
             _ => "You answered."
         };
     }
-
-    private string GetSubAgentStatus() => IsStreaming ? "⏳ Running" : "✅ Completed";
 }
