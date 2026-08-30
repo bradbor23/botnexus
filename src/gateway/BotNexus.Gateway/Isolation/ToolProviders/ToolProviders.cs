@@ -473,7 +473,9 @@ internal sealed class SubAgentToolProvider(
 internal sealed class AgentConverseToolProvider(
     IAgentExchangeService? conversationService,
     ISessionStore? sessionStore,
-    IOptions<AgentExchangeOptions>? exchangeOptions) : IToolProvider
+    IOptions<AgentExchangeOptions>? exchangeOptions,
+    IAgentRegistry? agentRegistry = null,
+    IAgentSupervisor? agentSupervisor = null) : IToolProvider
 {
     /// <inheritdoc />
     public bool ShouldInclude(ToolProviderContext context)
@@ -484,7 +486,18 @@ internal sealed class AgentConverseToolProvider(
     {
         IReadOnlyList<IAgentTool> tools =
         [
-            new AgentConverseTool(conversationService!, sessionStore!, context.AgentId, context.SessionId, exchangeOptions?.Value)
+            // #3577: the registry and supervisor are what let a cancellation name the target's state
+            // rather than returning a bare "A task was canceled.". Both are optional so the tool
+            // still constructs in hosts that do not expose them - it degrades to "unknown" state.
+            new AgentConverseTool(
+                conversationService!,
+                sessionStore!,
+                context.AgentId,
+                context.SessionId,
+                exchangeOptions?.Value,
+                agentRegistry,
+                agentSupervisor,
+                context.Logger)
         ];
         return Task.FromResult(tools);
     }
@@ -591,7 +604,8 @@ internal sealed class AgentManagementToolProvider(
     BotNexusHome? botNexusHome,
     IEnumerable<IAgentChangeNotifier> changeNotifiers,
     IOptions<PlatformConfig>? platformConfigOptions,
-    LlmClient llmClient) : IToolProvider
+    LlmClient llmClient,
+    IOptions<AgentSummaryOptions>? agentSummaryOptions = null) : IToolProvider
 {
     /// <inheritdoc />
     public bool ShouldInclude(ToolProviderContext context)
@@ -611,8 +625,11 @@ internal sealed class AgentManagementToolProvider(
 
         if (context.ToolAllowed("update_agent"))
         {
+            // #3596: the caller id is what makes the summary write self-only; without it the tool
+            // refuses every summary write rather than defaulting to permitting them.
             tools.Add(new UpdateAgentTool(
-                agentRegistry!, configurationWriter!, changeNotifiers, llmClient.Models));
+                agentRegistry!, configurationWriter!, changeNotifiers, llmClient.Models,
+                context.AgentId, agentSummaryOptions?.Value));
         }
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);

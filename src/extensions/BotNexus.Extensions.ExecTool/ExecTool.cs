@@ -85,7 +85,9 @@ public sealed class ExecTool : IAgentTool
         "Execute a command with advanced process management: timeouts, background mode, stdin piping, and environment variable merging. " +
         "Commands run in the agent workspace by default - the same directory the shell tool uses - so workspace-relative " +
         "paths such as 'tmp/q.py' resolve correctly; pass workingDir to run elsewhere. " +
-        "On Windows PowerShell: wrap a variable followed by ':' as ${var} inside double-quoted strings (or use single quotes); " +
+        "On Windows PowerShell: foreach/if/switch/while are STATEMENTS and cannot be piped from directly - wrap them in a " +
+        "subexpression, '$(foreach ($x in $xs) { ... }) | <cmd>', not 'foreach ($x in $xs) { ... } | <cmd>' which fails with " +
+        "'An empty pipe element is not allowed'; wrap a variable followed by ':' as ${var} inside double-quoted strings (or use single quotes); " +
         "no backtick line-continuations; for multi-line/complex scripts write a tmp/*.ps1 file and run it. Inline Python prints " +
         "cp1252 by default (UnicodeEncodeError on emoji/em-dash/box glyphs) -- set $env:PYTHONUTF8=1 or write a tmp/*.py file " +
         "and run 'python -X utf8 file.py'. Never pipe a here-string into an interpreter; write a temp file and execute it.",
@@ -213,7 +215,8 @@ public sealed class ExecTool : IAgentTool
         var env = arguments["env"] as IReadOnlyDictionary<string, string>;
         var workingDir = arguments["workingDir"] as string;
 
-        var (fileName, processArgs) = ResolveCommand(command, _fileSystem);
+        var launch = ResolveCommand(command, _fileSystem);
+        var (fileName, processArgs) = launch;
 
         // Preflight inline pwsh/powershell -Command scripts: reject syntax errors (empty pipe
         // elements, malformed ${...} references, unbalanced braces) BEFORE spawning a process so the
@@ -245,7 +248,12 @@ public sealed class ExecTool : IAgentTool
         // an ARGUMENT-parsing error plus its generic usage banner, naming neither the skill nor any
         // candidate. Diagnose it here instead - name the skill and the closest existing wrapper names
         // enumerated from the skill's scripts/ directory. A near match is reported, never substituted.
-        if (SkillScriptPreflight.TryGetFileTarget(processArgs, out var scriptTarget))
+        //
+        // Issue #3566, clause 5: -File is only a script path on pwsh/powershell. Without this guard a
+        // `-File` element belonging to any other command (e.g. `Get-ChildItem <dir> -File`) was bound
+        // as a filename and the call refused for a script that never existed in the command at all.
+        if (PowerShellPreflight.IsPowerShellExecutable(fileName)
+            && SkillScriptPreflight.TryGetFileTarget(processArgs, out var scriptTarget))
         {
             var probeRoot = workingDir ?? _workingDirectory;
             var resolvedTarget = Path.IsPathRooted(scriptTarget) || string.IsNullOrWhiteSpace(probeRoot)
@@ -265,10 +273,20 @@ public sealed class ExecTool : IAgentTool
             WorkingDirectory = workingDir ?? _workingDirectory ?? string.Empty,
         };
 
-        foreach (var arg in processArgs)
+        if (launch.RawArgumentLine is { } rawArgumentLine)
         {
-            startInfo.ArgumentList.Add(arg);
+            // Windows .cmd/.bat shims only (#3568): hand cmd.exe the line verbatim. Going through
+            // ArgumentList here would re-escape the quotes and break the launch.
+            startInfo.Arguments = rawArgumentLine;
         }
+        else
+        {
+            foreach (var arg in processArgs)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+        }
+
 
         if (env is not null)
         {
@@ -597,12 +615,42 @@ public sealed class ExecTool : IAgentTool
     }
 
     /// <summary>
+    /// A resolved launch descriptor: the executable to start plus EITHER a structured argument
+    /// list (the normal case) OR a raw command line that must be passed to the child verbatim.
+    /// </summary>
+    /// <remarks>
+    /// The raw form exists solely for the Windows <c>.cmd</c>/<c>.bat</c> shim path (issue #3568).
+    /// <c>cmd.exe /d /s /c</c> requires its payload wrapped in a literal outer quote pair, and
+    /// <see cref="ProcessStartInfo.ArgumentList"/> cannot express that: .NET applies CRT quoting to
+    /// every entry, so a payload containing quotes comes out escaped as <c>\"</c>. cmd.exe does not
+    /// recognise backslash-escaped quotes, so it treated the escaped quotes as part of the program
+    /// name and reported <c>'"C:\Program Files\nodejs\npm.cmd"' is not recognized</c> - a correct
+    /// path that could never launch. Setting <see cref="ProcessStartInfo.Arguments"/> directly is
+    /// the only way to hand cmd.exe the byte sequence it actually parses.
+    /// </remarks>
+    /// <param name="FileName">Executable to launch; never quoted (UseShellExecute=false).</param>
+    /// <param name="Args">Structured arguments; empty when <paramref name="RawArgumentLine"/> is set.</param>
+    /// <param name="RawArgumentLine">Verbatim command line, or null to use <paramref name="Args"/>.</param>
+    internal sealed record ExecLaunch(
+        string FileName,
+        IReadOnlyList<string> Args,
+        string? RawArgumentLine = null)
+    {
+        /// <summary>Two-value deconstruction for callers that do not care about the raw line.</summary>
+        public void Deconstruct(out string fileName, out IReadOnlyList<string> args)
+        {
+            fileName = FileName;
+            args = Args;
+        }
+    }
+
+    /// <summary>
     /// Resolves command array into fileName and arguments, handling Windows .cmd/.bat shims.
     /// </summary>
-    internal static (string FileName, IReadOnlyList<string> Args) ResolveCommand(IReadOnlyList<string> command)
+    internal static ExecLaunch ResolveCommand(IReadOnlyList<string> command)
         => ResolveCommand(command, new FileSystem());
 
-    internal static (string FileName, IReadOnlyList<string> Args) ResolveCommand(
+    internal static ExecLaunch ResolveCommand(
         IReadOnlyList<string> command,
         IFileSystem fileSystem)
     {
@@ -611,21 +659,30 @@ public sealed class ExecTool : IAgentTool
 
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            return (exe, args);
+            return new ExecLaunch(exe, args);
         }
 
         // On Windows, resolve .cmd/.bat files through cmd.exe
         var resolved = ResolveWindowsExecutable(exe, fileSystem);
         if (resolved is not null && IsWindowsBatchFile(resolved))
         {
-            // Route through cmd.exe /c to handle .cmd/.bat
-            var cmdArgs = new List<string> { "/d", "/s", "/c" };
-            cmdArgs.Add(BuildCmdCommandLine(resolved, args));
-            return (Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", cmdArgs);
+            // Route through cmd.exe /d /s /c. The payload MUST be a raw line with a literal outer
+            // quote pair (#3568) - /s tells cmd.exe to strip exactly that outer pair and run the
+            // remainder verbatim, which is what makes an inner quoted path with spaces survive.
+            return new ExecLaunch(
+                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                [],
+                BuildCmdRawArgumentLine(resolved, args));
         }
 
-        return (resolved ?? exe, args);
+        return new ExecLaunch(resolved ?? exe, args);
     }
+
+    /// <summary>
+    /// Builds the verbatim <c>cmd.exe</c> argument line for a resolved .cmd/.bat shim.
+    /// </summary>
+    internal static string BuildCmdRawArgumentLine(string resolved, IReadOnlyList<string> args)
+        => $"/d /s /c \"{BuildCmdCommandLine(resolved, args)}\"";
 
     private static string? ResolveWindowsExecutable(string command, IFileSystem fileSystem)
     {

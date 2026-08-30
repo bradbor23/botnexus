@@ -24,6 +24,7 @@ This directory contains detailed documentation for developers working on or exte
 - **[triggers-and-federation.md](triggers-and-federation.md)** — Cron, soul, and cross-world agent communication
 - **[webui-connection.md](webui-connection.md)** — SignalR hub, subscribe-all model, multi-session UI
 - **[notification-clients.md](notification-clients.md)** — Writing a notification client: REST and SignalR contracts, auth, web push, and what each platform can do
+- **[app-integration-surfaces.md](app-integration-surfaces.md)** — The four surfaces an external app attaches through, and which parts of the plugin system are wired
 - **[portal-surface-parity.md](portal-surface-parity.md)** — Desktop vs mobile portal inventory, deliberate-difference register, and alignment plan
 - **[debugging.md](debugging.md)** - Debugging the Gateway, extensions, and WebUI
 - **[workspace-and-memory.md](workspace-and-memory.md)** — Workspace isolation, memory management, context files

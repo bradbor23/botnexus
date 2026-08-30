@@ -71,34 +71,36 @@ You should see the root command help listing all available subcommands.
 19. [config schema](#config-schema) — Generate JSON schema
 20. [config backups list](#config-backups-list) — List retained config.json backups
 21. [config restore](#config-restore) — Validate and restore a config.json backup
-22. [gateway](#gateway) — Manage the gateway lifecycle
-23. [provider](#provider) — Show or set up providers
-24. [provider setup](#provider-setup) — Interactive provider setup wizard
-25. [provider list](#provider-list) — List configured providers
-26. [provider add](#provider-add) — Add or update a provider non-interactively (scripts and CI)
-27. [provider remove](#provider-remove) — Remove a provider non-interactively
-28. [provider copilot](#provider-copilot) — GitHub Copilot diagnostics and auth helpers
-29. [provider ollama](#provider-ollama) — Ollama local model diagnostics
-30. [prompt](#prompt) — Manage prompt templates
-31. [prompt list](#prompt-list) — List available prompt templates
-32. [prompt render](#prompt-render) — Render a prompt template
-33. [prompt run](#prompt-run) — Render and execute a prompt template
-34. [satellite](#satellite) — Manage satellite nodes
-35. [doctor](#doctor) — Run the complete CLI diagnostic suite
-36. [doctor config](#doctor-config) — Guided config migration
-37. [doctor agents](#doctor-agents) — Reconcile persistent agent workspaces
-38. [locations](#locations) — Manage configured locations
-39. [update](#update) — Pull, build, and restart the gateway
-40. [memory](#memory) — Backfill agent memory stores
-41. [cron](#cron-command) — Manage cron jobs from the CLI
-42. [subagent workspace](#subagent-workspace) — Inspect and prune sub-agent workspaces
-43. [debug sessions](#debug-sessions) — Inspect session SQLite database
-44. [debug logs](#debug-logs) — Inspect log files
-45. [debug memory](#debug-memory) — Inspect agent memory directories
-46. [debug db](#debug-db) — Inspect raw databases
-47. [debug gateway](#debug-gateway) — Live gateway diagnostics
-48. [debug cron](#debug-cron) — Cron scheduler diagnostics
-49. [Examples](#examples)
+22. [config store](#config-store) - Manage the SQLite configuration store
+23. [secret](#secret) - Manage the sqlite: secret store
+24. [gateway](#gateway) — Manage the gateway lifecycle
+25. [provider](#provider) — Show or set up providers
+26. [provider setup](#provider-setup) — Interactive provider setup wizard
+27. [provider list](#provider-list) — List configured providers
+28. [provider add](#provider-add) — Add or update a provider non-interactively (scripts and CI)
+29. [provider remove](#provider-remove) — Remove a provider non-interactively
+30. [provider copilot](#provider-copilot) — GitHub Copilot diagnostics and auth helpers
+31. [provider ollama](#provider-ollama) — Ollama local model diagnostics
+32. [prompt](#prompt) — Manage prompt templates
+33. [prompt list](#prompt-list) — List available prompt templates
+34. [prompt render](#prompt-render) — Render a prompt template
+35. [prompt run](#prompt-run) — Render and execute a prompt template
+36. [satellite](#satellite) — Manage satellite nodes
+37. [doctor](#doctor) — Run the complete CLI diagnostic suite
+38. [doctor config](#doctor-config) — Guided config migration
+39. [doctor agents](#doctor-agents) — Reconcile persistent agent workspaces
+40. [locations](#locations) — Manage configured locations
+41. [update](#update) — Pull, build, and restart the gateway
+42. [memory](#memory) — Backfill agent memory stores
+43. [cron](#cron-command) — Manage cron jobs from the CLI
+44. [subagent workspace](#subagent-workspace) — Inspect and prune sub-agent workspaces
+45. [debug sessions](#debug-sessions) — Inspect session SQLite database
+46. [debug logs](#debug-logs) — Inspect log files
+47. [debug memory](#debug-memory) — Inspect agent memory directories
+48. [debug db](#debug-db) — Inspect raw databases
+49. [debug gateway](#debug-gateway) — Live gateway diagnostics
+50. [debug cron](#debug-cron) — Cron scheduler diagnostics
+51. [Examples](#examples)
 
 ---
 
@@ -1251,6 +1253,150 @@ Generated schema: docs\botnexus-config.schema.json
 ```powershell
 botnexus config schema --output my-schema.json
 ```
+
+---
+
+## config store
+
+Manage the SQLite configuration store (`config.db`). When the store is enabled it serves
+configuration to the gateway and **its values win over `config.json`**; the file stays on disk and
+is never modified by these commands.
+
+### Usage
+
+```powershell
+botnexus config store <COMMAND> [OPTIONS]
+```
+
+### Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `enable` | Create `config.db` from the current `config.json`. The store then serves configuration, with its values winning over the file. |
+| `status` | Report whether the store exists and how many entries it holds. |
+| `disable` | Delete `config.db`. The gateway returns to file-only configuration on the next start. |
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--target` | resolved config directory | Directory holding `config.json`; the store is placed alongside it. |
+
+### Behaviour
+
+- `enable` reads the **raw** JSON document rather than a bound config object. Binding collapses
+  "key absent" and "key present and null" into the same null, and the store records those two
+  states distinctly — populating from a bound object would silently rewrite every deliberate null
+  as an absence.
+- `enable` reports how many entries were imported and requires a **gateway restart** to take
+  effect. It exits `1` if `config.json` is missing (run `botnexus init` first) or is not a JSON
+  object.
+- `status` exits `0` in both states: it prints `Configuration store not enabled.` when `config.db`
+  is absent, and the entry count plus the store-wins note when it is present.
+- `disable` needs **no `--commit` flag and prompts for nothing** — unlike
+  [`config restore`](#config-restore), which overwrites the source document. The store is a derived
+  copy of `config.json`, which is left untouched, so a disable discards nothing that
+  `config store enable` cannot regenerate. Disabling an absent store is a no-op that exits `0`.
+
+### Examples
+
+**Enable the store:**
+
+```powershell
+botnexus config store enable
+```
+
+Output:
+
+```text
+Configuration store enabled. ~/.botnexus/config.db
+  184 entries imported from config.json.
+  Restart the gateway for the store to take effect.
+```
+
+**Check status:**
+
+```powershell
+botnexus config store status
+```
+
+**Return to file-only configuration:**
+
+```powershell
+botnexus config store disable
+```
+
+---
+
+## secret
+
+Manage the built-in `sqlite:` secret store — the only credential backend BotNexus itself owns, and therefore the only one it can populate. Secrets stored here are referenced from a location's `credentialRef` as `sqlite:<name>`.
+
+Aliased as `secrets`.
+
+### Usage
+
+```powershell
+botnexus secret <subcommand> [name] [--target <path>]
+```
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `set <name>` | Store a secret, reading the value from stdin. Overwrites an existing entry of the same name. |
+| `list` | List stored secret names and their last-updated timestamps. Never prints values. |
+| `remove <name>` | Remove a stored secret. Aliased as `rm`. |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--target <path>` | BotNexus home directory to operate on. Defaults to the resolved home. The store lives beside it. |
+| `--verbose` | Verbose output. |
+
+### The value is never an argument
+
+`set` takes only a **name** on the command line. The value is read from stdin — piped, or prompted for without echo when attached to a terminal. This is deliberate: anything passed as an argument lands in shell history, in `ps` output for the life of the process, and in any CI log that echoes its commands.
+
+```powershell
+# piped (scripts, CI)
+'my-api-key' | botnexus secret set contoso-api
+
+# prompted, no echo (interactive)
+botnexus secret set contoso-api
+```
+
+### There is deliberately no `get`
+
+BotNexus resolves a secret at the moment it needs one. A command whose entire purpose is to print a credential to a terminal is a facility for exfiltrating it, so none is provided. Use the platform's own tooling if you genuinely need to read a value back.
+
+`list` shows names and timestamps only:
+
+```powershell
+botnexus secret list
+```
+
+```text
+Secrets (~/.botnexus/secrets.db)
+  contoso-api  2026-08-28T09:14:02.1234567Z
+```
+
+### File permissions
+
+The store file is narrowed to owner-only access when it is first created — before any value is written into it — and the restriction is **re-applied after every write**, because SQLite recreates journal siblings as it goes and a guard-rail that only held for the file's first version would be worthless. `list` additionally warns when the store is readable by other users.
+
+### Exit codes
+
+| Code | Condition |
+|------|-----------|
+| `0` | Success. `list` also returns `0` when no store exists yet or the store is empty. |
+| `1` | Empty name, no value supplied, `remove` of a name that is not present, no store for `remove`, or a SQLite read/write failure. |
+
+### Related
+
+- [Servers, credentials and agents](user-guide/secrets-and-locations.md) — the `credentialRef` model and the other resolver schemes (`env:`, `file:`, `keyring:`)
+- [`locations`](#locations) — registering the servers that reference these secrets
 
 ---
 

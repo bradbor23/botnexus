@@ -82,6 +82,7 @@ public static class GatewayServiceCollectionExtensions
         services.AddOptions<SubAgentWorkspaceSweepOptions>();
         services.AddOptions<SessionWarmupOptions>();
         services.AddOptions<DelayToolOptions>();
+        services.AddOptions<AgentSummaryOptions>();
         services.AddOptions<FileWatcherToolOptions>();
         services.AddOptions<CompactionOptions>();
         services.AddOptions<SqliteWalCheckpointOptions>();
@@ -96,6 +97,7 @@ public static class GatewayServiceCollectionExtensions
             services.Configure<SessionWarmupOptions>(config.GetSection("gateway:sessionWarmup"));
             services.Configure<SubAgentOptions>(config.GetSection("gateway:subAgents"));
             services.Configure<DelayToolOptions>(config.GetSection("gateway:delayTool"));
+            services.Configure<AgentSummaryOptions>(config.GetSection("gateway:agentSummary"));
             services.Configure<FileWatcherToolOptions>(config.GetSection("gateway:fileWatcherTool"));
             services.Configure<AgentExchangeOptions>(config.GetSection("gateway:agentExchange"));
             services.Configure<AgentExchangeBudgetOptions>(config.GetSection("gateway:agentExchange"));
@@ -184,6 +186,10 @@ public static class GatewayServiceCollectionExtensions
         services.TryAddSingleton<BotNexus.Gateway.Audit.IToolAuditSink>(
             _ => BotNexus.Gateway.Audit.DefaultToolAuditSink.Instance);
         services.AddSingleton<AgentExchangeBudgetTracker>();
+        // #3494: per-agent inbound admission control. MUST be a singleton - a per-scope queue would
+        // gate nothing, since two concurrent exchanges targeting one agent would each see their own
+        // empty mailbox and both barge into the same single execution slot.
+        services.TryAddSingleton<AgentExchangeInboundQueue>();
         // #1542: the shared turn loop and cross-world federation routing are their own
         // single-responsibility collaborators, injected into AgentExchangeService.
         services.AddSingleton<AgentExchangeTurnEngine>(serviceProvider =>
@@ -263,6 +269,9 @@ public static class GatewayServiceCollectionExtensions
         // #2896: scope the auto-compaction budget to the agent's / conversation's own context window
         // instead of the process-global CompactionOptions.ContextWindowTokens.
         services.TryAddSingleton<ISessionContextWindowResolver, SessionContextWindowResolver>();
+        // #3535: turns a context-exhausted empty completion from a silent blank turn into an
+        // explicit MessageRole.Notification, discriminated against the SAME scope-resolved window.
+        services.TryAddSingleton<IContextExhaustionNotifier, ContextExhaustionNotifier>();
         services.AddSingleton<IPreCompactionMemoryFlusher, PreCompactionMemoryFlusher>();
         services.AddSingleton<ISessionCompactionCoordinator, SessionCompactionCoordinator>();
         services.AddSingleton<ISessionEndMemoryFlusher, SessionEndMemoryFlusher>();
@@ -562,7 +571,11 @@ public static class GatewayServiceCollectionExtensions
         {
             var home = serviceProvider.GetRequiredService<BotNexusHome>();
             var writer = serviceProvider.GetRequiredService<PlatformConfigWriter>();
-            return new PlatformConfigAgentWriter(writer, home);
+            // #3547: the resolver lets the writer recognise an incoming absolute path as the
+            // resolved form of a stored '@location' alias and write the alias back instead.
+            // Optional by design - without it the writer persists the caller's values verbatim.
+            var locationResolver = serviceProvider.GetService<ILocationResolver>();
+            return new PlatformConfigAgentWriter(writer, home, locationResolver);
         }));
         // Config hydration — populate missing keys with defaults on startup
         services.AddSingleton<IConfigSchemaContributor, GatewaySchemaContributor>();
@@ -667,11 +680,20 @@ public static class GatewayServiceCollectionExtensions
         }
     }
 
+    /// <summary>
+    /// Builds the platform config writer, fanning writes out to every backing store (#3527).
+    /// </summary>
+    /// <remarks>
+    /// Delegates to <see cref="BotNexus.Gateway.Configuration.Writers.ConfigWriterFactory"/> so the DI
+    /// path and the seven direct call sites in the CLI and API assemble the same backend set. Two
+    /// copies of "which writers does this path need" is precisely how the gateway and the CLI would
+    /// drift into disagreeing about where a write lands.
+    /// </remarks>
     private static PlatformConfigWriter CreatePlatformConfigWriter(string configPath, IFileSystem fileSystem)
     {
         var directory = Path.GetDirectoryName(configPath) ?? PlatformConfigLoader.GetDefaultConfigDirectory(fileSystem);
         var backup = new ConfigBackupService(Path.Combine(directory, "backups"), fileSystem);
-        return new PlatformConfigWriter(configPath, fileSystem, backup);
+        return BotNexus.Gateway.Configuration.Writers.ConfigWriterFactory.Create(configPath, fileSystem, backup);
     }
 
     /// <summary>

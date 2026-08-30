@@ -426,7 +426,16 @@ public sealed class CronTool(
         if (string.Equals(updated.ActionType, "command", StringComparison.Ordinal))
             EnsureCommandAuthorized(updated, newShellCommand!);
 
-        var saved = await cronStore.UpdateDefinitionAsync(updated, cancellationToken).ConfigureAwait(false)
+        // #3573: the authorization decision above was made against `existing`, and ~100 lines of
+        // argument parsing, model preflight and an AWAITED alert-target validation have run since.
+        // Carrying the ownership snapshot into the WHERE clause makes the commit conditional on
+        // that decision still holding; a re-read here would only narrow the window, not close it,
+        // and would leave the REST seam - which reaches the same store method - unguarded.
+        var saved = await cronStore.UpdateDefinitionAsync(
+                updated,
+                CronJobOwnershipExpectation.From(existing),
+                cancellationToken)
+            .ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Cron job '{jobId.Value}' was not found.");
 
         // #3160: disabling a job must abort the run it has in flight, not merely stop future fires.
@@ -699,17 +708,13 @@ public sealed class CronTool(
             throw new UnauthorizedAccessException("You can only manage cron jobs created by or targeting this agent.");
     }
 
-    // The authorisation predicate behind EnsureCanManage, extracted so the cross-job history scope
-    // (#2838) is derived from the SAME rule rather than a parallel reimplementation of it.
+    // The authorisation predicate behind EnsureCanManage. It was extracted from the per-job paths
+    // so the cross-job history scope (#2838) derives from the SAME rule; #3575 hoisted the rule
+    // itself into CronJobOwnership so the REST seam in BotNexus.Gateway.Api can apply it too. This
+    // stays as a one-line delegate rather than being inlined at each call site because
+    // .Where(CanManage) is a method-group reference in the history/costs scopes.
     private bool CanManage(CronJob job)
-    {
-        if (allowCrossAgentCron)
-            return true;
-
-        var isCreator = string.Equals(job.CreatedBy, _agentId.Value, StringComparison.OrdinalIgnoreCase);
-        var isTarget = job.AgentId.HasValue && job.AgentId.Value == _agentId;
-        return isCreator || isTarget;
-    }
+        => CronJobOwnership.CanManage(job, _agentId, allowCrossAgentCron);
 
     private static AgentToolResult TextResult(string text)
         => new([new AgentToolContent(AgentToolContentType.Text, text)]);

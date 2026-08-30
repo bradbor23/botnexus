@@ -676,7 +676,9 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
             new ToolProviders.AgentConverseToolProvider(
                 _serviceProvider.GetService<IAgentExchangeService>(),
                 sessionStore,
-                _serviceProvider.GetService<IOptions<AgentExchangeOptions>>()),
+                _serviceProvider.GetService<IOptions<AgentExchangeOptions>>(),
+                _serviceProvider.GetService<IAgentRegistry>(),
+                _serviceProvider.GetService<IAgentSupervisor>()),
             new ToolProviders.FinishAgentExchangeToolProvider(sessionStore),
             new ToolProviders.ListAgentsToolProvider(
                 _serviceProvider.GetService<IAgentRegistry>(),
@@ -689,7 +691,8 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
                 _serviceProvider.GetService<BotNexusHome>(),
                 _serviceProvider.GetServices<IAgentChangeNotifier>(),
                 _serviceProvider.GetService<IOptions<PlatformConfig>>(),
-                _llmClient),
+                _llmClient,
+                _serviceProvider.GetService<IOptions<AgentSummaryOptions>>()),
             new ToolProviders.CanvasToolProvider(
                 _serviceProvider.GetService<IConversationStore>(),
                 _serviceProvider.GetServices<IAgentCanvasNotifier>(),
@@ -966,6 +969,34 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// result. Optional so unit tests can construct the handle without the gateway DI graph.
     /// </summary>
     private readonly ToolAuditWriteAhead? _toolWriteAhead;
+
+    /// <summary>
+    /// The THIRD deliberate-cancellation source (#3384): signalled when the gateway itself destroys
+    /// this handle via <see cref="IAgentSupervisor.StopAsync"/> - abandoned-turn recovery (#790) and
+    /// the system-prompt-refresh stop both take that path, and both land here as
+    /// <see cref="DisposeAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The #3230 guard consults the caller's turn token and the linked prompt source. Both describe
+    /// the SAME thing - the caller's turn - so a supervisor stop, which originates OUTSIDE the
+    /// streaming call, trips neither: the orderly teardown fell through to the general catch and was
+    /// logged as two <c>[ERR]</c> records plus a synthetic <c>Internal streaming error</c> pushed at
+    /// the client while the platform was successfully recovering.
+    /// <para>
+    /// This is deliberately a third TERM in the existing predicate, not a fourth catch clause: the
+    /// classification stays expressed once, so a future cancellation source joins the same seam
+    /// (#3384 AC6) and the two teardown gates can never silently disagree.
+    /// </para>
+    /// </remarks>
+    private readonly CancellationTokenSource _deliberateStop = new();
+
+    /// <summary>
+    /// True once the gateway has deliberately torn this handle down. The streaming guard ANDs this
+    /// with the exception being cancellation-shaped, so it is a NARROWING of the fault path, never a
+    /// blanket swallow: an <see cref="OperationCanceledException"/> raised while no source is
+    /// signalled remains a genuine fault with its Error log, client error event and faulted channel.
+    /// </summary>
+    internal bool IsDeliberatelyStopped => _deliberateStop.IsCancellationRequested;
 
     public InProcessAgentHandle(
         BotNexus.Agent.Core.Agent agent,
@@ -1550,6 +1581,34 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
         };
 
     /// <summary>
+    /// The single classification seam for "this cancellation was deliberate" (#3230, extended by
+    /// #3384). Returns true when ANY known teardown source is signalled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three sources, and they are genuinely distinct despite the first two overlapping:
+    /// <list type="number">
+    /// <item><paramref name="callerToken"/> - the caller's turn token (client disconnect, host
+    /// shutdown, conversation archive #3230).</item>
+    /// <item><paramref name="promptCancellation"/> - the linked source over that token, which the
+    /// stream's own <c>finally</c> also cancels when the enumeration ends.</item>
+    /// <item><see cref="IsDeliberatelyStopped"/> - the gateway destroying this handle from OUTSIDE
+    /// the streaming call via the supervisor (#3384). Neither token above is signalled in that
+    /// case, which is exactly why the orderly teardown used to be logged as a fault.</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// Expressed ONCE and consulted by delegate so it is evaluated at throw time against live token
+    /// state, never captured at subscribe time. A fourth source joins this method (#3384 AC6) rather
+    /// than acquiring another catch clause, so the classification cannot fork and disagree.
+    /// </para>
+    /// </remarks>
+    internal bool IsDeliberateTeardown(CancellationTokenSource promptCancellation, CancellationToken callerToken)
+        => promptCancellation.IsCancellationRequested
+            || callerToken.IsCancellationRequested
+            || IsDeliberatelyStopped;
+
+    /// <summary>
     /// Maps one agent event and writes it to the stream channel, classifying any failure as either
     /// caller-initiated cancellation (control flow) or a genuine fault (issue #3230).
     /// </summary>
@@ -1695,7 +1754,10 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
                 events.Writer,
                 MapAgentEvent,
                 eventCancellation,
-                () => promptCancellation.IsCancellationRequested || cancellationToken.IsCancellationRequested,
+                // #3384: the predicate now also covers a supervisor-initiated stop of THIS handle,
+                // which originates outside the streaming call and trips neither token above.
+                // Expressed once in IsDeliberateTeardown so both teardown gates cannot diverge.
+                () => IsDeliberateTeardown(promptCancellation, cancellationToken),
                 _logger,
                 AgentId,
                 SessionId);
@@ -1956,6 +2018,12 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        // #3384: signal BEFORE aborting. AbortAsync is what cancels the in-flight run, so any
+        // cancellation it raises inside the streaming pipeline must already see the deliberate-stop
+        // source set, or the guard races the teardown it is classifying.
+        try { await _deliberateStop.CancelAsync(); }
+        catch (ObjectDisposedException) { /* already torn down; nothing to signal. */ }
+
         try { await _agent.AbortAsync(); }
         catch (Exception ex) { _logger.LogWarning(ex, "Error aborting agent during dispose"); }
 
@@ -1974,6 +2042,8 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
                 catch (Exception ex) { _logger.LogWarning(ex, "Error disposing resource {ResourceType}", resource.GetType().Name); }
             }
         }
+
+        _deliberateStop.Dispose();
     }
 }
 
