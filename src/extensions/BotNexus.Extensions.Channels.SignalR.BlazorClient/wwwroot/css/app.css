@@ -6847,7 +6847,18 @@ h3.conversation-title.editable:hover {
     resize: vertical;
     min-height: 6rem;
     padding: 0.75rem;
-    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    transition: border-color 0.15s;
+}
+
+.home-message-input:focus {
+    border-color: var(--accent);
+    outline: none;
 }
 
 .home-starter-controls {
