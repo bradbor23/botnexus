@@ -188,6 +188,17 @@ A plugin carries code by pointing at an extension manifest:
 beside it in the repo is deployed as the extension, so the layout is just an extension repo with a
 plugin manifest added.
 
+**The manifest's directory is the deploy unit**, and that decides where to put it:
+
+- **A payload-only repo** — nothing in it but the built extension — keeps the manifest at the
+  root. `.botnexus-plugin/`, `skills/` and `.git/` are excluded, so the root is already clean.
+- **A repo that is also the source** of the extension must put the manifest in a
+  **subdirectory** (`extension/`, say). Those three exclusions apply *only* when the manifest sits
+  at the plugin root; a root manifest in a source repo deploys `src/`, `package.json`,
+  `node_modules/` and the rest into `~/.botnexus/extensions/<id>/`.
+
+Both are valid. The choice follows from whether the repository is a payload or a project.
+
 Three rules the installer enforces, each of which refuses the install rather than warning:
 
 - **`"endpointPhase": "after-authentication"` is required** in the extension manifest. Plugin code
@@ -221,10 +232,13 @@ Two consequences worth designing around:
   assemblies loaded and cannot replace them underneath itself; attempting an update is refused with
   that instruction.
 
-Ship the entry assembly and its **private** dependencies only. Leave shared contracts
-(`BotNexus.Gateway.Abstractions`, `BotNexus.Domain`, …) out: the loader's `AssemblyLoadContext`
-resolves those from the host, and shipping a mismatched copy is how a binary plugin breaks on a
-gateway a patch release away.
+Ship the entry assembly, its `.deps.json`, and its **private** dependencies. Leave shared
+contracts (`BotNexus.Gateway.Abstractions`, `BotNexus.Domain`, …) out — but not for the reason
+the older design notes give. `ExtensionAssemblyLoadContext.Load` unifies with the host
+**categorically**: any assembly the host has loaded, ships in its base directory, or owns
+resolves from the host's default context, and the extension's private copy is never consulted.
+So a shipped contract assembly is **dead weight rather than a live hazard** — it inflates the
+plugin and misleads the next reader into thinking the version in it matters. It does not.
 
 Ship any web assets in `wwwroot/` beside the extension manifest. They travel with the plugin and
 are **not** in the BotNexus repo, so deploying the extension from a BotNexus build gives the shell
