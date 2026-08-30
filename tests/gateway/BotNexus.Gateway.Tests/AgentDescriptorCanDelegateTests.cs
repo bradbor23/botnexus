@@ -39,10 +39,19 @@ public sealed class AgentDescriptorCanDelegateTests
     }
 
     [Fact]
-    public void Restricted_agent_without_the_tool_cannot_delegate()
+    public void Restricted_agent_granted_only_converse_can_delegate()
+    {
+        // agent_converse is the other way to hand work to another agent - it calls an agent that
+        // already exists rather than spawning an ephemeral child. An operator reading the roster
+        // does not care which mechanism is configured, so both must mark the card.
+        CreateDescriptor(toolIds: ["read", "bash", "agent_converse"]).CanDelegate.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Restricted_agent_without_either_tool_cannot_delegate()
     {
         // The shape of every purpose-built agent on a typical install: an explicit toolIds list
-        // that simply does not name the spawn tool.
+        // naming neither delegation tool.
         CreateDescriptor(toolIds: ["read", "write", "bash", "exec", "canvas", "grep", "curl"])
             .CanDelegate.ShouldBeFalse();
     }
