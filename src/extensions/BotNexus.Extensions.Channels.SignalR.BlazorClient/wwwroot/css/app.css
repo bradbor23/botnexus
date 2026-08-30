@@ -3336,6 +3336,20 @@ details[open] > .thinking-summary::before {
     gap: 0.75rem;
 }
 
+/* Reassurance, not an error: shown while the conversation rows are empty, which is the
+   ordinary state of an agent nobody has messaged yet. Styled as a quiet note rather than a
+   warning, because nothing is wrong. */
+.config-note {
+    margin: 0 0 0.75rem;
+    padding: 0.5rem 0.6rem;
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
 .config-field {
     display: flex;
     flex-direction: column;
