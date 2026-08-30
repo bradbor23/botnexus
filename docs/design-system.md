@@ -648,6 +648,23 @@ shout at the user and devalues the real confirmation.
 - **Empty state** — centred, `--color-ink-muted`, generous padding. Say what would
   be here and how to get it, not just "no items".
 
+### Flex rows that must not overflow
+
+A flex item defaults to `min-width: auto`, which resolves to the item's *intrinsic*
+minimum — for a `<select>`, the width of its widest `<option>`. So `flex: 1` alone
+does **not** guarantee an item can shrink, and a long option can push its siblings
+straight off the viewport.
+
+This is exactly how the mobile top bar came to measure 609px against a 375px
+screen, with the refresh and overflow buttons entirely off-screen and unreachable.
+The `text-overflow: ellipsis` already on those selects could never fire for the
+same reason.
+
+**Any flex child that carries text you are willing to truncate needs
+`min-width: 0`.** And give the controls that must survive — a menu that is the only
+route to Settings or Archive — an explicit `flex-shrink: 0`, so the squeeze lands
+on the text, never on the affordance.
+
 ### Capability chips
 
 A chip marks a **capability an agent has** — not a state it is in, and not a
@@ -770,7 +787,6 @@ Documented honestly, so a designer knows where the system does not yet hold.
 | **`--radius` legacy alias** still used at many call sites. | Prefer `--radius-sm` / `--radius-lg` explicitly. |
 | **The mobile client does not share these tokens.** `BlazorClient.Mobile` has its own stylesheet and palette. | Anything designed for `/mobile` is a separate visual system today. Do not assume a portal token exists there. |
 | **No "follow system" theme option.** | A light-mode OS user gets dark until they toggle. |
-| **The mobile client's top bar overflows at 375px.** `.top-bar` measures 609px against a 375px viewport; `refresh-btn` and `overflow-btn` sit entirely off-screen. | Not cosmetic — that functionality cannot be reached on the most common phone width. Mobile-client work, since it does not share this stylesheet. |
 
 ---
 
@@ -858,8 +874,8 @@ rather than as the explanation.
 2. Move icon tones onto tokens so they respond to the theme.
 3. Retire the legacy colour aliases once no rule references them.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
-5. Bring the mobile client onto the same token layer, and fix its 375px top-bar
-   overflow while doing so.
+5. Bring the mobile client onto the same token layer. Its top-bar overflow is
+   fixed, but the stylesheet is still raw hex throughout.
 6. Decide what to do about `ToolDescriptionFormatter` — it still maps 22 tool names
    onto emoji (`📄` read, `💻` exec, `🗣️` agent_converse …) and those render in the
    chat tool chips and the todo panel. This is the largest emoji surface left, and

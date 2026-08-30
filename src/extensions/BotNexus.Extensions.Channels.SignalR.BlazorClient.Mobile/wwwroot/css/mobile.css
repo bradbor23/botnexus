@@ -47,7 +47,13 @@ body {
 
 .agent-select,
 .conv-select {
+    /* min-width:0 is what makes `flex: 1` actually shrink these. A flex item defaults to
+       min-width:auto, and for a <select> that resolves to the intrinsic width of its widest
+       <option> - a long conversation title - so the selects refused to give ground and pushed
+       the refresh and overflow buttons off the end of a 375px viewport entirely. The
+       text-overflow rule below could never fire for the same reason. */
     flex: 1;
+    min-width: 0;
     background: #0d1926;
     color: #d0dff0;
     border: 1px solid rgba(100, 160, 220, 0.2);
@@ -68,6 +74,9 @@ body {
 /* ── Overflow (⋮) menu ───────────────────────────────────────────────────── */
 .overflow-menu-wrapper {
     position: relative;
+    /* Never let the menu be the thing that gets squeezed - it is the only route to New
+       conversation, Settings and Archive. */
+    flex-shrink: 0;
 }
 
 .overflow-btn {
