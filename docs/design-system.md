@@ -648,6 +648,37 @@ shout at the user and devalues the real confirmation.
 - **Empty state** — centred, `--color-ink-muted`, generous padding. Say what would
   be here and how to get it, not just "no items".
 
+### Capability chips
+
+A chip marks a **capability an agent has** — not a state it is in, and not a
+warning. It takes the accent wash (`--color-accent-wash` ground,
+`--color-accent-ring` hairline, `--accent` text, `--radius-pill`,
+`--text-caption`), deliberately away from the status hues, because status colour
+is reserved for things that change on their own.
+
+The one chip in the system today is **Can delegate**, on the agent roster. It
+appears when an agent's tool policy admits either `spawn_subagent` (create an
+ephemeral child) or `agent_converse` (call an agent that already exists). Most
+agents on a typical install carry neither, so most cards stay unmarked — which is
+the point. A marker that appears on everything distinguishes nothing.
+
+**What a capability chip must not claim.** `AgentDescriptor.CanDelegate` derives
+from the agent's own `toolIds` and says nothing about *whom* it may call.
+`subAgents` carries that, and is enforced only when the gateway's agent-exchange
+policy is `whitelist` — and never on the spawn path at all. So the chip cannot
+honestly name targets, and does not try to.
+
+Runtime conditions are excluded for the same reason: the spawn tool additionally
+needs a sub-agent manager, `SubAgentOptions.MaxDepth` above zero, and a session
+that is not itself a sub-agent session. If delegation is ever disabled
+platform-wide, the caller must suppress the chip — the property will not know.
+
+**The lesson worth keeping.** This chip shipped reading `spawn_subagent` alone and
+was wrong the first time it met a real configuration: an agent wired for
+delegation via `agent_converse` rendered unmarked. A badge derived from a
+capability must enumerate *every* mechanism that grants it, or it lies by
+omission.
+
 ### Writing UI copy
 
 Words are design material. Name things by what a person recognises, not how the
@@ -733,6 +764,9 @@ Documented honestly, so a designer knows where the system does not yet hold.
 | **`--radius` legacy alias** still used at many call sites. | Prefer `--radius-sm` / `--radius-lg` explicitly. |
 | **The mobile client does not share these tokens.** `BlazorClient.Mobile` has its own stylesheet and palette. | Anything designed for `/mobile` is a separate visual system today. Do not assume a portal token exists there. |
 | **No "follow system" theme option.** | A light-mode OS user gets dark until they toggle. |
+| **`color-scheme` is never declared.** No `color-scheme` on `:root` anywhere in `app.css`. | Browser-drawn UI — select popups, scrollbars, checkboxes, date pickers — renders in light chrome against the dark theme. One line to fix: `color-scheme: dark` on `:root`, `light` in the `[data-theme="light"]` block. |
+| **The mobile client's top bar overflows at 375px.** `.top-bar` measures 609px against a 375px viewport; `refresh-btn` and `overflow-btn` sit entirely off-screen. | Not cosmetic — that functionality cannot be reached on the most common phone width. Mobile-client work, since it does not share this stylesheet. |
+| **`.notification-panel` keeps a raw shadow.** `box-shadow: 0 8px 24px rgb(0 0 0 / 35%)` where `--shadow-raised` and `--shadow-overlay` exist and do theme. | A dark-theme shadow on a white page. |
 
 ---
 
@@ -754,16 +788,37 @@ individual files:
 rsync -a --delete <blazor publish output>/ <deploy target>/blazor/
 ```
 
-Hand-copying `app.css` leaves `service-worker-assets.js` holding the old integrity
-hash, so the service worker keeps serving the previous build and your change
-appears to have no effect. Deploying the whole directory keeps the asset manifest
-consistent with the files.
+The reason is **pre-compressed variants**. The build emits `app.css`,
+`app.css.br` and `app.css.gz` side by side, and the gateway serves the compressed
+one to any client sending `Accept-Encoding` — which every browser does.
+Hand-editing `app.css` therefore changes the only copy a browser never reads: the
+file is correct on disk, correct to `curl`, and the page keeps rendering the old
+styles. `index.html` / `index.html.gz` behave the same way, so a hand-bumped
+cache-buster silently does nothing.
 
-After deploying, verify three things together: the `app.css?v=` query in
-`index.html`, the service worker manifest version, and the actual token value in
-the served CSS. If a change seems not to have landed, check that `/` and a deep
-link such as `/configuration` report the same `dotnet.<hash>.js` before blaming a
-cache.
+**Verify the way a browser asks, not the way `curl` does:**
+
+```
+curl -s --compressed <url>/            | grep -o 'app\.css?v=[a-z0-9]*'
+curl -s --compressed <url>/css/app.css | grep -c '<your new rule>'
+```
+
+A plain `curl` reads the uncompressed file and will cheerfully confirm a change no
+user can see. This cost real time: several rounds of "verified, it is serving the
+fix" were all reading a file no browser ever receives.
+
+**Bump `?v=` in `index.html` whenever `app.css` changes.** It is hand-maintained
+and it is the cache key; a stale one leaves returning visitors on the old
+stylesheet. Bump it in the **source and rebuild** — editing the deployed copy
+leaves the compressed variant behind and reintroduces the problem above.
+
+A service worker also ships (`service-worker.js`, registered from
+`index.html`). It was previously believed to be the cause of stale assets; that
+has not been reproduced. In the one environment measured it never registered at
+all (`getRegistrations()` returned 0, registration failing with "An unknown error
+occurred when fetching the script" while the script itself served HTTP 200), so it
+could not have been serving anything. Treat its caching behaviour as unverified
+rather than as the explanation.
 
 ---
 
@@ -779,7 +834,7 @@ cache.
   migrated, 0 remain
 - 144 dead `var(--x, #hex)` fallbacks removed
 - White-on-accent contrast fixed: 13 call sites moved from ~2:1 to ~8.5:1
-- Hardcoded radii 62 → 18; ad-hoc shadows 7 → 0
+- Hardcoded radii 62 → 18; ad-hoc shadows 7 → 1 (`.notification-panel`, see gaps)
 - Global `:focus-visible`, `prefers-reduced-motion`, `prefers-reduced-transparency`
 - Light/dark toggle in the top bar and Settings, persisted per browser and applied
   before first paint
@@ -787,7 +842,12 @@ cache.
 - Type scale applied: 250 raw font sizes across 37 values collapsed onto seven
   roles (7 relative `em` values left by design)
 - Both themes verified WCAG AA by measurement
-- Icon set at 45, generated; zero emoji remaining in portal markup
+- Icon set at 45, generated. Emoji in portal chrome 2 remain, not 0: the `🔀 Steer`
+  button (`ChatPanel.razor:554`) and the `⏳ Running` / `✅ Completed` sub-agent
+  status strings (`ChatPanel.razor:1810`). A third, `@(agent.Emoji ?? "🤖")` in
+  `AgentDashboard.razor:22`, is a fallback for user-supplied agent emoji and is
+  deliberate
+- "Can delegate" capability chip on the agent roster, reading both delegation tools
 
 **Next**
 
@@ -795,4 +855,8 @@ cache.
 2. Move icon tones onto tokens so they respond to the theme.
 3. Retire the legacy colour aliases once no rule references them.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
-5. Bring the mobile client onto the same token layer.
+5. Bring the mobile client onto the same token layer, and fix its 375px top-bar
+   overflow while doing so.
+6. Declare `color-scheme` so native controls follow the theme.
+7. Move `.notification-panel` onto `--shadow-overlay`.
+8. Finish the emoji migration: the Steer button and the sub-agent status strings.
