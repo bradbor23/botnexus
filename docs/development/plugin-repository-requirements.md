@@ -80,10 +80,13 @@ Minimal valid manifest:
 }
 ```
 
-## 3. Skills — the only part that is actually wired today
+## 3. Skills
 
-Read this section carefully: **skills are the sole plugin content the running gateway
-discovers.** See §5 for what is declared but inert.
+Skills reach agents from a plugin exactly as they do from the global folder. Verified on a live
+gateway: an agent's own `skills_list` returns plugin-carried skills alongside global ones.
+
+Note the portal's **Skills page lists only `~/.botnexus/skills`** — it is a file browser over that
+one folder. Plugin skills work while not appearing there; do not read their absence as a failure.
 
 Layout, relative to the repository root:
 
@@ -165,20 +168,56 @@ Only needed if a repo publishes a *list* of plugins rather than being one. Valid
 
 Required: `name`, `owner.name`, `plugins`. Each entry requires `name` and `source`.
 
-## 5. What does NOT work yet — do not build against it
+## 5. Carrying code or UI
 
-The manifest accepts these fields and the schema documents them, but **nothing in the running
-gateway consumes them**. Declaring them is harmless; relying on them will not work.
+**Corrected 2026-08-30. This section previously said a plugin could not ship code or UI. That is
+no longer true and had become actively misleading** — the reference plugin
+`botnexus-agent-builder` ships a carried extension with a web app and serves it in-portal.
 
-- `agents`, `commands`, `hooks`, `mcpServers` — parsed, never discovered. Only
-  `PluginSkillRootResolver` (skills) has a production consumer.
-- **A plugin cannot ship code or UI.** The schema has no field for an assembly, and
-  `additionalProperties: false` means one cannot be added by the plugin author. Runnable code
-  ships as a gateway *extension* (`botnexus-extension.json` + `IAgentTool`) or an MCP server —
-  a different mechanism entirely.
+A plugin carries code by pointing at an extension manifest:
 
-Extending the format to carry code is planned work on this fork; until it lands, assume
-skills-only.
+```json
+{
+  "name": "botnexus-agent-builder",
+  "version": "1.0.0",
+  "extension": { "manifest": "botnexus-extension.json" }
+}
+```
+
+`extension.manifest` is a plugin-relative path to a normal `botnexus-extension.json`. Everything
+beside it in the repo is deployed as the extension, so the layout is just an extension repo with a
+plugin manifest added.
+
+Three rules the installer enforces, each of which refuses the install rather than warning:
+
+- **`"endpointPhase": "after-authentication"` is required** in the extension manifest. Plugin code
+  is third-party; routes mapping ahead of authentication would be unauthenticated surface on the
+  gateway. A plugin declaring anything else is refused, naming the field.
+- **The operator must consent.** Installing a plugin that carries an extension needs an explicit
+  acknowledgement — the portal shows what is being installed and asks; the API takes
+  `"acknowledgeCarriedExtension": true`.
+- **Compatibility is checked.** A prebuilt extension declaring an incompatible gateway contract
+  range is refused rather than loaded, so a stale binary cannot crash the host it lands on.
+
+Two consequences worth designing around:
+
+- **A restart is required** before a carried extension serves anything. Extension endpoints map
+  once at gateway startup, so the install result returns `"restartRequired": true` and the plugin
+  is on disk but inert until then.
+- **Updating one is remove → restart → install**, not update-in-place. The running gateway has the
+  assemblies loaded and cannot replace them underneath itself; attempting an update is refused with
+  that instruction.
+
+Ship any web assets in `wwwroot/` beside the extension manifest. They travel with the plugin and
+are **not** in the BotNexus repo, so deploying the extension from a BotNexus build gives the shell
+without its UI — the plugin is the only thing that carries them.
+
+### Still not wired
+
+The manifest accepts these and the schema documents them, but nothing in the running gateway
+consumes them. Declaring them is harmless; relying on them will not work.
+
+- `agents`, `commands`, `hooks`, `mcpServers` — parsed, never discovered.
 
 ## 6. Install-time failure modes
 
@@ -207,6 +246,16 @@ succeeded — installs are staged, then promoted.
 - [ ] No skill `name` contains `--`
 - [ ] Repo contains no build output or large assets — everything except `.git/` is copied on install
 - [ ] A tag or release commit exists to install as a pinned `reference`
+
+If the plugin carries an extension (§5), also:
+
+- [ ] `extension.manifest` points at the `botnexus-extension.json`, plugin-relative
+- [ ] That manifest declares `"endpointPhase": "after-authentication"` — the install is refused
+      without it
+- [ ] Any web assets are in `wwwroot/` beside it, since nothing else carries them
+- [ ] The extension's compatibility range admits the gateways you expect it to install on
+- [ ] Bump the tag when you change it: updating a carried extension is remove -> restart ->
+      install, so an operator installs a *new reference* rather than refreshing the old one
 
 ## Sources
 
