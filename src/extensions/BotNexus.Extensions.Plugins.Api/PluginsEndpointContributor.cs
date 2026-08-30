@@ -42,6 +42,21 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
         group.MapPost("/install", (PluginInstallApiRequest request) => InstallAsync(request));
         group.MapPost("/{name}/update", (string name) => UpdateAsync(name));
         group.MapDelete("/{name}", (string name) => Remove(name));
+
+        // Marketplace sources: the repositories the portal looks in to FIND plugins. Mapped
+        // before /{name} would otherwise claim them - "sources" is a literal segment and minimal
+        // APIs prefer it over the parameter, but keeping the group explicit avoids relying on
+        // that precedence being obvious to the next reader.
+        var sources = group.MapGroup("/sources");
+
+        sources.MapGet("/", () => MarketplaceSourceEndpoints.List());
+        sources.MapPost("/", (MarketplaceSourceRequest request, CancellationToken ct) =>
+            MarketplaceSourceEndpoints.AddAsync(request, ct));
+        sources.MapPost("/refresh", (CancellationToken ct) =>
+            MarketplaceSourceEndpoints.RefreshAllAsync(ct));
+        sources.MapPost("/{name}/refresh", (string name, CancellationToken ct) =>
+            MarketplaceSourceEndpoints.RefreshAsync(name, ct));
+        sources.MapDelete("/{name}", (string name) => MarketplaceSourceEndpoints.Remove(name));
     }
 
     /// <summary>
