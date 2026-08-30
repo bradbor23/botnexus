@@ -262,8 +262,31 @@ start_gateway() {
   log="$HOME_DIR/logs/gateway-console.log"
   mkdir -p "$(dirname "$log")"
 
+  # --urls must be passed, and must carry the CONFIGURED address rather than a guess.
+  #
+  # Two ways to get this wrong, both of which happened here. Hardcoding
+  # --urls http://localhost:PORT bound the gateway to loopback and made the portal unreachable
+  # from the LAN on a host whose config says 192.168.168.10 - earlier builds ignored the flag,
+  # which hid it until an upstream change made the command line win. Dropping --urls entirely is
+  # no better: the gateway does not hand gateway.listenUrl to Kestrel, so it fell back to the
+  # framework default and bound 127.0.0.1:5000, a port nothing was looking at.
+  #
+  # So: read listenUrl from config and pass that.
+  local listen
+  listen=$(python3 -c "import json,sys
+try:
+    print(json.load(open(\"$HOME_DIR/config.json\"))[\"gateway\"][\"listenUrl\"])
+except Exception:
+    sys.exit(1)" 2>/dev/null)
+
+  if [ -z "$listen" ]; then
+    warn "  could not read gateway.listenUrl from $HOME_DIR/config.json; falling back to port $PORT on all interfaces"
+    listen="http://0.0.0.0:$PORT"
+  fi
+
   say "starting from $dir"
-  nohup "$binary" --urls "http://localhost:$PORT" --environment Development >"$log" 2>&1 &
+  say "  listen:  $listen  (from gateway.listenUrl)"
+  nohup "$binary" --urls "$listen" --environment Development >"$log" 2>&1 &
   local pid=$!
   say "  pid $pid, console log -> $log"
 
