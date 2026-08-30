@@ -6847,18 +6847,7 @@ h3.conversation-title.editable:hover {
     resize: vertical;
     min-height: 6rem;
     padding: 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-input);
-    color: var(--text-primary);
-    font-family: var(--font-sans);
-    font-size: var(--text-body);
-    transition: border-color 0.15s;
-}
-
-.home-message-input:focus {
-    border-color: var(--accent);
-    outline: none;
+    font: inherit;
 }
 
 .home-starter-controls {
@@ -8054,6 +8043,19 @@ h3.conversation-title.editable:hover {
 }
 
 /* Reads as a caption on the toggle rather than another control. */
+/* The skills page note sits above a full-height panel, so it needs its own spacing
+   rather than the config panel's. Same quiet treatment: it is context, not a warning. */
+.platform-config-page > .config-note {
+    margin: 0 0 0.75rem;
+}
+
+.platform-config-page > .config-note code {
+    padding: 0 0.2rem;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    font-size: 0.78rem;
+}
+
 .notification-transport {
     margin-right: auto;
     color: var(--text-muted);
