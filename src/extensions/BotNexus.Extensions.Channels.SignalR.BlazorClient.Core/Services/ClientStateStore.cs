@@ -139,6 +139,7 @@ public sealed class ClientStateStore : IClientStateStore
                     Emoji = a.Emoji,
                     Description = a.Description,
                     IsBuiltIn = a.IsBuiltIn,
+                    CanDelegate = a.CanDelegate,
                     IsConnected = true
                 };
             }
@@ -148,6 +149,7 @@ public sealed class ClientStateStore : IClientStateStore
                 existing.Emoji = a.Emoji;
                 existing.Description = a.Description;
                 existing.IsBuiltIn = a.IsBuiltIn;
+                existing.CanDelegate = a.CanDelegate;
             }
         }
 

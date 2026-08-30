@@ -104,6 +104,7 @@ public sealed class PortalLoadService : IPortalLoadService
                     Emoji = agent.Emoji,
                     Description = agent.Description,
                     IsBuiltIn = agent.IsBuiltIn,
+                    CanDelegate = agent.CanDelegate,
                     IsConnected = true
                 });
             }
@@ -289,6 +290,7 @@ public sealed class PortalLoadService : IPortalLoadService
                     Emoji = agent.Emoji,
                     Description = agent.Description,
                     IsBuiltIn = agent.IsBuiltIn,
+                    CanDelegate = agent.CanDelegate,
                     IsConnected = true
                 });
             }

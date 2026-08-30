@@ -26,7 +26,10 @@ public sealed record AgentSummary(
     [property: JsonPropertyName("emoji")] string? Emoji = null,
     [property: JsonPropertyName("description")] string? Description = null,
     [property: JsonPropertyName("isBuiltIn")] bool IsBuiltIn = false,
-    [property: JsonPropertyName("summary")] string? Summary = null);
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    // Additive and optional, like summary above: a payload from a server that predates the field
+    // still binds, and false is the safe reading - an unknown capability is not advertised.
+    [property: JsonPropertyName("canDelegate")] bool CanDelegate = false);
 
 /// <summary>Hub capabilities advertised on connect.</summary>
 public sealed record HubCapabilities(

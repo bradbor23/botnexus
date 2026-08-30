@@ -135,6 +135,34 @@ public sealed record AgentDescriptor : ICitizen
     public IReadOnlyList<string> ToolIds { get; init; } = [];
 
     /// <summary>
+    /// Whether this agent's own tool policy permits it to spawn sub-agents - that is, whether it
+    /// is allowed to be a parent. Surfaced on the portal roster so the board can tell an agent
+    /// that may delegate work apart from one that can only act alone.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This reproduces the tool-level half of the gate in <c>SubAgentToolProvider</c>:
+    /// <c>ToolProviderContext.ToolAllowed</c> admits a tool when the effective tool list is empty
+    /// (an unrestricted agent receives everything the registry offers) or names it explicitly, and
+    /// <c>["*"]</c> is normalised to empty upstream by <c>InProcessIsolationStrategy</c>. Both
+    /// branches are repeated here so a roster badge cannot claim a capability the agent will not
+    /// actually be handed.
+    /// </para>
+    /// <para>
+    /// It reflects THIS AGENT'S CONFIGURATION ONLY. Three further conditions gate the tool at
+    /// runtime and not one of them is a property of the agent: a sub-agent manager must be
+    /// registered, <c>SubAgentOptions.MaxDepth</c> must be greater than zero, and the session must
+    /// not itself be a sub-agent session. A caller rendering this as "can delegate" is responsible
+    /// for suppressing the affordance when sub-agents are disabled platform-wide - do not expect
+    /// this property to know about it.
+    /// </para>
+    /// </remarks>
+    public bool CanDelegate =>
+        ToolIds.Count == 0
+        || (ToolIds.Count == 1 && ToolIds[0] == "*")
+        || ToolIds.Contains("spawn_subagent", StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Model IDs this agent is allowed to use. Empty means unrestricted within provider allowlist.
     /// </summary>
     public IReadOnlyList<string> AllowedModelIds { get; init; } = [];
