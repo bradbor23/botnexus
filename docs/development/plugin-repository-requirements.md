@@ -198,6 +198,19 @@ Three rules the installer enforces, each of which refuses the install rather tha
   `"acknowledgeCarriedExtension": true`.
 - **Compatibility is checked.** A prebuilt extension declaring an incompatible gateway contract
   range is refused rather than loaded, so a stale binary cannot crash the host it lands on.
+  Declare the range on the extension manifest, against the `BotNexus.Gateway.Abstractions`
+  **assembly version** — that is the contract that actually breaks:
+
+  ```json
+  "compatibility": {
+    "minAbstractionsVersion": "0.45.0",
+    "maxAbstractionsVersion": "0.46.0"
+  }
+  ```
+
+  The upper bound is **exclusive**, because a ceiling is nearly always "up to the next breaking
+  release". Both bounds are optional, and an absent or unparseable one means no constraint rather
+  than a failure — so an extension written before the field existed keeps loading.
 
 Two consequences worth designing around:
 
@@ -208,9 +221,34 @@ Two consequences worth designing around:
   assemblies loaded and cannot replace them underneath itself; attempting an update is refused with
   that instruction.
 
+Ship the entry assembly and its **private** dependencies only. Leave shared contracts
+(`BotNexus.Gateway.Abstractions`, `BotNexus.Domain`, …) out: the loader's `AssemblyLoadContext`
+resolves those from the host, and shipping a mismatched copy is how a binary plugin breaks on a
+gateway a patch release away.
+
 Ship any web assets in `wwwroot/` beside the extension manifest. They travel with the plugin and
 are **not** in the BotNexus repo, so deploying the extension from a BotNexus build gives the shell
 without its UI — the plugin is the only thing that carries them.
+
+### Contributing a portal nav entry
+
+A carried extension that serves a UI declares its left-nav entry on the **extension** manifest,
+not the plugin manifest — nav is a property of the thing that serves the path, so an extension
+built from source gets it on the same terms as one delivered by a plugin:
+
+```json
+"nav": [
+  { "id": "agent-builder", "label": "Agent Builder", "path": "/agent-builder/",
+    "icon": "agents", "order": 50, "external": true, "fullPage": false }
+]
+```
+
+- `path` must be site-relative and begin with `/`, or the entry is dropped rather than rendered.
+- `icon` must be a key in the portal's `IconLibrary`; an unknown name falls back to a default
+  rather than failing, and arbitrary markup is never accepted.
+- `external` marks a path served outside the Blazor router, so client-side routing cannot reach it.
+- `fullPage: false` frames the view inside the portal, keeping sidebar, header and theme;
+  `true` replaces the whole window, which reads as leaving the app and is therefore opt-in.
 
 ### Still not wired
 
@@ -267,3 +305,8 @@ If the plugin carries an extension (§5), also:
 - `src/extensions/BotNexus.Extensions.Plugins/Lifecycle/PluginSkillRootResolver.cs`
 - `src/extensions/BotNexus.Extensions.Skills/SkillDiscovery.cs`
 - `src/extensions/BotNexus.Extensions.Skills/SkillParser.cs`
+- `src/extensions/BotNexus.Extensions.Plugins/Lifecycle/PluginExtensionDeployer.cs` — the
+  install-time rules for a carried extension
+- `src/gateway/BotNexus.Gateway.Contracts/ExtensionModels.cs` — `ExtensionManifest`,
+  `ExtensionCompatibility`, `ExtensionNavEntry`
+- `src/gateway/BotNexus.Gateway/Extensions/AssemblyLoadContextExtensionLoader.cs` — the ABI gate
