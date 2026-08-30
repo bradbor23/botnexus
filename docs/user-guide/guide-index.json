@@ -39,6 +39,12 @@
       "blurb": "Cron, headless runs, exit codes and approval posture."
     },
     {
+      "id": "tools",
+      "file": "tools.md",
+      "title": "Tools",
+      "blurb": "Pinning your other web interfaces into the portal, and why some refuse to embed."
+    },
+    {
       "id": "notifications",
       "file": "notifications.md",
       "title": "Notifications",
