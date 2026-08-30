@@ -62,13 +62,13 @@ public static class ApnsEnvironment
     public const string Production = "production";
 
     /// <summary>The APNs host for an environment, defaulting to production.</summary>
-    public static string HostFor(string? environment) =>
+    public static string HostFor(this string? environment) =>
         string.Equals(environment, Sandbox, StringComparison.OrdinalIgnoreCase)
             ? "https://api.sandbox.push.apple.com"
             : "https://api.push.apple.com";
 
     /// <summary>Normalises a client-supplied value, rejecting anything unrecognised.</summary>
-    public static string? Normalise(string? environment) => environment?.ToLowerInvariant() switch
+    public static string? Normalise(this string? environment) => environment?.ToLowerInvariant() switch
     {
         Sandbox => Sandbox,
         Production => Production,

@@ -60,7 +60,7 @@ public static class PortalTheme
     /// <summary>Returns the other theme, for a two-state toggle.</summary>
     /// <param name="value">The current theme; normalised before flipping.</param>
     /// <returns><see cref="Light"/> if currently dark, otherwise <see cref="Dark"/>.</returns>
-    public static string Toggle(string? value) =>
+    public static string Toggle(this string? value) =>
         Normalize(value) == Dark ? Light : Dark;
 }
 
