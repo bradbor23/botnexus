@@ -227,6 +227,13 @@ public sealed class AgentState
     /// <summary>Whether this is a platform built-in agent (sorts after user agents in UI).</summary>
     public bool IsBuiltIn { get; set; }
 
+    /// <summary>
+    /// Whether this agent's tool policy permits it to spawn sub-agents. Drives the "Can delegate"
+    /// chip on the agent roster. Mutable rather than init-only because a refresh re-reads it: an
+    /// agent whose toolIds change should gain or lose the chip without a reload.
+    /// </summary>
+    public bool CanDelegate { get; set; }
+
     /// <summary>Active session ID (last established).</summary>
     public string? SessionId { get; set; }
 

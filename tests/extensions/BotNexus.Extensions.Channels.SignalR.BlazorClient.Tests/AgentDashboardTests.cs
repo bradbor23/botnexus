@@ -289,4 +289,55 @@ public sealed class AgentDashboardTests : IDisposable
         cut.WaitForState(() => cut.FindAll(".agent-card").Count == 1);
         Assert.Single(cut.FindAll(".agent-card"));
     }
+
+    // ── Delegation capability chip ─────────────────────────────────────────
+
+    [Fact]
+    public void Marks_an_agent_that_can_spawn_sub_agents()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", CanDelegate = true }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        var chip = cut.Find("[data-testid=agent-card-delegate-chip]");
+        Assert.Contains("Can delegate", chip.TextContent);
+    }
+
+    [Fact]
+    public void Leaves_an_agent_that_cannot_spawn_unmarked()
+    {
+        // The common case, and the reason the chip is worth anything: most agents carry an explicit
+        // toolIds list without the spawn tool, so an unmarked card must stay completely unmarked.
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", CanDelegate = false }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        Assert.Empty(cut.FindAll("[data-testid=agent-card-delegate-chip]"));
+        Assert.DoesNotContain("Can delegate", cut.Markup);
+    }
+
+    [Fact]
+    public void Marks_only_the_agents_that_can_delegate()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", CanDelegate = true },
+            ["a2"] = new() { AgentId = "a2", DisplayName = "Beta" },
+            ["a3"] = new() { AgentId = "a3", DisplayName = "Gamma" }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        Assert.Equal(3, cut.FindAll(".agent-card").Count);
+        Assert.Single(cut.FindAll("[data-testid=agent-card-delegate-chip]"));
+    }
 }

@@ -46,7 +46,8 @@ public sealed record AgentSummary(
     [property: JsonPropertyName("displayName")] string DisplayName,
     [property: JsonPropertyName("emoji")] string? Emoji = null,
     [property: JsonPropertyName("description")] string? Description = null,
-    [property: JsonPropertyName("summary")] string? Summary = null);
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("canDelegate")] bool CanDelegate = false);
 
 /// <summary>Hub capabilities advertised on connect.</summary>
 public sealed record HubCapabilities(

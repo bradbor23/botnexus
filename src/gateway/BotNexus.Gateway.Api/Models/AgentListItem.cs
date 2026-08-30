@@ -46,6 +46,11 @@ using BotNexus.Gateway.Abstractions.Models;
 /// <param name="IsBuiltIn">Whether this is a built-in platform archetype agent.</param>
 /// <param name="ApiProvider">Provider instance key; rendered as a column by <c>Agents.razor:92</c>.</param>
 /// <param name="ModelId">Model identifier; rendered as a column by <c>Agents.razor:93</c>.</param>
+/// <param name="CanDelegate">
+/// Whether the agent's tool policy permits spawning sub-agents. Read by
+/// <c>AgentDashboard.razor</c> to mark which agents can act as a parent. Reflects configuration
+/// only - see <see cref="AgentDescriptor.CanDelegate"/> for the runtime conditions it excludes.
+/// </param>
 /// <param name="Summary">
 /// Optional agent-maintained summary of current capability (#3596). Appended last with a null
 /// default so an existing consumer of this DTO keeps binding unchanged, and omitted from the JSON
@@ -64,7 +69,14 @@ public sealed record AgentListItem(
     // boot payload nothing.
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? Summary = null)
+    string? Summary = null,
+    // Added alongside a named consumer, as this file's contract requires: AgentDashboard.razor
+    // renders it as the "Can delegate" chip on the agent roster. Omitted from the wire when false
+    // so the flag costs the boot payload nothing for the agents that cannot delegate - which on a
+    // typical install is most of them.
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool CanDelegate = false)
 {
     /// <summary>
     /// Projects a full <see cref="AgentDescriptor"/> down to its list-view fields.
@@ -81,5 +93,6 @@ public sealed record AgentListItem(
         descriptor.IsBuiltIn,
         descriptor.ApiProvider,
         descriptor.ModelId,
-        descriptor.Summary);
+        descriptor.Summary,
+        descriptor.CanDelegate);
 }

@@ -648,6 +648,54 @@ shout at the user and devalues the real confirmation.
 - **Empty state** — centred, `--color-ink-muted`, generous padding. Say what would
   be here and how to get it, not just "no items".
 
+### Flex rows that must not overflow
+
+A flex item defaults to `min-width: auto`, which resolves to the item's *intrinsic*
+minimum — for a `<select>`, the width of its widest `<option>`. So `flex: 1` alone
+does **not** guarantee an item can shrink, and a long option can push its siblings
+straight off the viewport.
+
+This is exactly how the mobile top bar came to measure 609px against a 375px
+screen, with the refresh and overflow buttons entirely off-screen and unreachable.
+The `text-overflow: ellipsis` already on those selects could never fire for the
+same reason.
+
+**Any flex child that carries text you are willing to truncate needs
+`min-width: 0`.** And give the controls that must survive — a menu that is the only
+route to Settings or Archive — an explicit `flex-shrink: 0`, so the squeeze lands
+on the text, never on the affordance.
+
+### Capability chips
+
+A chip marks a **capability an agent has** — not a state it is in, and not a
+warning. It takes the accent wash (`--color-accent-wash` ground,
+`--color-accent-ring` hairline, `--accent` text, `--radius-pill`,
+`--text-caption`), deliberately away from the status hues, because status colour
+is reserved for things that change on their own.
+
+The one chip in the system today is **Can delegate**, on the agent roster. It
+appears when an agent's tool policy admits either `spawn_subagent` (create an
+ephemeral child) or `agent_converse` (call an agent that already exists). Most
+agents on a typical install carry neither, so most cards stay unmarked — which is
+the point. A marker that appears on everything distinguishes nothing.
+
+**What a capability chip must not claim.** `AgentDescriptor.CanDelegate` derives
+from the agent's own `toolIds` and says nothing about *whom* it may call.
+`subAgents` carries that, and is enforced only when the gateway's agent-exchange
+policy is `whitelist` — and never on the spawn path at all. So the chip cannot
+honestly name targets, and does not try to.
+
+Runtime conditions are excluded for the same reason: the spawn tool additionally
+needs a sub-agent manager, `SubAgentOptions.MaxDepth` above zero, and a session
+that is not itself a sub-agent session. If delegation is ever disabled
+platform-wide, the caller must suppress the chip — the property will not know.
+
+**The lesson worth keeping.** This chip shipped reading `spawn_subagent` alone and
+was wrong the first time it met a real configuration: an agent wired for
+delegation via `agent_converse` rendered unmarked. A badge derived from a
+capability must enumerate *every* mechanism that grants it, or it lies by
+omission.
+
 ### Writing UI copy
 
 Words are design material. Name things by what a person recognises, not how the
@@ -725,6 +773,12 @@ handles it. If you find yourself wanting "white here but dark there", you want a
 
 Documented honestly, so a designer knows where the system does not yet hold.
 
+> Counting emoji: a sweep of `[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]` misses
+> `⏹` (U+23F9), `✏️` (U+270F), `⏳` (U+23F3) and the arrows and geometric shapes.
+> An "emoji: 0" result from too narrow a range is how this document came to claim
+> the migration was finished when it was not. Sweep U+2190–U+2BFF as well as the
+> emoji planes.
+
 | Gap | Impact |
 |---|---|
 | **Icon sizing is not tokenised.** `<Icon Size>` takes a raw px number; call sites pass 12, 13, 14, 15, 16, 18 and 24 while only `--icon-sm` (16) and `--icon-md` (18) exist. | Icons are visually inconsistent between dense rows. Specify sizes from the two tokens and treat the others as legacy. |
@@ -754,16 +808,37 @@ individual files:
 rsync -a --delete <blazor publish output>/ <deploy target>/blazor/
 ```
 
-Hand-copying `app.css` leaves `service-worker-assets.js` holding the old integrity
-hash, so the service worker keeps serving the previous build and your change
-appears to have no effect. Deploying the whole directory keeps the asset manifest
-consistent with the files.
+The reason is **pre-compressed variants**. The build emits `app.css`,
+`app.css.br` and `app.css.gz` side by side, and the gateway serves the compressed
+one to any client sending `Accept-Encoding` — which every browser does.
+Hand-editing `app.css` therefore changes the only copy a browser never reads: the
+file is correct on disk, correct to `curl`, and the page keeps rendering the old
+styles. `index.html` / `index.html.gz` behave the same way, so a hand-bumped
+cache-buster silently does nothing.
 
-After deploying, verify three things together: the `app.css?v=` query in
-`index.html`, the service worker manifest version, and the actual token value in
-the served CSS. If a change seems not to have landed, check that `/` and a deep
-link such as `/configuration` report the same `dotnet.<hash>.js` before blaming a
-cache.
+**Verify the way a browser asks, not the way `curl` does:**
+
+```
+curl -s --compressed <url>/            | grep -o 'app\.css?v=[a-z0-9]*'
+curl -s --compressed <url>/css/app.css | grep -c '<your new rule>'
+```
+
+A plain `curl` reads the uncompressed file and will cheerfully confirm a change no
+user can see. This cost real time: several rounds of "verified, it is serving the
+fix" were all reading a file no browser ever receives.
+
+**Bump `?v=` in `index.html` whenever `app.css` changes.** It is hand-maintained
+and it is the cache key; a stale one leaves returning visitors on the old
+stylesheet. Bump it in the **source and rebuild** — editing the deployed copy
+leaves the compressed variant behind and reintroduces the problem above.
+
+A service worker also ships (`service-worker.js`, registered from
+`index.html`). It was previously believed to be the cause of stale assets; that
+has not been reproduced. In the one environment measured it never registered at
+all (`getRegistrations()` returned 0, registration failing with "An unknown error
+occurred when fetching the script" while the script itself served HTTP 200), so it
+could not have been serving anything. Treat its caching behaviour as unverified
+rather than as the explanation.
 
 ---
 
@@ -787,7 +862,11 @@ cache.
 - Type scale applied: 250 raw font sizes across 37 values collapsed onto seven
   roles (7 relative `em` values left by design)
 - Both themes verified WCAG AA by measurement
-- Icon set at 45, generated; zero emoji remaining in portal markup
+- Icon set at 45, generated. The composer toolbar is now emoji-free: `Steer` is
+  text (matching its `Redirect` sibling), `Stop` takes the `stop` icon, and the
+  `⏳ Running` / `✅ Completed` strings turned out to be dead code and were deleted
+- `color-scheme` declared in both themes, so browser-drawn controls follow the theme
+- "Can delegate" capability chip on the agent roster, reading both delegation tools
 
 **Next**
 
@@ -795,4 +874,10 @@ cache.
 2. Move icon tones onto tokens so they respond to the theme.
 3. Retire the legacy colour aliases once no rule references them.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
-5. Bring the mobile client onto the same token layer.
+5. Bring the mobile client onto the same token layer. Its top-bar overflow is
+   fixed, but the stylesheet is still raw hex throughout.
+6. Decide what to do about `ToolDescriptionFormatter` — it still maps 22 tool names
+   onto emoji (`📄` read, `💻` exec, `🗣️` agent_converse …) and those render in the
+   chat tool chips and the todo panel. This is the largest emoji surface left, and
+   several have no equivalent in the 45-icon set, so it needs a design decision
+   rather than a mechanical swap.

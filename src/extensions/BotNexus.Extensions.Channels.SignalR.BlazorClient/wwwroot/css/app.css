@@ -66,6 +66,10 @@
    ──────────────────────────────────────────────────────────────────────── */
 
 :root {
+    /* Tells the browser which palette to draw its OWN chrome in - select popups,
+       scrollbars, checkboxes, date pickers, spinners. Without it those render in light
+       chrome against the dark surface, and no amount of CSS on our side reaches them. */
+    color-scheme: dark;
     /* ── 1. Colour ─────────────────────────────────────────────────────── */
 
     /* Surface ladder. Each step is a lightness increment on a near-neutral
@@ -337,6 +341,7 @@
    rather than inverted — the accent darkens so it still passes against white,
    and --color-on-accent flips to suit it. */
 [data-theme="light"] {
+    color-scheme: light;
     --color-canvas: #f6f8fa;
     --color-surface: #ffffff;
     --color-surface-2: #eef2f6;
@@ -5248,6 +5253,41 @@ h3.conversation-title.editable:hover {
     -webkit-box-orient: vertical;
 }
 
+/* Capability marker on a roster card. Only agents whose tool policy admits spawn_subagent get
+   one, so on a typical install this appears on a minority of cards - which is the point: it is a
+   distinction, not decoration. Colour comes from the accent wash rather than a status hue, because
+   being able to delegate is a capability, not a state and certainly not a warning. */
+.agent-card-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.55rem 0 0;
+}
+
+.agent-card-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.agent-card-chip-icon {
+    width: 10px;
+    height: 10px;
+    flex: none;
+}
+
+.agent-card-chip--delegate {
+    color: var(--accent);
+    background: var(--color-accent-wash);
+    border: 1px solid var(--color-accent-ring);
+}
+
 .agent-card-stats {
     display: flex;
     gap: 0.75rem;
@@ -6847,7 +6887,18 @@ h3.conversation-title.editable:hover {
     resize: vertical;
     min-height: 6rem;
     padding: 0.75rem;
-    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    transition: border-color 0.15s;
+}
+
+.home-message-input:focus {
+    border-color: var(--accent);
+    outline: none;
 }
 
 .home-starter-controls {
@@ -7902,7 +7953,7 @@ h3.conversation-title.editable:hover {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+    box-shadow: var(--shadow-overlay);
 }
 
 .notification-panel-header {
