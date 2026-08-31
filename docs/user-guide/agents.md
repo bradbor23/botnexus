@@ -83,15 +83,19 @@ Add an agent to `~/.botnexus/config.json`:
 
 ### Step 2: Create Agent Workspace
 
-Create a directory for your agent's files:
+Prompt files live in the agent's `workspace/` directory, not in the agent directory itself:
 
 ```bash
-mkdir -p ~/.botnexus/agents/my-assistant
+mkdir -p ~/.botnexus/agents/my-assistant/workspace
 ```
+
+Registering the agent and restarting the gateway creates this directory for you, along with a
+starter set of prompt files. Starting from what the gateway scaffolds is the surest way to get the
+location right.
 
 ### Step 3: Write a System Prompt
 
-Create `~/.botnexus/agents/my-assistant/IDENTITY.md`:
+Create `~/.botnexus/agents/my-assistant/workspace/IDENTITY.md`:
 
 ```markdown
 # Identity: My Assistant
@@ -207,7 +211,8 @@ If `allowedModels` is:
 }
 ```
 
-Files are concatenated in the order specified. Paths are relative to `~/.botnexus/agents/<agentId>/`.
+Files are concatenated in the order specified. Paths are relative to the agent's workspace,
+`~/.botnexus/agents/<agentId>/workspace/`, and a path that resolves outside it is refused.
 
 **Default Load Order** (if `systemPromptFiles` is empty):
 
@@ -417,15 +422,23 @@ System prompts define agent behavior. BotNexus supports a structured approach:
 
 ```text
 ~/.botnexus/
-├── WORLD.md             # Shared by every agent (optional)
+├── WORLD.md                 # Shared by every agent (optional)
 └── agents/<agentId>/
-    ├── SOUL.md          # Personality, values, tone
-    ├── IDENTITY.md      # Role, expertise, boundaries
-    ├── TOOLS.md         # Tool usage guidelines
-    ├── BOOTSTRAP.md     # Initialization instructions
-    ├── AGENTS.md        # Multi-agent coordination
-    └── USER.md          # User-specific preferences
+    ├── data/                # Sessions and memory database - not prompt content
+    └── workspace/           # Every prompt file lives HERE
+        ├── AGENTS.md        # The agent's job: mission and operating rules
+        ├── SOUL.md          # Personality, values, tone
+        ├── IDENTITY.md      # Role, expertise, boundaries
+        ├── TOOLS.md         # Tool usage guidelines
+        ├── BOOTSTRAP.md     # Initialization instructions
+        ├── USER.md          # User-specific preferences
+        └── MEMORY.md        # Long-term distilled memory
 ```
+
+The `workspace/` level is required. A prompt file placed directly in `agents/<agentId>/` is never
+read, and the name must match this list exactly - `AGENT.md` is not `AGENTS.md`. A file that is
+missing or misplaced is skipped silently, because most agents use only some of these, so a wrong
+location produces an agent that runs normally while ignoring everything you wrote for it.
 
 `WORLD.md` sits at the home root, not inside the agent directory - see
 [World-level instructions](#world-level-instructions).
@@ -568,16 +581,18 @@ Create a multi-agent system for code development:
 BotNexus can auto-bootstrap agent workspaces. When you create a new agent, BotNexus generates template files:
 
 ```bash
-# Create agent directory
-mkdir -p ~/.botnexus/agents/my-agent
-
-# BotNexus auto-generates:
+# Register the agent in config.json, then restart the gateway.
+# BotNexus creates ~/.botnexus/agents/my-agent/workspace/ and scaffolds:
+# - AGENTS.md
 # - SOUL.md
+# - TOOLS.md
+# - BOOTSTRAP.md
 # - IDENTITY.md
 # - USER.md
-# - HEARTBEAT.md
-# - MEMORY.md
 ```
+
+They are written into `workspace/`, which is where the loader reads them from. Edit them in place
+rather than creating your own copies elsewhere.
 
 Edit these templates to customize your agent.
 
@@ -797,6 +812,15 @@ See [Extensions Guide](extensions.md) for details.
 
 ## Troubleshooting
 
+The commands below use `$GATEWAY` for your gateway's address. Set it once to whatever
+`gateway.listenUrl` says in `config.json` - `http://localhost:5005` on a default install, or a LAN
+address if you changed it:
+
+```bash
+GATEWAY=http://localhost:5005
+```
+
+
 ### Agent Not Listed in WebUI
 
 **Check:**
@@ -823,14 +847,30 @@ curl http://localhost:5005/api/agents/my-agent
 
 ### System Prompt Not Loading
 
-**Check:**
-1. Files exist in `~/.botnexus/agents/<agentId>/`
-2. Paths in `systemPromptFiles` are correct (relative to agent directory)
-3. Files are readable (permissions)
+The usual cause is location: files placed in `agents/<agentId>/` instead of
+`agents/<agentId>/workspace/`. Nothing is logged when this happens.
 
-**Verify:**
+**Check:**
+1. Files are in `~/.botnexus/agents/<agentId>/workspace/`, not the agent directory
+2. Names match the list above exactly - `AGENTS.md`, not `AGENT.md`
+3. Paths in `systemPromptFiles` are relative to `workspace/`
+4. Files are readable (permissions)
+
+**Verify - ask the gateway, not the filesystem.** A wrong directory looks like an empty workspace:
+
 ```bash
-ls -la ~/.botnexus/agents/my-agent/
+curl -s $GATEWAY/api/agents/my-agent/workspace
+```
+
+**Then confirm your text reached the model.** Send one message, then read the prompt that run
+actually used - this is the only check that distinguishes "a file loaded" from "the right file
+loaded":
+
+```bash
+curl -s -X POST $GATEWAY/api/chat -H 'Content-Type: application/json' \
+  -d '{"agentId":"my-agent","sessionId":"check1","message":"In one sentence: who are you?"}'
+
+curl -s $GATEWAY/api/agents/my-agent/sessions/check1/context/system-prompt
 ```
 
 ### Tool Not Available
@@ -840,10 +880,20 @@ ls -la ~/.botnexus/agents/my-agent/
 2. Tool extension is installed in `~/.botnexus/extensions/`
 3. Extension is enabled in config
 
-**List available tools:**
+**Check which tools the agent is configured with:**
 ```bash
-curl http://localhost:5005/api/tools
+curl -s $GATEWAY/api/agents/my-agent      # includes toolIds
 ```
+
+`/api/tools` is a different feature - the portal's external service links - and does not list agent
+tools. To see the tools a run actually resolved, read them from a session after sending a message:
+
+```bash
+curl -s $GATEWAY/api/agents/my-agent/sessions/check1/context/tools
+```
+
+An unrecognised id in `toolIds` is not announced, so copy the ids from an agent that already works
+rather than guessing.
 
 ---
 
