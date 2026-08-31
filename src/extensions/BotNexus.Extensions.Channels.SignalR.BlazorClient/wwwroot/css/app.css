@@ -7936,6 +7936,15 @@ h3.conversation-title.editable:hover {
     min-width: 0;
 }
 
+/* "Carries an extension" is the fact on this row that most changes the decision,
+   so it is not styled as neutral metadata. It is a warning, not an error: the
+   plugin is working as intended and the operator may well want it - they just
+   need to know before pressing Install, not after. */
+.badge-extension {
+    background: var(--color-warning-wash);
+    color: var(--color-warning-text);
+}
+
 .plugin-offering-actions {
     display: flex;
     align-items: center;
