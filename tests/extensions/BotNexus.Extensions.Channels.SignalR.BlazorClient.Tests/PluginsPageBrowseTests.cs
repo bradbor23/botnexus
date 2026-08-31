@@ -78,14 +78,14 @@ public sealed class PluginsPageBrowseTests : IDisposable
     private static string Normalise(string text) =>
         string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
-    private static string InstalledPlugin(string name) =>
+    private static string InstalledPlugin(string name, string manifestVersion = "1.0.0") =>
         $$"""
         {
           "name": "{{name}}",
           "source": "https://github.com/acme/{{name}}.git",
           "reference": null,
           "resolvedVersion": "abcdef123456",
-          "manifestVersion": "1.0.0",
+          "manifestVersion": "{{manifestVersion}}",
           "updatesEnabled": true,
           "installedAtUtc": "2026-01-01T00:00:00+00:00",
           "fileCount": 1,
@@ -232,6 +232,97 @@ public sealed class PluginsPageBrowseTests : IDisposable
         Assert.Equal(
             "beta-plugin",
             install.Closest("[data-testid='plugin-offering']")!.GetAttribute("data-offering-name"));
+    }
+
+    // ── Version state against what is installed ──────────────────────────────
+
+    private void SetupInstalledAndOffered(string installedVersion, string offeredVersion)
+    {
+        _handler.SetupResponse("GET", "/api/plugins", $"[{InstalledPlugin("alpha-plugin", installedVersion)}]");
+        SetupSources(Source("alpha", offerings: Offering("alpha-plugin", version: offeredVersion)));
+    }
+
+    [Fact]
+    public void An_offering_newer_than_the_installed_version_offers_the_update()
+    {
+        SetupInstalledAndOffered(installedVersion: "1.2.0", offeredVersion: "1.2.1");
+
+        var cut = RenderPage();
+
+        Assert.Contains("1.2.1", cut.Find("[data-testid='plugin-offering-update']").TextContent);
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-installed']"));
+    }
+
+    /// <summary>
+    /// The case this state exists for: a catalog still pinning an older version than the one
+    /// running. Calling that an update would send the operator to install a downgrade.
+    /// </summary>
+    [Fact]
+    public void An_offering_older_than_the_installed_version_is_not_called_an_update()
+    {
+        SetupInstalledAndOffered(installedVersion: "1.2.1", offeredVersion: "1.2.0");
+
+        var cut = RenderPage();
+
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-update']"));
+        var behind = cut.Find("[data-testid='plugin-offering-behind']");
+        Assert.Contains("1.2.0", behind.TextContent);
+        // The row must say the SOURCE is the stale side, not the plugin.
+        Assert.Contains("source", behind.TextContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Versions_that_cannot_be_ordered_claim_no_direction()
+    {
+        SetupInstalledAndOffered(installedVersion: "1.2.0", offeredVersion: "1.2.1-beta");
+
+        var cut = RenderPage();
+
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-update']"));
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-behind']"));
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-differs']"));
+    }
+
+    [Fact]
+    public void A_matching_version_still_reads_as_plainly_installed()
+    {
+        SetupInstalledAndOffered(installedVersion: "1.2.1", offeredVersion: "1.2.1");
+
+        var cut = RenderPage();
+
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-installed']"));
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-update']"));
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-behind']"));
+    }
+
+    /// <summary>
+    /// Every installed state must withhold the Install button: install refuses a plugin that is
+    /// already present, so offering it would produce a failure the operator could not have foreseen.
+    /// </summary>
+    [Theory]
+    [InlineData("1.2.0", "1.2.1")]
+    [InlineData("1.2.1", "1.2.0")]
+    [InlineData("1.2.0", "1.2.1-beta")]
+    [InlineData("1.2.1", "1.2.1")]
+    public void No_installed_state_offers_the_install_button(string installed, string offered)
+    {
+        SetupInstalledAndOffered(installed, offered);
+
+        var cut = RenderPage();
+
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-install']"));
+    }
+
+    [Fact]
+    public void A_plugin_that_is_not_installed_is_unaffected_by_version_comparison()
+    {
+        _handler.SetupResponse("GET", "/api/plugins", "[]");
+        SetupSources(Source("alpha", offerings: Offering("alpha-plugin", version: "9.9.9")));
+
+        var cut = RenderPage();
+
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-install']"));
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-update']"));
     }
 
     // ── Installing from the listing ──────────────────────────────────────────

@@ -231,18 +231,48 @@
                                         }
                                     </div>
                                     <div class="plugin-offering-actions">
-                                        @if (IsInstalled(offering))
+                                        @switch (StateOf(offering))
                                         {
-                                            <span class="badge badge-enabled"
-                                                  data-testid="plugin-offering-installed">Installed</span>
-                                        }
-                                        else
-                                        {
+                                            case MarketplaceOfferingState.Installed:
+                                                <span class="badge badge-enabled"
+                                                      data-testid="plugin-offering-installed">Installed</span>
+                                                break;
+
+                                            @* An update is only ever claimed when the two versions
+                                               can actually be ordered - see the three states below. *@
+                                            case MarketplaceOfferingState.UpdateAvailable:
+                                                <span class="badge badge-extension"
+                                                      data-testid="plugin-offering-update"
+                                                      title="@($"Installed {InstalledVersionOf(offering)}, this source offers {offering.Version}. Remove and reinstall to move to it.")">
+                                                    Update to @offering.Version
+                                                </span>
+                                                break;
+
+                                            @* The catalog is pinned behind what is running. Saying
+                                               "update" here would send someone to a downgrade. *@
+                                            case MarketplaceOfferingState.SourceIsBehind:
+                                                <span class="badge badge-disabled"
+                                                      data-testid="plugin-offering-behind"
+                                                      title="@($"Installed {InstalledVersionOf(offering)}, newer than the {offering.Version} this source pins. Update the source, not the plugin.")">
+                                                    Source pins @offering.Version
+                                                </span>
+                                                break;
+
+                                            case MarketplaceOfferingState.VersionDiffers:
+                                                <span class="badge badge-disabled"
+                                                      data-testid="plugin-offering-differs"
+                                                      title="@($"Installed {InstalledVersionOf(offering)}; this source offers {offering.Version}. The two cannot be ordered, so neither is presented as newer.")">
+                                                    Installed @InstalledVersionOf(offering), source has @offering.Version
+                                                </span>
+                                                break;
+
+                                            default:
                                             <button class="toolbar-btn primary"
                                                     data-testid="plugin-offering-install"
                                                     disabled="@(_installing || offering.Error is not null)"
                                                     title="@(offering.Error is null ? $"Install {offering.Name}" : "This plugin could not be read")"
                                                     @onclick="() => InstallOfferingAsync(offering)">Install</button>
+                                                break;
                                         }
                                     </div>
                                 </li>
@@ -739,8 +769,29 @@
     /// listed by more than one catalog, and offering to install a second copy of something already
     /// present would fail at the gateway for a reason the operator could not have predicted.
     /// </remarks>
-    private bool IsInstalled(MarketplaceOfferingDto offering) =>
-        _plugins.Any(p => string.Equals(p.Name, offering.Name, StringComparison.Ordinal));
+    private PluginRowDto? InstalledMatch(MarketplaceOfferingDto offering) =>
+        _plugins.FirstOrDefault(p => string.Equals(p.Name, offering.Name, StringComparison.Ordinal));
+
+    private bool IsInstalled(MarketplaceOfferingDto offering) => InstalledMatch(offering) is not null;
+
+    private string InstalledVersionOf(MarketplaceOfferingDto offering) =>
+        InstalledMatch(offering)?.ManifestVersion ?? "an unversioned build";
+
+    /// <summary>
+    /// How this offering relates to what is installed: the same version, a newer one, an older one,
+    /// or a version that cannot be ordered against it.
+    /// </summary>
+    /// <remarks>
+    /// Both versions are read from plugin manifests, so this compares like with like. A direction
+    /// is only claimed when the pair can genuinely be ordered - a catalog pinned behind the
+    /// installed version must not read as an update.
+    /// </remarks>
+    private MarketplaceOfferingState StateOf(MarketplaceOfferingDto offering)
+    {
+        var installed = InstalledMatch(offering);
+        return MarketplaceOfferingComparison.Resolve(
+            installed?.ManifestVersion, offering.Version, installed is not null);
+    }
 
     private async Task LoadSourcesAsync()
     {
