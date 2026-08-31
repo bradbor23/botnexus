@@ -168,6 +168,68 @@ public sealed class MarketplaceSourceProberTests : IDisposable
         Assert.Equal("Runs code in your gateway.", offering.Description);
     }
 
+    /// <summary>
+    /// A catalog may describe a plugin that ships no description of its own. Filling that blank is
+    /// useful and cannot mislead - the fields that decide what installing DOES are still read from
+    /// the manifest alone.
+    /// </summary>
+    [Fact]
+    public async Task The_catalog_description_fills_in_for_a_plugin_that_has_none()
+    {
+        _fetcher.Add("https://github.com/acme/things.git", d => WriteCatalog(d, Catalog(
+            Entry("alpha", "https://github.com/acme/alpha.git", description: "Described by the catalog."))));
+        _fetcher.Add("https://github.com/acme/alpha.git", d =>
+            WritePlugin(d, Manifest("alpha", description: null)));
+
+        var offering = Assert.Single((await _prober.ProbeAsync(Source(), _root)).Offerings);
+
+        Assert.Equal("Described by the catalog.", offering.Description);
+        Assert.Null(offering.Error);
+    }
+
+    [Fact]
+    public async Task The_plugins_own_description_still_wins_over_the_catalogs()
+    {
+        _fetcher.Add("https://github.com/acme/things.git", d => WriteCatalog(d, Catalog(
+            Entry("alpha", "https://github.com/acme/alpha.git", description: "The catalog's words."))));
+        _fetcher.Add("https://github.com/acme/alpha.git", d =>
+            WritePlugin(d, Manifest("alpha", description: "The plugin's own words.")));
+
+        var offering = Assert.Single((await _prober.ProbeAsync(Source(), _root)).Offerings);
+
+        Assert.Equal("The plugin's own words.", offering.Description);
+    }
+
+    [Fact]
+    public async Task An_entry_described_by_neither_has_no_description()
+    {
+        _fetcher.Add("https://github.com/acme/things.git", d => WriteCatalog(d, Catalog(
+            Entry("alpha", "https://github.com/acme/alpha.git"))));
+        _fetcher.Add("https://github.com/acme/alpha.git", d =>
+            WritePlugin(d, Manifest("alpha", description: null)));
+
+        var offering = Assert.Single((await _prober.ProbeAsync(Source(), _root)).Offerings);
+
+        Assert.Null(offering.Description);
+    }
+
+    /// <summary>
+    /// The fallback is the description alone. A catalog must not be able to influence what
+    /// installing does, so the version on the listing stays the manifest's.
+    /// </summary>
+    [Fact]
+    public async Task The_catalog_does_not_supply_the_version_shown_on_a_readable_entry()
+    {
+        _fetcher.Add("https://github.com/acme/things.git", d => WriteCatalog(d, Catalog(
+            Entry("alpha", "https://github.com/acme/alpha.git", version: "9.9.9"))));
+        _fetcher.Add("https://github.com/acme/alpha.git", d =>
+            WritePlugin(d, Manifest("alpha", version: "1.2.3")));
+
+        var offering = Assert.Single((await _prober.ProbeAsync(Source(), _root)).Offerings);
+
+        Assert.Equal("1.2.3", offering.Version);
+    }
+
     [Fact]
     public async Task A_catalog_is_preferred_over_a_plugin_manifest_in_the_same_repository()
     {

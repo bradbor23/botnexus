@@ -101,7 +101,8 @@ public sealed class MarketplaceSourceProber(
             // Each entry's own repository is fetched so its manifest is read from the plugin
             // rather than from the catalog describing it. The catalog states a name, version and
             // description; only the manifest says whether installing runs code in the gateway,
-            // and that is the field a person most needs before choosing.
+            // and that is the field a person most needs before choosing. The catalog's
+            // description is kept as a fallback for a plugin that ships none.
             offerings.Add(await ProbeEntryAsync(entry, stagingRoot, cancellationToken));
         }
 
@@ -150,7 +151,18 @@ public sealed class MarketplaceSourceProber(
             if (manifest.Value is not { } value)
                 return fallback with { Error = Describe("the plugin manifest is not valid", manifest.Errors) };
 
-            return ToOffering(value, entry.Source, entry.Version);
+            var offering = ToOffering(value, entry.Source, entry.Version);
+
+            // The catalog's description fills a blank; it never overrides one. A plugin that
+            // describes itself always wins, so a catalog cannot restate what a plugin says about
+            // itself - it can only speak where the plugin said nothing.
+            //
+            // Deliberately the description alone. Version and CarriesExtension stay manifest-only
+            // because they change what installing DOES, and a listing must not be able to
+            // influence that; a description only changes how the entry reads.
+            return string.IsNullOrWhiteSpace(offering.Description)
+                ? offering with { Description = entry.Description }
+                : offering;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

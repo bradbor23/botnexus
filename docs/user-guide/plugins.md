@@ -123,7 +123,7 @@ entry points at the repository the plugin actually lives in.
 | `plugins[].name` | yes | Must match the plugin's own manifest name |
 | `plugins[].source` | yes | Repository URL the plugin lives in |
 | `plugins[].version` | no | Reference to read; omit to track the default branch |
-| `plugins[].description` | no | Fallback listing text, shown only if the entry cannot be read |
+| `plugins[].description` | no | Used when the plugin's own manifest carries no description |
 | `plugins[].keywords` | no | Discovery terms |
 
 Unknown fields are rejected rather than ignored, so a typo is reported instead of silently doing
@@ -134,9 +134,13 @@ plugin's own manifest for its name, version, description and whether it carries 
 Nothing you write in a catalog can overstate or understate what a plugin does — so listing someone
 else's plugin is safe for whoever installs it, and the catalog cannot hide code.
 
-The catalog's own `version` and `description` are used only when an entry **cannot** be read, so
-the row can still say something useful instead of vanishing. A plugin whose manifest carries no
-description therefore shows none, even if the catalog offered one.
+Your `description` is the one exception, and only ever as a **fallback**: it is shown when the
+plugin's own manifest carries none, and is ignored the moment the plugin describes itself. So a
+catalog can introduce a plugin whose author never wrote a summary, but cannot restate one who did.
+
+The version and the extension badge are never yours to supply — they decide what installing *does*.
+Only when an entry cannot be read at all does the row fall back to your `version` and
+`description`, so a broken entry still says something useful instead of vanishing.
 
 ## Installing a plugin
 
