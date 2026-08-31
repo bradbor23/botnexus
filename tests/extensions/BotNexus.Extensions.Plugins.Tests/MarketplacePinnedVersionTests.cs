@@ -120,6 +120,40 @@ public sealed class MarketplacePinnedVersionTests : IDisposable
         Assert.Contains("not a tag or branch", warning);
     }
 
+    /// <summary>
+    /// The pin that names no ref makes the FETCH fail, so the warning has to survive the failure
+    /// path. A check that only ran on success would miss the exact case it was built for, leaving
+    /// only git's "Remote branch 1.2.1 not found" - true, but silent about which field to fix.
+    /// </summary>
+    [Fact]
+    public async Task A_pin_that_breaks_the_fetch_still_explains_the_pin()
+    {
+        SetupCatalog("1.2.1");
+        _git.Tags(PluginUrl, "v1.2.0", "v1.2.1");
+        _fetcher.Fail(PluginUrl, "fatal: Remote branch 1.2.1 not found in upstream origin");
+
+        var offering = await ProbeAsync();
+
+        // Both: what git said, AND which field is wrong.
+        Assert.Contains("Remote branch", offering.Error);
+        Assert.Contains("not a tag or branch", offering.VersionWarning);
+        // The entry is still listed rather than vanishing.
+        Assert.Equal("alpha", offering.Name);
+    }
+
+    [Fact]
+    public async Task A_stale_pin_survives_an_unreadable_entry()
+    {
+        SetupCatalog("v1.1.0");
+        _git.Tags(PluginUrl, "v1.1.0", "v1.2.1");
+        _fetcher.Fail(PluginUrl, "network down");
+
+        var offering = await ProbeAsync();
+
+        Assert.Contains("network down", offering.Error);
+        Assert.Contains("v1.2.1", offering.VersionWarning);
+    }
+
     // ── Deliberate pins that must NOT be nagged about ────────────────────────
 
     [Fact]
@@ -241,11 +275,18 @@ public sealed class MarketplacePinnedVersionTests : IDisposable
     {
         private readonly Dictionary<string, Action<string>> _writers = [];
 
+        private readonly Dictionary<string, string> _failures = [];
+
         public void Add(string url, Action<string> write) => _writers[url] = write;
+
+        public void Fail(string url, string message) => _failures[url] = message;
 
         public Task<PluginFetchResult> FetchAsync(
             string source, string? reference, string stagingDirectory, CancellationToken cancellationToken = default)
         {
+            if (_failures.TryGetValue(source, out var message))
+                throw new InvalidOperationException(message);
+
             if (!_writers.TryGetValue(source, out var write))
                 throw new InvalidOperationException($"no script for {source}");
 

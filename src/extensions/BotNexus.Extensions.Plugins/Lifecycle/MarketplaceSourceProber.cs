@@ -144,20 +144,27 @@ public sealed class MarketplaceSourceProber(
 
         var staging = _fs.Path.Combine(stagingRoot, $"entry-{Guid.NewGuid():N}");
 
+        // Checked BEFORE the fetch and carried onto every outcome. A pin naming no ref makes the
+        // fetch itself fail, so a check that only ran on success would miss the very case it was
+        // built for - and leave the operator with git's "Remote branch 1.2.1 not found", which says
+        // what happened but not that the catalog's version field is what to fix.
+        string? pinWarning = null;
+
         try
         {
             _fs.Directory.CreateDirectory(staging);
+            pinWarning = await CheckPinnedVersionAsync(entry, staging, cancellationToken);
             await _fetcher.FetchAsync(entry.Source, entry.Version, staging, cancellationToken);
 
             var manifestPath = _fs.Path.Combine(staging, PluginManifestPath);
 
             if (!_fs.File.Exists(manifestPath))
-                return fallback with { Error = "no .botnexus-plugin/plugin.json in the entry's repository" };
+                return fallback with { Error = "no .botnexus-plugin/plugin.json in the entry's repository", VersionWarning = pinWarning };
 
             var manifest = _parser.ParseManifest(_fs.File.ReadAllText(manifestPath));
 
             if (manifest.Value is not { } value)
-                return fallback with { Error = Describe("the plugin manifest is not valid", manifest.Errors) };
+                return fallback with { Error = Describe("the plugin manifest is not valid", manifest.Errors), VersionWarning = pinWarning };
 
             var offering = ToOffering(value, entry.Source, entry.Version);
 
@@ -172,14 +179,11 @@ public sealed class MarketplaceSourceProber(
                 ? offering with { Description = entry.Description }
                 : offering;
 
-            return described with
-            {
-                VersionWarning = await CheckPinnedVersionAsync(entry, staging, cancellationToken),
-            };
+            return described with { VersionWarning = pinWarning };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return fallback with { Error = ex.Message };
+            return fallback with { Error = ex.Message, VersionWarning = pinWarning };
         }
         finally
         {
