@@ -1,6 +1,0 @@
-# Generated SPA build (staged from the standalone repo bundle.sh)
-wwwroot/
-
-# Build output
-bin/
-obj/
