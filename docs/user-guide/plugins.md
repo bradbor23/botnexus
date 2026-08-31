@@ -3,9 +3,13 @@
 A **plugin** is a git repository you install into BotNexus from the portal. It can carry skills,
 and it can carry a prebuilt gateway extension — code and UI that becomes part of the portal.
 
+You install one either by pasting its URL, or by adding a **repository** to look in and installing
+from what it lists.
+
 ## Table of contents
 
 - [Plugin, extension or skill?](#plugin-extension-or-skill)
+- [Repositories](#repositories)
 - [Installing a plugin](#installing-a-plugin)
 - [Managing installed plugins](#managing-installed-plugins)
 - [Building a plugin](#building-a-plugin)
@@ -26,10 +30,121 @@ These three words are easy to confuse, and the difference decides how you ship s
 
 A plugin is the *delivery mechanism*. What it delivers is skills, an extension, or both.
 
+## Repositories
+
+**Plugins → Repositories.** A repository is a place BotNexus looks for plugins. Adding one is not
+installing anything: it records a URL, reads what is there, and lists it. Nothing runs until you
+press **Install** on an entry.
+
+Paste the URL and press **Add repository**. It is read straight away, so its plugins appear in the
+same breath:
+
+```
+https://github.com/owner/my-plugins.git      reference: main
+```
+
+Repository URLs must be `http://` or `https://`. That address is handed to git, so a local path or
+a `file://` URL is refused — otherwise anyone able to reach the portal could make the gateway read
+a directory. To install from a local path, use **Install from a repository** instead, which is you
+naming a path you already chose.
+
+### What a repository can be
+
+BotNexus works out which it is by looking, not by asking you:
+
+| Badge | What it found |
+|---|---|
+| **Single plugin** | The repository *is* a plugin — it has `.botnexus-plugin/plugin.json` |
+| **Catalog** | It has a `marketplace.json` listing plugins that live in other repositories |
+| **Unread** | Neither, or it could not be reached — the reason is shown on the row |
+
+A repository can be both, in which case the catalog wins: it is the broader claim.
+
+### What the listing tells you
+
+Each entry shows its name, version and description, and two badges that matter:
+
+- **Carries an extension** — installing this deploys code that runs inside the gateway process at
+  full trust. You are told here, *before* you press Install, not only at the consent prompt
+  afterwards. It is read from the plugin's own manifest, so a catalog cannot list a plugin as
+  harmless when it is not.
+- **Installed** — you already have a plugin of that name, so there is nothing to install. Matched
+  on name, because the same plugin can legitimately be listed by more than one catalog.
+
+An entry the catalog lists but BotNexus could not read shows its reason and cannot be installed.
+The rest of the listing is unaffected — one bad entry does not hide the others.
+
+### Refreshing
+
+**Refresh** re-reads one repository; **Refresh all** re-reads every one. Nothing is re-read on its
+own, so what you see is what was there at the last read.
+
+If a repository cannot be reached, its error appears on the row and **its previous listing stays**.
+That is deliberate: a repository that is briefly down can still be installed from, and blanking the
+list would take away something that still works. The "last read" time is not moved forward either —
+a failed read read nothing, and pretending otherwise would make stale entries look fresh.
+
+### Removing a repository
+
+**Remove** takes two clicks and only stops the listing:
+
+> Stop listing 'x'? Plugins already installed from it stay installed and keep working.
+
+Forgetting where you found something is not uninstalling it. To remove the plugin itself, use
+**Remove** on its row in the installed table below.
+
+### Publishing a catalog
+
+To offer several plugins from one address, put a `marketplace.json` at the repository root. Each
+entry points at the repository the plugin actually lives in.
+
+```json
+{
+  "name": "acme-plugins",
+  "owner": { "name": "Acme", "url": "https://acme.example" },
+  "description": "Plugins maintained by Acme.",
+  "plugins": [
+    {
+      "name": "acme-dashboard",
+      "source": "https://github.com/acme/dashboard.git",
+      "version": "v3.2.0",
+      "description": "Ops dashboard for the portal.",
+      "keywords": ["ops", "dashboard"]
+    }
+  ]
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Lowercase kebab-case, unique |
+| `owner.name` | yes | Who is accountable for the listing; `email` and `url` optional |
+| `description` | no | Summary of the catalog |
+| `plugins[].name` | yes | Must match the plugin's own manifest name |
+| `plugins[].source` | yes | Repository URL the plugin lives in |
+| `plugins[].version` | no | Reference to read; omit to track the default branch |
+| `plugins[].description` | no | Fallback listing text, shown only if the entry cannot be read |
+| `plugins[].keywords` | no | Discovery terms |
+
+Unknown fields are rejected rather than ignored, so a typo is reported instead of silently doing
+nothing.
+
+**A catalog is a signpost, not a source of truth.** BotNexus fetches each entry and reads that
+plugin's own manifest for its name, version, description and whether it carries an extension.
+Nothing you write in a catalog can overstate or understate what a plugin does — so listing someone
+else's plugin is safe for whoever installs it, and the catalog cannot hide code.
+
+The catalog's own `version` and `description` are used only when an entry **cannot** be read, so
+the row can still say something useful instead of vanishing. A plugin whose manifest carries no
+description therefore shows none, even if the catalog offered one.
+
 ## Installing a plugin
 
 **Plugins → Install from a repository.** Paste the repository URL, optionally give a branch, tag or
 commit, and press **Install**.
+
+Pressing **Install** on a listed entry does exactly the same thing with that entry's URL, so the
+consent and restart rules below apply to both routes.
 
 ```
 https://github.com/owner/my-plugin.git      reference: v1.0.0
@@ -256,6 +371,9 @@ Failures name the field at fault rather than failing generically.
 | is already deployed | An extension of that id already exists; remove it and restart first |
 | is already installed | A plugin of that name is installed; remove or update it |
 | git clone … failed | Bad URL, bad reference, private repo the gateway cannot authenticate to |
+| must be an absolute http:// or https:// | A repository was added with a local path or another scheme |
+| neither marketplace.json nor …plugin.json | The repository is not a plugin and does not list any |
+| is already configured | A repository of that name is already added; **Refresh** it instead |
 
 Nothing is written unless the whole fetch **and** validation succeed, so a refused install leaves
 no partial state behind.
