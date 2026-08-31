@@ -21,12 +21,16 @@
     </header>
 
     <section class="cron-page-card" data-testid="plugin-install">
-        <h3>Install from a repository</h3>
+        <h3>Install one plugin directly</h3>
+        <p class="plugin-form-hint" data-testid="plugin-install-hint">
+            For a repository that <em>is</em> a plugin. Goes straight to install, without listing
+            anything first.
+        </p>
         <div class="plugin-install-form">
             <input type="url"
                    class="plugin-install-source"
-                   placeholder="https://github.com/owner/repo.git"
-                   aria-label="Repository URL"
+                   placeholder="https://github.com/owner/my-plugin.git"
+                   aria-label="URL of a repository that is itself a plugin"
                    data-testid="plugin-install-source"
                    disabled="@_installing"
                    @bind="_installSource" />
@@ -76,7 +80,7 @@
        separate from installing from it - adding records a URL and reads it, and runs nothing. *@
     <section class="cron-page-card" data-testid="plugin-sources">
         <header class="cron-page-card-header">
-            <h3>Repositories</h3>
+            <h3>Repositories to browse</h3>
             <button class="toolbar-btn"
                     data-testid="plugin-sources-refresh-all"
                     disabled="@(_sourcesBusy || _sources.Count == 0)"
@@ -86,11 +90,16 @@
             </button>
         </header>
 
+        <p class="plugin-form-hint" data-testid="plugin-sources-hint">
+            A plugin repository, or a catalog listing several. Adding one reads it and lists what it
+            offers &mdash; it installs nothing.
+        </p>
+
         <div class="plugin-install-form">
             <input type="url"
                    class="plugin-install-source"
-                   placeholder="https://github.com/owner/repo.git"
-                   aria-label="Repository URL to add"
+                   placeholder="https://github.com/owner/my-plugins.git"
+                   aria-label="URL of a repository or catalog to browse"
                    data-testid="plugin-source-url"
                    disabled="@_sourcesBusy"
                    @bind="_sourceUrl" />
@@ -328,7 +337,10 @@
     else if (_plugins.Count == 0)
     {
         <div class="agents-empty" data-testid="plugins-empty">
-            <p>No plugins installed. Paste a repository URL above to install one.</p>
+            <p>
+                No plugins installed yet. Add a repository above to browse what is on offer, or
+                install a single plugin directly.
+            </p>
         </div>
     }
     else

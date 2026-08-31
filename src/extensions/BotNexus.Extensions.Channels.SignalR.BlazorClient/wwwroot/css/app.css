@@ -7877,6 +7877,17 @@ h3.conversation-title.editable:hover {
     flex-wrap: wrap;
 }
 
+/* The two URL boxes look alike and do different things - one installs, one only
+   lists - so each carries a line saying which. Muted: it explains the control
+   above it rather than competing with it. */
+.plugin-form-hint {
+    margin: 0.35rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.88em;
+    line-height: 1.45;
+    max-width: 62ch;
+}
+
 .plugin-source {
     border: 1px solid var(--border, #333);
     border-radius: 6px;

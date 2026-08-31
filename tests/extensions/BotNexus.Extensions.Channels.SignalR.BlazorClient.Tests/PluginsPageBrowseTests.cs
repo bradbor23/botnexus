@@ -101,6 +101,51 @@ public sealed class PluginsPageBrowseTests : IDisposable
     private void SetupSources(params string[] sources) =>
         _handler.SetupResponse("GET", "/api/plugins/sources", $"[{string.Join(",", sources)}]");
 
+    // ── Telling the two URL boxes apart ──────────────────────────────────────
+
+    /// <summary>
+    /// The install box and the repositories box look alike, and pasting a catalog into the wrong
+    /// one is an easy slip that fails confusingly. Each says what it does, so the choice is
+    /// visible before the click rather than explained by the error afterwards.
+    /// </summary>
+    [Fact]
+    public void Each_url_box_says_what_it_does()
+    {
+        var cut = RenderPage();
+
+        var install = cut.Find("[data-testid='plugin-install-hint']").TextContent;
+        var sources = cut.Find("[data-testid='plugin-sources-hint']").TextContent;
+
+        Assert.Contains("install", install, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("catalog", sources, StringComparison.OrdinalIgnoreCase);
+        // The distinction that matters: adding a repository does not install.
+        Assert.Contains("installs nothing", sources, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void The_two_url_boxes_do_not_share_a_placeholder()
+    {
+        var cut = RenderPage();
+
+        var install = cut.Find("[data-testid='plugin-install-source']").GetAttribute("placeholder");
+        var source = cut.Find("[data-testid='plugin-source-url']").GetAttribute("placeholder");
+
+        Assert.NotEqual(install, source);
+    }
+
+    [Fact]
+    public void The_two_url_boxes_have_distinct_accessible_names()
+    {
+        var cut = RenderPage();
+
+        var install = cut.Find("[data-testid='plugin-install-source']").GetAttribute("aria-label");
+        var source = cut.Find("[data-testid='plugin-source-url']").GetAttribute("aria-label");
+
+        Assert.NotEqual(install, source);
+        Assert.False(string.IsNullOrWhiteSpace(install));
+        Assert.False(string.IsNullOrWhiteSpace(source));
+    }
+
     // ── Listing ──────────────────────────────────────────────────────────────
 
     [Fact]
