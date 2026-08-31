@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BotNexus.Gateway.Configuration;
 
 namespace BotNexus.Gateway.Notifications.Push;
 
@@ -126,8 +127,12 @@ public sealed class VapidKeyStore
         File.WriteAllText(_path, JsonSerializer.Serialize(keys, Options));
 
         // The private half is the gateway's identity to every push service it has ever spoken to.
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        //
+        // Through the central helper, not File.SetUnixFileMode: that call throws
+        // PlatformNotSupportedException on Windows, so the raw form needed an OS guard that then
+        // left the key UNPROTECTED on Windows rather than applying the equivalent ACL. The helper
+        // does the right thing on both (#2392).
+        SecureFilePermissions.RestrictToOwner(_path);
 
         return keys;
     }

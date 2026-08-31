@@ -1,3 +1,4 @@
+using BotNexus.Domain.Text;
 using BotNexus.Gateway.Abstractions.Extensions;
 
 using Microsoft.AspNetCore.Http;
@@ -81,11 +82,10 @@ public sealed class NavContributionsController : ControllerBase
             return null;
         }
 
-        var label = nav.Label.Trim();
-        if (label.Length > MaxLabelLength)
-        {
-            label = label[..MaxLabelLength];
-        }
+        // SafeTruncate, not raw slicing (#2883): the label comes from a plugin's manifest, so a
+        // cut at MaxLabelLength can land between the halves of a surrogate pair and emit a lone
+        // surrogate into the nav payload.
+        var label = TextTruncation.SafeTruncate(nav.Label.Trim(), MaxLabelLength) ?? string.Empty;
 
         return new NavContributionResponse(
             nav.Id.Trim().ToLowerInvariant(),

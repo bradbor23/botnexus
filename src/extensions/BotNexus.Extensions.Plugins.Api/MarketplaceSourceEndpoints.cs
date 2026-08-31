@@ -250,20 +250,17 @@ public static class MarketplaceSourceEndpoints
         new(new GitPluginSourceFetcher(new ProcessGitCommandRunner()), new PluginManifestParser());
 
     /// <summary>
-    /// Absolute path of the marketplace staging root, <c>~/.botnexus/cache/marketplace</c>,
-    /// honouring the same <c>BOTNEXUS_HOME</c> override as the plugin and extension roots. Kept
-    /// beside the plugin data rather than in the system temp directory so a probe of a large
-    /// repository is bounded by the same volume the install would land on.
+    /// Directory to stage fetches under: <c>.staging</c> inside the plugin root.
     /// </summary>
-    internal static string GetStagingRootPath()
-    {
-        var homeOverride = Environment.GetEnvironmentVariable("BOTNEXUS_HOME");
-        var root = string.IsNullOrWhiteSpace(homeOverride)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".botnexus")
-            : Path.GetFullPath(homeOverride);
-
-        return Path.Combine(root, "cache", "marketplace");
-    }
+    /// <remarks>
+    /// Derived from the plugin root rather than resolved here. A file that builds its own
+    /// <c>~/.botnexus</c> path has never been checked against this world's sentinel (#2836), so
+    /// home resolution stays in one place and this consumes it. Staging sits beside the plugin
+    /// data rather than in the system temp directory, so probing a large repository is bounded by
+    /// the same volume the install would land on; the prober deletes each staging directory itself.
+    /// </remarks>
+    internal static string GetStagingRootPath() =>
+        Path.Combine(PluginsEndpointContributor.GetPluginRootPath(), ".staging");
 }
 
 /// <summary>Request body for adding a marketplace source.</summary>
