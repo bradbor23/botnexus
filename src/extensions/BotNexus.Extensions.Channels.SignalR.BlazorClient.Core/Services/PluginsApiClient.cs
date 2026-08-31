@@ -207,6 +207,97 @@ public sealed record PluginOperationOutcomeDto
     public PluginOperationResponseDto? Response { get; init; }
 }
 
+/// <summary>One repository the portal looks in to find plugins.</summary>
+/// <remarks>
+/// Mirrors the gateway's <c>MarketplaceSource</c>. A source is a place to LOOK: it records a URL
+/// and what the last read found, and by itself installs nothing.
+/// </remarks>
+public sealed record MarketplaceSourceDto
+{
+    /// <summary>Identifier, derived from the URL unless one was given.</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Repository URL.</summary>
+    public string Url { get; init; } = string.Empty;
+
+    /// <summary>Branch, tag or commit read, or <c>null</c> for the default branch.</summary>
+    public string? Reference { get; init; }
+
+    /// <summary>When the source was added.</summary>
+    public DateTimeOffset AddedAtUtc { get; init; }
+
+    /// <summary>When its content was last successfully read, or <c>null</c> if it never was.</summary>
+    public DateTimeOffset? LastRefreshedAtUtc { get; init; }
+
+    /// <summary>Why the last read failed, or <c>null</c> when it succeeded.</summary>
+    public string? LastError { get; init; }
+
+    /// <summary><c>"catalog"</c>, <c>"plugin"</c>, or <c>null</c> when it could not be read.</summary>
+    public string? Kind { get; init; }
+
+    /// <summary>What the source offers; empty until a read succeeds.</summary>
+    public IReadOnlyList<MarketplaceOfferingDto> Offerings { get; init; } = [];
+}
+
+/// <summary>One plugin a source offers.</summary>
+public sealed record MarketplaceOfferingDto
+{
+    /// <summary>Plugin identifier, from the plugin's own manifest where it could be read.</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Repository URL to install from.</summary>
+    public string Url { get; init; } = string.Empty;
+
+    /// <summary>Advertised version, or <c>null</c>.</summary>
+    public string? Version { get; init; }
+
+    /// <summary>Listing summary, or <c>null</c>.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Branch, tag or commit to install, or <c>null</c> for the default branch.</summary>
+    public string? Reference { get; init; }
+
+    /// <summary>
+    /// Whether installing this plugin deploys a gateway extension - code loaded in-process at full
+    /// trust. Read from the plugin's own manifest, not from any catalog listing it.
+    /// </summary>
+    public bool CarriesExtension { get; init; }
+
+    /// <summary>Why this entry could not be read, or <c>null</c>.</summary>
+    public string? Error { get; init; }
+}
+
+/// <summary>Request body for adding a marketplace source.</summary>
+public sealed record MarketplaceSourceRequestDto
+{
+    /// <summary>Repository URL to read plugins from.</summary>
+    public string Url { get; init; } = string.Empty;
+
+    /// <summary>Identifier, or <c>null</c> to derive one from the URL.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>Branch, tag or commit to read, or <c>null</c> for the default branch.</summary>
+    public string? Reference { get; init; }
+}
+
+/// <summary>Result of adding, refreshing or removing a marketplace source.</summary>
+/// <remarks>
+/// <see cref="Source"/> is carried on success so the page can render the result without a second
+/// round trip - including the case where the source was stored but could not be read, which is a
+/// success with <see cref="MarketplaceSourceDto.LastError"/> set rather than a failure.
+/// </remarks>
+public sealed record MarketplaceSourceOutcomeDto
+{
+    /// <summary>Whether the call succeeded.</summary>
+    public bool Succeeded { get; init; }
+
+    /// <summary>Failure message, when it did not.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>The source as stored, on success.</summary>
+    public MarketplaceSourceDto? Source { get; init; }
+}
+
 /// <summary>
 /// Client for the gateway plugins REST API (<c>/api/plugins</c>, #2687, slice 8 of #2623).
 /// </summary>
@@ -423,4 +514,143 @@ public sealed class PluginsApiClient
             Error = error?.Error ?? $"The gateway refused the request ({(int)response.StatusCode}).",
         };
     }
+
+    /// <summary>
+    /// Raised after any change to the configured marketplace sources, so a browse view repaints.
+    /// </summary>
+    public event Action? SourcesChanged;
+
+    /// <summary>Lists configured marketplace sources, ordered by name. Never returns null.</summary>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<IReadOnlyList<MarketplaceSourceDto>> ListSourcesAsync(CancellationToken ct = default)
+    {
+        var result = await _http.GetFromJsonAsync<List<MarketplaceSourceDto>>(
+            "/api/plugins/sources", JsonOptions, ct);
+        return result ?? [];
+    }
+
+    /// <summary>
+    /// Adds a repository to look in.
+    /// </summary>
+    /// <remarks>
+    /// A source that was stored but could not be read comes back as a SUCCESS carrying
+    /// <see cref="MarketplaceSourceDto.LastError"/>. The distinction matters to the page: the
+    /// repository is now configured either way, and reporting it as a failure would invite the
+    /// operator to add it again and hit a duplicate conflict.
+    /// </remarks>
+    /// <param name="url">Repository URL.</param>
+    /// <param name="reference">Branch, tag or commit, or <c>null</c> for the default branch.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<MarketplaceSourceOutcomeDto> AddSourceAsync(
+        string url,
+        string? reference = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return new MarketplaceSourceOutcomeDto { Error = "A repository URL is required." };
+        }
+
+        using var response = await _http.PostAsJsonAsync(
+            "/api/plugins/sources",
+            new MarketplaceSourceRequestDto
+            {
+                Url = url.Trim(),
+                Reference = string.IsNullOrWhiteSpace(reference) ? null : reference.Trim(),
+            },
+            JsonOptions,
+            ct);
+
+        return await ReadSourceOutcomeAsync(response, ct);
+    }
+
+    /// <summary>Re-reads one source and returns what it now offers.</summary>
+    /// <param name="name">Source identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<MarketplaceSourceOutcomeDto> RefreshSourceAsync(
+        string name,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return new MarketplaceSourceOutcomeDto { Error = "A source name is required." };
+        }
+
+        using var response = await _http.PostAsync(
+            $"/api/plugins/sources/{Uri.EscapeDataString(name)}/refresh", content: null, ct);
+
+        return await ReadSourceOutcomeAsync(response, ct);
+    }
+
+    /// <summary>Re-reads every configured source. Never returns null.</summary>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<IReadOnlyList<MarketplaceSourceDto>> RefreshAllSourcesAsync(
+        CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync("/api/plugins/sources/refresh", content: null, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return [];
+        }
+
+        SourcesChanged?.Invoke();
+        return await response.Content.ReadFromJsonAsync<List<MarketplaceSourceDto>>(JsonOptions, ct) ?? [];
+    }
+
+    /// <summary>
+    /// Removes a source. Plugins installed from it stay installed - this forgets where they were
+    /// found, it does not uninstall them.
+    /// </summary>
+    /// <param name="name">Source identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<MarketplaceSourceOutcomeDto> RemoveSourceAsync(
+        string name,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return new MarketplaceSourceOutcomeDto { Error = "A source name is required." };
+        }
+
+        using var response = await _http.DeleteAsync(
+            $"/api/plugins/sources/{Uri.EscapeDataString(name)}", ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return await ReadSourceOutcomeAsync(response, ct);
+        }
+
+        SourcesChanged?.Invoke();
+        return new MarketplaceSourceOutcomeDto { Succeeded = true };
+    }
+
+    /// <summary>Projects a source response onto the outcome the page renders.</summary>
+    private static async Task<MarketplaceSourceOutcomeDto> ReadSourceOutcomeAsync(
+        HttpResponseMessage response,
+        CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadFromJsonAsync<MarketplaceSourceDto>(JsonOptions, ct);
+            return new MarketplaceSourceOutcomeDto { Succeeded = true, Source = body };
+        }
+
+        PluginErrorResponseDto? error = null;
+        try
+        {
+            error = await response.Content.ReadFromJsonAsync<PluginErrorResponseDto>(JsonOptions, ct);
+        }
+        catch (JsonException)
+        {
+            // A non-JSON error body is still a failure; it just cannot name a field.
+        }
+
+        return new MarketplaceSourceOutcomeDto
+        {
+            Succeeded = false,
+            Error = error?.Error ?? $"The gateway refused the request ({(int)response.StatusCode}).",
+        };
+    }
 }
+

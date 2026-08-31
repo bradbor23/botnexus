@@ -7864,6 +7864,96 @@ h3.conversation-title.editable:hover {
     }
 }
 
+/* ── Marketplace browse ─────────────────────────────────────────────────────
+   Repositories the portal looks in, and the plugins they offer. Each source is
+   a bounded block so a catalog listing twenty plugins still reads as one
+   repository rather than as twenty loose rows. */
+
+.cron-page-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.plugin-source {
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    margin-top: 0.65rem;
+}
+
+.plugin-source-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+/* Per-source actions sit at the far end so Remove is never adjacent to the
+   Install buttons below it. */
+.plugin-source-actions {
+    display: flex;
+    gap: 0.35rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.plugin-offerings {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.plugin-offering {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+}
+
+.plugin-offering-main {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.plugin-offering-description {
+    color: var(--text-muted, #999);
+    font-size: 0.85em;
+    /* Basis of 100% pushes the description onto its own line, so a long summary
+       never squeezes the name and badges it belongs to. */
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.plugin-offering-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .plugin-offering {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .plugin-source-actions {
+        margin-left: 0;
+    }
+}
+
 /* ── Extension-hosted views ─────────────────────────────────────────────────
    The frame fills the main canvas so a hosted view looks like a page of the
    portal rather than a panel floating inside one. */
