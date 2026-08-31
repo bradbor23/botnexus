@@ -41,7 +41,8 @@ public sealed class PluginsPageBrowseTests : IDisposable
         string? version = "1.0.0",
         string? description = null,
         bool carriesExtension = false,
-        string? error = null) =>
+        string? error = null,
+        string? versionWarning = null) =>
         $$"""
         {
           "name": "{{name}}",
@@ -50,7 +51,8 @@ public sealed class PluginsPageBrowseTests : IDisposable
           "description": {{Json(description)}},
           "reference": null,
           "carriesExtension": {{(carriesExtension ? "true" : "false")}},
-          "error": {{Json(error)}}
+          "error": {{Json(error)}},
+          "versionWarning": {{Json(versionWarning)}}
         }
         """;
 
@@ -232,6 +234,57 @@ public sealed class PluginsPageBrowseTests : IDisposable
         Assert.Equal(
             "beta-plugin",
             install.Closest("[data-testid='plugin-offering']")!.GetAttribute("data-offering-name"));
+    }
+
+    // ── A catalog pinned at the wrong ref ────────────────────────────────────
+
+    /// <summary>
+    /// A stale pin is not an error: the entry reads and installs. But a catalog version IS the git
+    /// ref an install resolves, so pointing at an old one quietly installs the previous release.
+    /// </summary>
+    [Fact]
+    public void A_stale_catalog_pin_is_shown_without_blocking_the_entry()
+    {
+        _handler.SetupResponse("GET", "/api/plugins", "[]");
+        SetupSources(Source("alpha", kind: "catalog", offerings: Offering(
+            "alpha-plugin",
+            versionWarning: "the catalog pins 'v1.2.0' but 'v1.2.1' has been released")));
+
+        var cut = RenderPage();
+
+        var warning = cut.Find("[data-testid='plugin-offering-pin-warning']");
+        Assert.Contains("v1.2.1", warning.TextContent);
+        // Still installable, and not reported as an unreadable entry.
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-install']"));
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-error']"));
+    }
+
+    [Fact]
+    public void An_entry_with_a_sound_pin_shows_no_warning()
+    {
+        _handler.SetupResponse("GET", "/api/plugins", "[]");
+        SetupSources(Source("alpha", kind: "catalog", offerings: Offering("alpha-plugin")));
+
+        var cut = RenderPage();
+
+        Assert.Empty(cut.FindAll("[data-testid='plugin-offering-pin-warning']"));
+    }
+
+    [Fact]
+    public void A_pin_warning_and_a_read_error_are_shown_as_different_things()
+    {
+        _handler.SetupResponse("GET", "/api/plugins", "[]");
+        SetupSources(Source("alpha", kind: "catalog", offerings: Offering(
+            "broken",
+            error: "no .botnexus-plugin/plugin.json in the entry's repository",
+            versionWarning: "the catalog pins 'v9.9.9', which is not a tag or branch")));
+
+        var cut = RenderPage();
+
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-error']"));
+        Assert.NotNull(cut.Find("[data-testid='plugin-offering-pin-warning']"));
+        // An unreadable entry still cannot be installed, warning or not.
+        Assert.True(cut.Find("[data-testid='plugin-offering-install']").HasAttribute("disabled"));
     }
 
     // ── Version state against what is installed ──────────────────────────────

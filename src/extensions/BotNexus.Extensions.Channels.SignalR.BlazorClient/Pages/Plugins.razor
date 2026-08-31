@@ -229,6 +229,17 @@
                                             <span class="agents-status error" role="status"
                                                   data-testid="plugin-offering-error">@offeringError</span>
                                         }
+                                        @* A stale or invalid pin. Distinct from an error: the entry
+                                           reads and installs fine, but a catalog version IS the ref
+                                           an install resolves, so pointing at the wrong one quietly
+                                           installs the wrong release. *@
+                                        @if (offering.VersionWarning is { Length: > 0 } pinWarning)
+                                        {
+                                            <span class="agents-status warning" role="status"
+                                                  data-testid="plugin-offering-pin-warning">
+                                                <Icon Name="warning" Size="14" /> @pinWarning
+                                            </span>
+                                        }
                                     </div>
                                     <div class="plugin-offering-actions">
                                         @switch (StateOf(offering))

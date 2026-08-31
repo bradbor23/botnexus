@@ -23,7 +23,8 @@ public sealed class MarketplaceSourceProber(
     IPluginSourceFetcher fetcher,
     PluginManifestParser parser,
     TimeProvider? timeProvider = null,
-    IFileSystem? fileSystem = null)
+    IFileSystem? fileSystem = null,
+    IGitCommandRunner? gitCommandRunner = null)
 {
     /// <summary>Path of a catalog document within a source repository.</summary>
     public const string CatalogFileName = "marketplace.json";
@@ -35,6 +36,13 @@ public sealed class MarketplaceSourceProber(
     private readonly PluginManifestParser _parser = parser;
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly IFileSystem _fs = fileSystem ?? new FileSystem();
+
+    /// <summary>
+    /// Lists a source's refs so a catalog's pinned version can be checked against reality.
+    /// Optional: when absent the pin is simply not checked, and every other probe result is
+    /// unchanged.
+    /// </summary>
+    private readonly IGitCommandRunner? _git = gitCommandRunner;
 
     /// <summary>
     /// Fetches the source and returns it updated with what it offers.
@@ -160,9 +168,14 @@ public sealed class MarketplaceSourceProber(
             // Deliberately the description alone. Version and CarriesExtension stay manifest-only
             // because they change what installing DOES, and a listing must not be able to
             // influence that; a description only changes how the entry reads.
-            return string.IsNullOrWhiteSpace(offering.Description)
+            var described = string.IsNullOrWhiteSpace(offering.Description)
                 ? offering with { Description = entry.Description }
                 : offering;
+
+            return described with
+            {
+                VersionWarning = await CheckPinnedVersionAsync(entry, staging, cancellationToken),
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -240,4 +253,95 @@ public sealed class MarketplaceSourceProber(
             // A leaked staging directory is not worth failing a probe over.
         }
     }
+
+    /// <summary>
+    /// Compares a catalog entry's pinned <c>version</c> against the refs its source actually has.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A catalog's <c>version</c> is the git ref an install resolves, and nothing else reconciles
+    /// it with the plugin repository. A pin left behind after a release installs the PREVIOUS
+    /// plugin while the listing looks healthy - observed on this fork within two hours of a tag
+    /// being cut.
+    /// </para>
+    /// <para>
+    /// Only a tag pin is judged. A branch name is a deliberate choice to track a moving ref, and a
+    /// commit SHA cannot be ranked against tags, so neither is warned about - claiming staleness
+    /// there would train people to ignore the warning.
+    /// </para>
+    /// </remarks>
+    private async Task<string?> CheckPinnedVersionAsync(
+        MarketplacePluginEntry entry,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        if (_git is null || string.IsNullOrWhiteSpace(entry.Version) || string.IsNullOrWhiteSpace(entry.Source))
+            return null;
+
+        GitCommandResult refs;
+        try
+        {
+            refs = await _git.RunAsync(
+                workingDirectory, ["ls-remote", "--", entry.Source], cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Not being able to ask is not a finding about the pin.
+            return null;
+        }
+
+        if (refs.ExitCode != 0)
+            return null;
+
+        var tags = new List<string>();
+        var heads = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var line in refs.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tab = line.IndexOf('\t');
+            if (tab < 0)
+                continue;
+
+            var name = line[(tab + 1)..].Trim();
+
+            // "refs/tags/x^{}" is the dereferenced commit of an annotated tag - the same tag listed
+            // twice. Stripping the suffix is belt-and-braces rather than load-bearing: the
+            // rankability filter below already discards "v1.2.1^{}" because it is not
+            // dotted-numeric. Kept so the tag list means what it says, and so this stays correct if
+            // that filter is ever loosened.
+            if (name.StartsWith("refs/tags/", StringComparison.Ordinal))
+                tags.Add(name["refs/tags/".Length..].Replace("^{}", string.Empty));
+            else if (name.StartsWith("refs/heads/", StringComparison.Ordinal))
+                heads.Add(name["refs/heads/".Length..]);
+        }
+
+        var pinned = entry.Version.Trim();
+
+        if (heads.Contains(pinned))
+            return null;
+
+        if (!tags.Contains(pinned, StringComparer.Ordinal))
+        {
+            // A SHA is legitimate and unrankable; anything else names nothing that exists. The
+            // common case is writing the manifest's bare "1.2.1" where the tag is "v1.2.1", which
+            // otherwise surfaces only as a clone failure at install time.
+            return LooksLikeCommitSha(pinned)
+                ? null
+                : $"the catalog pins '{pinned}', which is not a tag or branch in {entry.Source}";
+        }
+
+        var newest = tags
+            .Where(tag => !string.Equals(tag, pinned, StringComparison.Ordinal))
+            .Where(tag => VersionOrder.IsRankable(tag) && VersionOrder.IsRankable(pinned))
+            .Where(tag => VersionOrder.Compare(pinned, tag) < 0)
+            .OrderByDescending(tag => tag, VersionOrder.Comparer)
+            .FirstOrDefault();
+
+        return newest is null
+            ? null
+            : $"the catalog pins '{pinned}' but '{newest}' has been released";
+    }
+
+    private static bool LooksLikeCommitSha(string value) =>
+        value.Length >= 7 && value.All(char.IsAsciiHexDigit);
 }

@@ -265,6 +265,12 @@ public sealed record MarketplaceOfferingDto
 
     /// <summary>Why this entry could not be read, or <c>null</c>.</summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// A problem with the catalog's pinned version - stale or naming no ref - or <c>null</c>.
+    /// The entry still lists and installs; the warning is about where the catalog points.
+    /// </summary>
+    public string? VersionWarning { get; init; }
 }
 
 /// <summary>Request body for adding a marketplace source.</summary>

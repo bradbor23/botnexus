@@ -82,4 +82,15 @@ public sealed record MarketplaceOffering
 
     /// <summary>Why this entry could not be read, when it could not.</summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// A problem with the catalog's pinned <c>version</c> itself, or <c>null</c> when it is fine.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="Error"/>: the entry WAS read, so it still lists and installs. The
+    /// warning says the catalog points somewhere stale or nonexistent, which matters because a
+    /// catalog version is the git ref an install resolves - a pin left behind installs the previous
+    /// release, silently, with nothing else to reveal it.
+    /// </remarks>
+    public string? VersionWarning { get; init; }
 }

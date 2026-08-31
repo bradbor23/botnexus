@@ -246,8 +246,14 @@ public static class MarketplaceSourceEndpoints
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     /// <summary>Composes a prober over the real git transport.</summary>
-    internal static MarketplaceSourceProber CreateProber() =>
-        new(new GitPluginSourceFetcher(new ProcessGitCommandRunner()), new PluginManifestParser());
+    internal static MarketplaceSourceProber CreateProber()
+    {
+        // One runner for both jobs: fetching each entry, and asking its repository what refs it
+        // actually has so a catalog's pinned version can be checked against reality.
+        var git = new ProcessGitCommandRunner();
+        return new MarketplaceSourceProber(
+            new GitPluginSourceFetcher(git), new PluginManifestParser(), gitCommandRunner: git);
+    }
 
     /// <summary>
     /// Directory to stage fetches under: <c>.staging</c> inside the plugin root.
