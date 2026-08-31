@@ -188,6 +188,17 @@ A plugin carries code by pointing at an extension manifest:
 beside it in the repo is deployed as the extension, so the layout is just an extension repo with a
 plugin manifest added.
 
+**The manifest's directory is the deploy unit**, and that decides where to put it:
+
+- **A payload-only repo** — nothing in it but the built extension — keeps the manifest at the
+  root. `.botnexus-plugin/`, `skills/` and `.git/` are excluded, so the root is already clean.
+- **A repo that is also the source** of the extension must put the manifest in a
+  **subdirectory** (`extension/`, say). Those three exclusions apply *only* when the manifest sits
+  at the plugin root; a root manifest in a source repo deploys `src/`, `package.json`,
+  `node_modules/` and the rest into `~/.botnexus/extensions/<id>/`.
+
+Both are valid. The choice follows from whether the repository is a payload or a project.
+
 Three rules the installer enforces, each of which refuses the install rather than warning:
 
 - **`"endpointPhase": "after-authentication"` is required** in the extension manifest. Plugin code
@@ -198,6 +209,19 @@ Three rules the installer enforces, each of which refuses the install rather tha
   `"acknowledgeCarriedExtension": true`.
 - **Compatibility is checked.** A prebuilt extension declaring an incompatible gateway contract
   range is refused rather than loaded, so a stale binary cannot crash the host it lands on.
+  Declare the range on the extension manifest, against the `BotNexus.Gateway.Abstractions`
+  **assembly version** — that is the contract that actually breaks:
+
+  ```json
+  "compatibility": {
+    "minAbstractionsVersion": "0.45.0",
+    "maxAbstractionsVersion": "0.46.0"
+  }
+  ```
+
+  The upper bound is **exclusive**, because a ceiling is nearly always "up to the next breaking
+  release". Both bounds are optional, and an absent or unparseable one means no constraint rather
+  than a failure — so an extension written before the field existed keeps loading.
 
 Two consequences worth designing around:
 
@@ -208,9 +232,37 @@ Two consequences worth designing around:
   assemblies loaded and cannot replace them underneath itself; attempting an update is refused with
   that instruction.
 
+Ship the entry assembly, its `.deps.json`, and its **private** dependencies. Leave shared
+contracts (`BotNexus.Gateway.Abstractions`, `BotNexus.Domain`, …) out — but not for the reason
+the older design notes give. `ExtensionAssemblyLoadContext.Load` unifies with the host
+**categorically**: any assembly the host has loaded, ships in its base directory, or owns
+resolves from the host's default context, and the extension's private copy is never consulted.
+So a shipped contract assembly is **dead weight rather than a live hazard** — it inflates the
+plugin and misleads the next reader into thinking the version in it matters. It does not.
+
 Ship any web assets in `wwwroot/` beside the extension manifest. They travel with the plugin and
 are **not** in the BotNexus repo, so deploying the extension from a BotNexus build gives the shell
 without its UI — the plugin is the only thing that carries them.
+
+### Contributing a portal nav entry
+
+A carried extension that serves a UI declares its left-nav entry on the **extension** manifest,
+not the plugin manifest — nav is a property of the thing that serves the path, so an extension
+built from source gets it on the same terms as one delivered by a plugin:
+
+```json
+"nav": [
+  { "id": "agent-builder", "label": "Agent Builder", "path": "/agent-builder/",
+    "icon": "agents", "order": 50, "external": true, "fullPage": false }
+]
+```
+
+- `path` must be site-relative and begin with `/`, or the entry is dropped rather than rendered.
+- `icon` must be a key in the portal's `IconLibrary`; an unknown name falls back to a default
+  rather than failing, and arbitrary markup is never accepted.
+- `external` marks a path served outside the Blazor router, so client-side routing cannot reach it.
+- `fullPage: false` frames the view inside the portal, keeping sidebar, header and theme;
+  `true` replaces the whole window, which reads as leaving the app and is therefore opt-in.
 
 ### Still not wired
 
@@ -267,3 +319,8 @@ If the plugin carries an extension (§5), also:
 - `src/extensions/BotNexus.Extensions.Plugins/Lifecycle/PluginSkillRootResolver.cs`
 - `src/extensions/BotNexus.Extensions.Skills/SkillDiscovery.cs`
 - `src/extensions/BotNexus.Extensions.Skills/SkillParser.cs`
+- `src/extensions/BotNexus.Extensions.Plugins/Lifecycle/PluginExtensionDeployer.cs` — the
+  install-time rules for a carried extension
+- `src/gateway/BotNexus.Gateway.Contracts/ExtensionModels.cs` — `ExtensionManifest`,
+  `ExtensionCompatibility`, `ExtensionNavEntry`
+- `src/gateway/BotNexus.Gateway/Extensions/AssemblyLoadContextExtensionLoader.cs` — the ABI gate
