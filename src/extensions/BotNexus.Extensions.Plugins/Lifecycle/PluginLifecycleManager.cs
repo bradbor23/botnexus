@@ -25,6 +25,13 @@ namespace BotNexus.Extensions.Plugins.Lifecycle;
 /// </remarks>
 public sealed class PluginLifecycleManager : IPluginUpdateService
 {
+    /// <summary>
+    /// Catalog document name, recognised here only so installing a catalog by mistake explains
+    /// itself. Kept in step with <c>MarketplaceSourceProber.CatalogFileName</c>, which is the
+    /// component that actually reads catalogs.
+    /// </summary>
+    private const string MarketplaceCatalogFileName = "marketplace.json";
+
     private readonly PluginStateStore _store;
     private readonly IPluginSourceFetcher _fetcher;
     private readonly PluginManifestParser _parser;
@@ -454,8 +461,23 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
             var parse = _parser.ParsePluginDirectory(staging);
             if (!parse.IsValid)
             {
+                // A marketplace catalog is a repository of POINTERS to plugins, so it has no plugin
+                // manifest and install is right to refuse it. Saying only "manifest not found"
+                // leaves someone re-reading their own repository for a file that was never meant to
+                // be there; the mistake is which box the URL went in, and the message should say so.
+                var isCatalog = File.Exists(Path.Combine(staging, MarketplaceCatalogFileName));
+
                 TryDeleteDirectory(staging);
-                return new StagedPlugin(null, null, null, PluginOperationResult.Failure(reportName, parse.Errors));
+
+                return new StagedPlugin(null, null, null, isCatalog
+                    ? PluginOperationResult.Failure(
+                        reportName,
+                        MarketplaceCatalogFileName,
+                        $"'{source}' is a marketplace catalog, not a plugin - it carries "
+                        + $"{MarketplaceCatalogFileName} and lists plugins that live in other "
+                        + "repositories. Add it under Repositories instead, then install the plugins "
+                        + "it offers from the listing.")
+                    : PluginOperationResult.Failure(reportName, parse.Errors));
             }
 
             var manifest = parse.Value!;
