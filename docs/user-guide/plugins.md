@@ -3,8 +3,19 @@
 A **plugin** is a git repository you install into BotNexus from the portal. It can carry skills,
 and it can carry a prebuilt gateway extension — code and UI that becomes part of the portal.
 
-You install one either by pasting its URL, or by adding a **repository** to look in and installing
-from what it lists.
+The Plugins page has two URL boxes. They look alike and do different things:
+
+| Box | What it does | Use it for |
+|---|---|---|
+| **Install one plugin directly** | Installs immediately | A repository that *is* a plugin, when you already know you want it |
+| **Repositories to browse** | Reads and lists; **installs nothing** | A plugin repository you want to keep an eye on, or a catalog listing several |
+
+Adding a repository never installs anything. It records a URL, reads what is there, and lists it;
+you then press **Install** on the entry you want. Everything below about consent and restarts
+applies whichever route you take, because both end in the same install.
+
+A **catalog** only works in the second box. It is a repository of pointers, not a plugin, so
+installing it directly is refused - with an error saying exactly that, and where it belongs.
 
 ## Table of contents
 
@@ -32,9 +43,9 @@ A plugin is the *delivery mechanism*. What it delivers is skills, an extension, 
 
 ## Repositories
 
-**Plugins → Repositories.** A repository is a place BotNexus looks for plugins. Adding one is not
-installing anything: it records a URL, reads what is there, and lists it. Nothing runs until you
-press **Install** on an entry.
+**Plugins → Repositories to browse.** A repository is a place BotNexus looks for plugins. Adding
+one is not installing anything: it records a URL, reads what is there, and lists it. Nothing runs
+until you press **Install** on an entry.
 
 Paste the URL and press **Add repository**. It is read straight away, so its plugins appear in the
 same breath:
@@ -45,8 +56,8 @@ https://github.com/owner/my-plugins.git      reference: main
 
 Repository URLs must be `http://` or `https://`. That address is handed to git, so a local path or
 a `file://` URL is refused — otherwise anyone able to reach the portal could make the gateway read
-a directory. To install from a local path, use **Install from a repository** instead, which is you
-naming a path you already chose.
+a directory. To install from a local path, use **Install one plugin directly** instead, which is
+you naming a path you already chose.
 
 ### What a repository can be
 
@@ -144,8 +155,9 @@ Only when an entry cannot be read at all does the row fall back to your `version
 
 ## Installing a plugin
 
-**Plugins → Install from a repository.** Paste the repository URL, optionally give a branch, tag or
-commit, and press **Install**.
+**Plugins → Install one plugin directly.** Paste the repository URL, optionally give a branch, tag
+or commit, and press **Install**. This box goes straight to installing, without listing anything -
+use **Repositories to browse** if you would rather see what a repository offers first.
 
 Pressing **Install** on a listed entry does exactly the same thing with that entry's URL, so the
 consent and restart rules below apply to both routes.
@@ -368,6 +380,7 @@ Failures name the field at fault rather than failing generically.
 | Message | Meaning |
 |---|---|
 | Plugin manifest not found | No `.botnexus-plugin/plugin.json` at the repository root |
+| is a marketplace catalog, not a plugin | A catalog URL went into the install box; add it under **Repositories to browse** instead |
 | Field '…' is invalid | A field failed the schema — often an unknown field, or a name that is not kebab-case |
 | carries a gateway extension | Consent needed; re-issue with **Install anyway** |
 | resolves outside the plugin directory | The `extension.manifest` path tried to escape the plugin |
