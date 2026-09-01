@@ -942,10 +942,11 @@
             _sources = refreshed;
 
             var failed = refreshed.Count(s => s.LastError is { Length: > 0 });
+            var noun = refreshed.Count == 1 ? "repository" : "repositories";
             SetStatus(
                 failed == 0
-                    ? $"Refreshed {refreshed.Count} repositories."
-                    : $"Refreshed {refreshed.Count} repositories; {failed} could not be read.",
+                    ? $"Refreshed {refreshed.Count} {noun}."
+                    : $"Refreshed {refreshed.Count} {noun}; {failed} could not be read.",
                 failed == 0 ? "success" : "error");
         }
         catch (Exception ex)

@@ -566,6 +566,34 @@ public sealed class PluginsPageBrowseTests : IDisposable
     }
 
     [Fact]
+    public void Refreshing_a_single_repository_does_not_say_repositories()
+    {
+        SetupSources(Source("alpha", offerings: Offering("alpha-plugin")));
+        _handler.SetupResponse("POST", "/api/plugins/sources/refresh",
+            $"[{Source("alpha", offerings: Offering("alpha-plugin"))}]");
+
+        var cut = RenderPage();
+        cut.Find("[data-testid='plugin-sources-refresh-all']").Click();
+
+        var status = cut.Find("[data-testid='plugins-status']").TextContent;
+        Assert.Contains("1 repository.", status);
+        Assert.DoesNotContain("repositories", status);
+    }
+
+    [Fact]
+    public void Refreshing_several_repositories_uses_the_plural()
+    {
+        SetupSources(Source("alpha", offerings: Offering("alpha-plugin")));
+        _handler.SetupResponse("POST", "/api/plugins/sources/refresh",
+            $"[{Source("alpha", offerings: Offering("alpha-plugin"))},{Source("beta", offerings: Offering("beta-plugin"))}]");
+
+        var cut = RenderPage();
+        cut.Find("[data-testid='plugin-sources-refresh-all']").Click();
+
+        Assert.Contains("2 repositories.", cut.Find("[data-testid='plugins-status']").TextContent);
+    }
+
+    [Fact]
     public void Refreshing_all_reports_how_many_could_not_be_read()
     {
         SetupSources(Source("alpha", offerings: Offering("alpha-plugin")));
