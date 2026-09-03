@@ -17,7 +17,10 @@ Complete reference for BotNexus REST API endpoints, including agents, sessions, 
 11. [Session Management](#session-management)
 12. [System & Status](#system--status)
 13. [Error Handling](#error-handling)
-14. [Webhooks](#webhooks)
+14. [Secrets](#secrets)
+15. [Webhooks](#webhooks)
+16. [Plugins](#plugins)
+17. [Telemetry](#telemetry)
 
 ---
 
@@ -3255,6 +3258,65 @@ For detailed configuration guidance, see [Configuration Guide § Agent Iteration
 
 ---
 
+## Secrets
+
+A write-only REST surface over the [file-backed secrets directory](./features/file-backed-secrets)
+(#3528). Each secret is one file under `~/.botnexus/secrets/`: the file name is the key, the file
+content is the value.
+
+**There is deliberately no read-by-key action.** That is the feature, not a gap. The
+`ConfigSecretMerge` scheme used for schema-declared secrets has to keep a read/restore channel
+open so a redacted `***` can round-trip back to the real value on save; this store has no such
+channel. An architecture test asserts by reflection that no action here returns secret content, so
+a future refactor cannot quietly turn a documented security property into a convenience feature.
+Recovering a forgotten value requires filesystem access on the gateway host.
+
+Keys must match `^[A-Za-z0-9._-]{1,128}$`; `.` and `..` are rejected outright. The charset is an
+allowlist, so `/`, `\` and `:` are not merely filtered but unrepresentable - a directory
+separator, a traversal segment and a drive-qualified path cannot be expressed. A rejected key
+writes nothing, anywhere.
+
+### GET /api/secrets
+
+**Description:** Lists stored secret keys with their timestamps and size, ordered by key. Every
+field is derived from the file name or its filesystem metadata - never from the file's content.
+There is no value, no prefix, no masked form (a mask leaks the length) and no hash (a hash is an
+offline-guessable oracle for a short secret).
+
+**Response:** `200 OK` with an array of secret descriptors.
+
+### PUT /api/secrets/{key}
+
+**Description:** Creates a secret, or overwrites an existing one wholesale. No part of the previous
+value is read, returned, or merged, so the caller must supply the complete new value.
+
+**Request body:** `{ "value": "<complete new value>" }`
+
+**Response:** `200 OK` with the written secret's descriptor.
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | No body was supplied, or the key does not match the permitted charset. |
+
+The key is written to the log; the value never is.
+
+### DELETE /api/secrets/{key}
+
+**Description:** Deletes the secret file. The key stops appearing in the list immediately.
+
+| Status | Condition |
+|--------|-----------|
+| `204 No Content` | Deleted. |
+| `404 Not Found` | No secret with that key exists. |
+| `400 Bad Request` | The key does not match the permitted charset. |
+
+> Secrets are files, not configuration. They do not appear in `GET /api/config`, they are not
+> copied into the config backup set, and they are not part of the config revision digest - so
+> nothing about a secret can leak through the config document. They are protected by owner-only
+> filesystem permissions and are **not** encrypted at rest.
+
+---
+
 ## Webhooks
 
 Webhooks let external systems deliver a message to an agent over signed HTTP. All
@@ -3293,6 +3355,114 @@ invalid or missing signature returns 401 { "error": "Invalid signature." }.
 
 ---
 
+## Plugins
+
+A read and preference-toggle surface over installed plugins, backing the
+[portal plugins page](./features/portal-plugins-page). Installing a plugin remains a CLI
+operation, so there is deliberately **no `POST`** here.
+
+These routes are registered by `PluginsEndpointContributor` in the
+`BotNexus.Extensions.Plugins.Api` extension rather than by a gateway controller, because a
+gateway project may not reference an extension project. They are therefore absent from the
+controller-derived listing in the [REST API reference](api/README.md).
+
+### GET /api/plugins
+
+**Description:** Lists every installed plugin, ordered by name.
+
+**Response:** `200 OK` with an array of plugin rows.
+
+Each row carries the installed record projected together with the two derived states an operator
+needs - whether the plugin is current, and whether its content is intact:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Plugin identifier, and the route parameter that addresses it. |
+| `source` | Marketplace source the content was fetched from. |
+| `reference` | Branch or tag requested at install time, or `null` for the source's default branch. |
+| `resolvedVersion` | Exact revision currently on disk - a commit SHA for a git source. |
+| `manifestVersion` | Version the plugin's own manifest advertises, or `null` when unversioned. |
+| `updatesEnabled` | Whether a scheduled update may replace this plugin's content. |
+| `installedAtUtc` | When the content currently on disk was materialised. |
+| `fileCount` | Number of files the install recorded, so a modified count is interpretable. |
+| `trustState` | `Unverified`, `Verified`, or `Modified` - see below. |
+| `trustDetail` | Why the trust state is what it is, or `null` when there is nothing to explain. |
+| `updateState` | `Unknown`, `Current`, `UpdateAvailable`, `Pinned`, or `ProbeFailed`. |
+| `availableVersion` | Revision the source resolves to, when it was probed. |
+| `updateProbeError` | Why the update probe failed, when `updateState` is `ProbeFailed`. |
+
+**`trustState` is three states rather than a boolean** because "we did not look" and "we looked
+and it is fine" are different answers; collapsing them would present an unverifiable plugin as a
+trusted one. `Unverified` means no content hash catalog exists, `Verified` means every recorded
+file is present and matches its catalog entry, and `Modified` means content diverges from the
+installed record. A `Modified` plugin is **reported rather than repaired** - silently
+re-materialising content would destroy the evidence an operator needs.
+
+**`updateState` defaults to `Unknown` and is deliberately not collapsed into `Current`.** Answering
+the update question costs a network round trip against the source, so the list does not pay it
+unless asked; reporting "current" without having looked would be a claim rather than a finding. A
+`Pinned` plugin is not probed at all, because it would not be replaced by whatever the probe found.
+
+### GET /api/plugins/{name}
+
+**Description:** Returns one installed plugin by name.
+
+**Response:** `200 OK` with a single plugin row.
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | No plugin name was supplied. |
+| `404 Not Found` | No plugin with that name is installed. |
+
+An unknown name is a `404` rather than an empty `200`: the portal distinguishes "not installed"
+from "installed with nothing to show", and collapsing the two would make a typo indistinguishable
+from an empty plugin.
+
+### PUT /api/plugins/{name}/update-preference
+
+**Description:** Sets whether scheduled updates may replace this plugin's content.
+
+**Request body:** `{ "updatesEnabled": true|false }`
+
+**Response:** `200 OK` with the updated plugin row.
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | No plugin name, or no request body, was supplied. |
+| `404 Not Found` | No plugin with that name is installed. |
+
+The change is written back to the installed record rather than held in memory, so it survives a
+restart - a preference that did not persist would leave the portal's toggle asserting something the
+gateway never stored. The write preserves the recorded file set and every other field, because that
+file list is the only description of what the plugin owns.
+
+---
+
+## Telemetry
+
+### GET /api/telemetry/metrics
+
+**Description:** Returns a JSON snapshot of the current values of every instrument on the canonical
+`"BotNexus"` meter scope. This lets operators and the portal read metrics locally **without**
+standing up an external OpenTelemetry collector.
+
+**Response:** `200 OK` with `generatedAt`, `scope`, and an `instruments` array.
+
+When telemetry is disabled and no collector is registered, the endpoint returns an **empty,
+well-formed snapshot** rather than an error, so a UI consumer never has to special-case the
+disabled state.
+
+The instruments covered are the hot-path metrics - `botnexus.turns.total`,
+`botnexus.turn.duration`, `botnexus.tool.calls`, `botnexus.provider.requests`,
+`botnexus.provider.tokens`, `botnexus.cron.runs`, `botnexus.channel.messages`,
+`botnexus.sessions.active`, and `botnexus.host.starts` among them. Extension instruments emitted
+under `botnexus.ext.<id>.*` land on the same scope and appear here too; see
+[Extension Telemetry](extensions/telemetry.md).
+
+Like the plugins routes above, this endpoint is registered through the endpoint-contributor seam
+rather than as a gateway controller.
+
+---
 ## Real-Time Streaming (SignalR Hub)
 
 Real-time agent interaction uses the SignalR hub at `/hub/gateway`. There is no raw WebSocket endpoint -- all streaming goes through ASP.NET Core SignalR.
