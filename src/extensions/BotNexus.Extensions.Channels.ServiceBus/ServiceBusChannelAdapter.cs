@@ -42,7 +42,7 @@ namespace BotNexus.Extensions.Channels.ServiceBus;
 /// <see cref="ServiceBusServiceCollectionExtensions.AddBotNexusServiceBusChannel"/>.
 /// </para>
 /// </remarks>
-public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventChannelAdapter
+public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventChannelAdapter, IAddressableChannelAdapter
 {
     // Metadata keys stored in InboundMessage.Metadata for use by the outbound path.
     internal const string MetaReplyTo = "servicebus.replyTo";
@@ -205,6 +205,19 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
     protected override async Task OnStartAsync(CancellationToken cancellationToken)
     {
         _activeFactory = _injectedFactory ?? CreateDefaultFactory();
+
+        // #3501 AC1: an operator who points the reply queue at the inbound queue has configured an
+        // unbounded self-feeding loop. Startup is the only place this is visible before traffic
+        // arrives, and it is otherwise accepted silently. Warn rather than refuse to start, so a
+        // running deployment is not taken down by a config reload; the send-time guard in
+        // GuardAgainstSelfSend is the actual containment.
+        if (_options.DescribeSelfSendMisconfiguration() is { } misconfiguration)
+        {
+            _logger.LogWarning(
+                "{DisplayName} self-send misconfiguration: {Detail} Replies resolving to the inbound queue will be refused at send time.",
+                DisplayName,
+                misconfiguration);
+        }
 
         var processorOptions = new ServiceBusProcessorOptions
         {
@@ -600,7 +613,10 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
             return;
         }
 
-        await DispatchInboundAsync(inbound, cancellationToken);
+        // #3594: throw rather than return on the not-dispatched path. `ProcessMessageCoreAsync`
+        // settles on the handler returning without throwing, so a silent drop here acknowledged a
+        // message that was never routed and the broker never redelivered it.
+        await DispatchInboundOrThrowAsync(inbound, cancellationToken);
 
         // Recorded only after the dispatch returns. A handler that threw propagates out of this
         // method, is abandoned by the caller, and must still be retried on redelivery.
@@ -654,6 +670,19 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
         try
         {
             await handleAsync(cancellationToken);
+        }
+        catch (ChannelStoppedException ex)
+        {
+            // #3594: the adapter was stopped, so the message never reached the routing pipeline.
+            // Nothing was done, so it must be abandoned rather than completed - completing here is
+            // the silent-loss defect this branch exists to prevent.
+            _logger.LogWarning(
+                "{DisplayName} could not dispatch Service Bus message {MessageId} because the channel is stopped; the message was NOT processed and will be abandoned for redelivery ({Reason})",
+                DisplayName,
+                messageId,
+                ex.Message);
+            await abandonAsync();
+            return MessageProcessingOutcome.AbandonedNotDispatched;
         }
         catch (OperationCanceledException)
         {
@@ -872,7 +901,8 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
             message,
             inheritedConversationId,
             isExactPendingMatch,
-            hasBorrowedContext);
+            hasBorrowedContext,
+            TryDescribeNonExternalDestination);
 
         // 5. #2815 validity: the resolved value must be an external wire destination.
         if (TryDescribeNonExternalDestination(resolved) is { } reason)
@@ -913,15 +943,60 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
         return null;
     }
 
+    /// <summary>
+    /// #3518: reports whether a fan-out to <paramref name="channelAddress"/> could ever be
+    /// addressed on this transport. A gateway-created binding addressed by AGENT ID has no
+    /// external Service Bus destination and no pending inbound request to inherit one from, so
+    /// the deliverer should skip it rather than build an envelope the #2815 guard must refuse.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately conservative: it answers <c>true</c> whenever a pending reply context exists
+    /// for the address, because that context can supply a genuine external conversation. Only an
+    /// address that is itself non-external AND has no pending context is reported undeliverable.
+    /// The outbound guard remains the authority - this never widens it.
+    /// </remarks>
+    public bool CanDeliverTo(ChannelAddress channelAddress, out string? reason)
+    {
+        reason = null;
+
+        if (string.IsNullOrWhiteSpace(channelAddress.Value))
+            return true;
+
+        var nonExternal = TryDescribeNonExternalDestination(channelAddress.Value);
+        if (nonExternal is null)
+            return true;
+
+        // A registered inbound request for this address can still supply an external destination.
+        if (_pendingQueue.TryGetValue(channelAddress.Value, out var queue) && !queue.IsEmpty)
+            return true;
+
+        reason = $"'{channelAddress.Value}' is {nonExternal} and no inbound Service Bus request is "
+            + "pending for it, so no external destination can be resolved";
+        return false;
+    }
+
     private static string ResolveOutboundConversationIdCore(
         OutboundMessage message,
         string? inheritedConversationId,
         bool isExactPendingMatch,
-        bool hasBorrowedContext)
+        bool hasBorrowedContext,
+        Func<string, string?> describeNonExternal)
     {
-        // 1. The producing session's own destination always wins.
+        // 1. The producing session's own destination wins - PROVIDED it is a destination at all.
+        //
+        //    #3518: the gateway fan-out (OutboundResponseDeliverer, since #3418) stamps the
+        //    INTERNAL 'c_<guid>' conversation id here. That value is a routing key inside the
+        //    gateway, never an external wire address, so adopting it at step 1 short-circuits
+        //    the remaining precedence rules and hands step 5 a value it can only refuse -
+        //    31 refused envelopes in a 24h window, with the genuine external address sitting
+        //    unused in the pending reply context all along. Skipping a non-external own-id lets
+        //    rules 2-4 supply the real address instead. This is strictly NARROWER than the old
+        //    behaviour: nothing that used to be emitted stops being emitted, and the #2815
+        //    validity clause is untouched, so an envelope with no external address anywhere is
+        //    still refused rather than delivered (see TryDescribeNonExternalDestination).
         if (message.ConversationId is { Length: > 0 } ownConversationId
-            && !string.IsNullOrWhiteSpace(ownConversationId))
+            && !string.IsNullOrWhiteSpace(ownConversationId)
+            && describeNonExternal(ownConversationId) is null)
         {
             return ownConversationId;
         }
@@ -967,12 +1042,48 @@ public sealed class ServiceBusChannelAdapter : ChannelAdapterBase, IStreamEventC
         PendingReplyContext? pendingCtx)
     {
         if (GetMetadataString(metadata, MetaReplyTo) is { Length: > 0 } metaQueue)
-            return metaQueue;
+            return GuardAgainstSelfSend(metaQueue, "outbound metadata 'servicebus.replyTo'");
 
         if (pendingCtx?.ReplyTo is { Length: > 0 } pendingQueue)
-            return pendingQueue;
+            return GuardAgainstSelfSend(pendingQueue, "the pending inbound context (envelope 'replyTo' or application property 'replyTo')");
 
-        return _options.DefaultReplyQueueName;
+        return GuardAgainstSelfSend(_options.DefaultReplyQueueName, "the configured default reply queue");
+    }
+
+    /// <summary>
+    /// #3501 AC2/AC3: refuses to publish into the queue this adapter's own processor consumes from.
+    /// </summary>
+    /// <remarks>
+    /// The guard sits inside <see cref="ResolveReplyQueue"/> rather than at any single call site so
+    /// that ALL THREE resolution branches are covered, including the per-message value an untrusted
+    /// producer can inject via the envelope <c>replyTo</c> field or a Service Bus
+    /// <c>applicationProperties["replyTo"]</c> entry — that injected value overrides the configured
+    /// default, so guarding only the default leaves the hostile path open. Placing it here also
+    /// covers the streaming publisher, which resolves through the same helper.
+    /// <para>
+    /// Failing loudly is deliberate. Silently rewriting the destination would deliver the reply
+    /// somewhere the producer did not ask for, and silently dropping it would hide a live
+    /// misconfiguration. Throwing surfaces the defect to the caller's existing retry/abandon path
+    /// with both the queue and the resolution source named, so an operator can tell a misconfigured
+    /// default apart from an injected per-message value.
+    /// </para>
+    /// </remarks>
+    private string GuardAgainstSelfSend(string replyQueue, string source)
+    {
+        if (!_options.IsInboundQueue(replyQueue))
+            return replyQueue;
+
+        _logger.LogError(
+            "{DisplayName} refused to publish a reply to queue '{ReplyQueue}' resolved from {Source}: "
+            + "it is this adapter's own inbound queue, so the reply would be re-consumed as new inbound work",
+            DisplayName,
+            replyQueue,
+            source);
+
+        throw new InvalidOperationException(
+            $"Service Bus reply refused: the reply queue '{replyQueue}', resolved from {source}, is this "
+            + $"adapter's own inbound queue '{_options.InboundQueueName}'. Publishing there would loop the "
+            + "reply back in as new inbound work until maxDeliveryCount dead-letters it.");
     }
 
     private static (string? CorrelationId, string? ConversationId) ResolveReplyContext(

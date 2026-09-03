@@ -153,18 +153,19 @@ BotNexus follows a **defaults → overrides** pattern:
 
 1. **Defaults** — Built-in constants in code (e.g., `Model = "gpt-4o"`)
 2. **Configuration file** — `~/.botnexus/config.json` (or `${BOTNEXUS_HOME}/config.json` when set)
-3. **Environment variables** — Override any setting (see [Environment Variable Overrides](#environment-variable-overrides))
+3. **Environment variables** — Supply a setting whose key is absent from `config.json` (see [Environment Variable Overrides](#environment-variable-overrides))
 4. **Named agent overrides** — Per-agent customization in `Agents.Named` dict
 
 **Example:**
 ```text
 Global Model (config.json) = "gpt-4o"
   ↓
+Environment variable (agents__named__planner__model) = "claude-3-5-sonnet"
+  — ignored, because the key is also set in config.json
+  ↓
 Agent "planner" override (Agents.Named.planner.Model) = "gpt-4-turbo"
   ↓
-Environment variable (BotNexus__Agents__Named__planner__Model) = "claude-3-5-sonnet"
-  ↓
-**Final result:** Claude 3.5 Sonnet for the "planner" agent
+**Final result:** GPT-4 Turbo for the "planner" agent
 ```
 
 ---
@@ -276,6 +277,41 @@ if you see provider `429`s or box contention around synchronised schedule bounda
 This aggregate cap is independent of the scheduler's per-job lock, which separately prevents two runs of
 the *same* job from overlapping. Raising `MaxConcurrentJobs` never allows a single job to run twice
 concurrently.
+
+---
+
+### Cron: webhook blocked hosts
+
+A cron job's `webhookUrl` is a gateway egress target, so it is validated against the shared SSRF
+policy before the job is stored. That policy blocks *address classes* structurally - loopback,
+RFC-1918, link-local/IMDS and cloud metadata - but it cannot classify an internal service that sits
+on a **publicly-resolving hostname**. `webhookBlockedHosts` is how an operator blocks those by name.
+
+```json
+{
+  "cron": {
+    "webhookBlockedHosts": [
+      "internal-api.example.com",
+      "admin.example.com"
+    ]
+  }
+}
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cron.webhookBlockedHosts` | string[] | `[]` | Hostnames refused as cron webhook targets, in addition to the always-blocked address ranges. Matched **exactly and case-insensitively** against the URL host; no wildcards, no suffix matching. |
+
+- **Enforced at authoring time, on both surfaces.** A blocked host is rejected when a job is created
+  or updated through the API (HTTP 400), and a config-declared job naming one is skipped with a
+  warning rather than materialised. It is not a delivery-time check - the job never reaches the store.
+- **Empty means unchanged.** With no list configured the behaviour is byte-for-byte what it was
+  before: address-class rejection still fires, and a valid URL still round-trips unreshaped.
+- **Exact match only.** `internal-api.example.com` does not block `sub.internal-api.example.com`.
+  List each host you mean to block.
+
+> Before #3779 this list existed for `web_fetch` and the browser tools but was silently dropped on
+> the cron webhook path, so a configured block was accepted and never enforced there.
 
 ---
 
@@ -441,7 +477,7 @@ world-level defaults that are field-merged into every agent; every other key def
 
 #### `agents.defaults` properties
 
-Backed by `AgentDefaultsConfig`. Only these four keys exist - a default that is not listed here is not
+Backed by `AgentDefaultsConfig`. Only these five keys exist - a default that is not listed here is not
 merged, because there is no property to merge it into.
 
 | Property | Type | Default | Description |
@@ -544,7 +580,8 @@ overrides the corresponding `agents.defaults` value. The `Inherits` column state
 | `provider` | string | `null` | `ScalarOverride` | Provider name (for example `copilot`) |
 | `displayName` | string | `null` | `LocalOnly` | Human-readable display name shown for this agent in clients |
 | `emoji` | string | `null` | `LocalOnly` | Optional emoji shown alongside the agent name |
-| `description` | string | `null` | `LocalOnly` | Description of the agent's purpose |
+| `description` | string | `null` | `LocalOnly` | Description of the agent's purpose. Human-owned - written once at registration and never rewritten by the agent |
+| `summary` | string | `null` | `LocalOnly` | Agent-maintained account of what the agent is *currently* doing. Written by the agent itself through `update_agent`, and only for its own id - a cross-agent summary write is refused with a policy denial. Length is bounded by `gateway.agentSummary.maxLength` (default 500); a longer summary is refused rather than truncated. When unset the field is omitted from every projection entirely |
 | `model` | string | `null` | `ScalarOverride` | Model identifier (for example `gpt-4.1`) |
 | `allowedModels` | array | `null` | `ReplaceAsUnit` | Model ids this agent may use. Null means unrestricted within the provider allowlist |
 | `systemPromptFiles` | array | `null` | `ReplaceAsUnit` | Ordered list of files to load as the system prompt. Empty means the default order |
@@ -896,7 +933,9 @@ The Agent 365 adapter bridges the Microsoft 365 Agents SDK `Activity` protocol t
 tier). It binds directly from the `channels:agent365` section (it does **not** use the generic
 `Channels.Instances` shape). The real option names come from `Agent365GatewayOptions`. See
 [docs/extensions/agent365.md](extensions/agent365.md) for the full surface and the Microsoft.Agents.*
-package / Microsoft.Extensions.* pin design note.
+package / Microsoft.Extensions.* pin design note, and
+[docs/features/agent365-onboarding.md](features/agent365-onboarding.md) for tenant prerequisites,
+licensing, and blueprint provisioning.
 
 ```json
 {
@@ -987,6 +1026,7 @@ Gateway HTTP server settings.
 | `Port` | int | 5005 | Listen port for gateway server |
 | `ApiKey` | string | null | Optional API key for authentication (recommended for production) |
 | `DefaultAgent` | string | null | Default agent name if message has no agent metadata |
+| `DefaultTimezone` | string | null | Server-wide default IANA timezone ID (for example `America/Los_Angeles`) used when an agent has no `soul.timezone` of its own. It is the third rung of the injected-datetime chain — agent `dateTimeInjection.timezone`, then the world-level `dateTimeInjection.timezone`, then this, then UTC — and it is also what seeds a new agent's timezone when one is created through the `create_agent` tool. A blank or unrecognised zone id falls back to UTC rather than failing the turn. |
 | `BroadcastWhenAgentUnspecified` | bool | false | If true, route to all agents when agent not specified |
 | `Heartbeat.Enabled` | bool | true | Enable heartbeat/keepalive messages |
 | `Heartbeat.IntervalSeconds` | int | 1800 | Heartbeat interval (30 minutes) |
@@ -996,7 +1036,7 @@ Gateway HTTP server settings.
 | `SessionStore.FilePath` | string | null | Directory used by the `File` store. **Required** when `Type` is `File`; startup fails without it. A relative path resolves against the writable data directory (`BOTNEXUS_DATA_DIR` when set), so the store still lands on a writable volume when the config directory is mounted read-only. |
 | `SessionStore.ConnectionString` | string | null | SQLite connection string used by the `Sqlite` store. When unset, defaults to `sessions.sqlite` in the writable data directory. Treated as a secret: redacted in config reads and in the portal. |
 | `TranscriptExport.RedactSecrets` | bool | false | When true, exported session transcripts are passed through the transcript secret redactor so recognised credential shapes are replaced with a placeholder before the transcript leaves the process. Off by default so export output stays byte-identical to historical behaviour unless an operator opts in. Render-time only — never changes what is persisted to the session store. |
-| `RateLimit.RequestsPerMinute` | int | 60 | Maximum requests per client per window |
+| `RateLimit.RequestsPerMinute` | int | 300 | Maximum requests per client per window |
 | `RateLimit.WindowSeconds` | int | 60 | Window size in seconds for request counting |
 | `RateLimit.MaxEntries` | int | 10000 | Maximum distinct client windows tracked in memory. Bounds the per-client dictionary so a flood of distinct client keys cannot exhaust gateway memory. When full, stale entries are pruned then a non-actively-limiting window is evicted; if none can be freed the request is rejected with 429. Actively rate-limited windows are never evicted (a flood cannot clear an attacker's own throttle). A non-positive value disables the cap. |
 | `SignalR.MaximumReceiveMessageSizeBytes` | long | 10485760 (10 MB) | Maximum size of a single inbound SignalR hub frame. Non-positive values fall back to the default. |
@@ -1004,7 +1044,34 @@ Gateway HTTP server settings.
 | `SignalR.StreamBufferCapacity` | int | 10 | Maximum items buffered for client upload streams before processing blocks. Non-positive values fall back to the default. |
 | `SecretRedaction.Patterns` | string[] | _(none)_ | Additional operator-supplied .NET regular expressions whose matches are replaced with `[REDACTED]`. Applied **in addition to** the built-in credential patterns — never instead of them. Validated at startup (issue #2727). |
 | `SecretRedaction.MatchTimeoutMilliseconds` | int | 100 | Per-pattern match timeout for operator patterns, so a catastrophic-backtracking expression cannot hang the logging path. Must be greater than zero. |
+| `MaxCallChainDepth` | int | 10 | Maximum allowed depth for cross-agent and sub-agent call chains. A chain that would exceed this depth is refused rather than extended, so a delegation cycle cannot recurse without bound. |
+| `CrossAgentTimeoutSeconds` | int | 120 | Maximum duration, in seconds, for a cross-agent prompt call before it times out. |
+| `AgentConversationMaxDepth` | int | 3 | Maximum depth for `agent_converse` call chains. A value of zero or less falls back to the built-in default rather than disabling the guard. |
+| `AutoReplayInterruptedTurns` | bool | false | When true, the gateway automatically re-dispatches the last user message from interactive sessions interrupted by an unclean restart. Off by default until the replay path is confirmed stable; when off, the interrupted session gets a notification instead of a replay. |
+| `MaxAutoReplayAttempts` | int | 2 | Maximum automatic replay attempts for a single interrupted session before falling back to the notification-only path. The counter lives in session metadata, so a message that always crashes the agent cannot produce an infinite replay loop. |
 | `EnableProviderRequestLogging` | bool | false | When true, every provider HTTP request and response is logged at **Debug** level for observability (issue #453). Auth headers (`x-api-key`, `Authorization`, `Proxy-Authorization`) are always redacted by name, and request/response bodies are additionally passed through the shared `SecretRedactor` so leaked keys/tokens are scrubbed. Non-streamed responses also log a best-effort token `usage` summary and elapsed ms. Streaming (`text/event-stream`) responses log status + headers + duration only — the body is never buffered, so streaming is never broken. Off by default; enable only for debugging unexpected provider responses (never at Info in production). |
+
+
+#### Agent summary bound
+
+`gateway.agentSummary` bounds the agent-maintained `summary` field (see the per-agent
+`summary` property above). The summary is projected into the agent listing that every peer reads
+before delegating, so an unbounded self-written summary would inflate every other agent's system
+prompt. The bound therefore lives on the write seam - one place - rather than at each projection.
+
+```json
+{
+  "gateway": {
+    "agentSummary": {
+      "maxLength": 500
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `maxLength` | int | 500 | Maximum length, in characters, of an agent-written summary. A longer summary is **refused, not truncated** - a silently cut summary reads as a complete statement and the agent gets no signal that its words were altered. |
 
 
 #### Trusted per-parent sub-agent budgets
@@ -1052,6 +1119,123 @@ or `parent-override`) so operators can audit which authorization tier applied.
 | `subAgents.maxConcurrentPerSession` | int | 5 | Global running-child limit per parent session. |
 | `subAgents.parentOverrides.<parentAgentId>` | object | none | Trusted partial override of the five budget fields above. |
 | `subAgents.workspaceRoot` | string | ` ` (empty) | Temporary root directory under which each sub-agent's isolated workspace is created and later reclaimed. Empty preserves the historical default of `<OS temp>/botnexus-subagent-workspaces`. Supports `~` and environment-variable expansion and is normalized to an absolute path. The gateway (`FileAgentWorkspaceManager`) and the CLI (`botnexus subagent workspace list|prune` plus `doctor`) resolve this through the same shared resolver, so they can never target different directories. |
+
+#### Session warmup (`sessionWarmup`)
+
+`gateway.sessionWarmup` controls session pre-warming and multi-session subscription. Warming a
+recently-active session ahead of the next inbound message removes the first-turn latency of
+rehydrating its transcript, at the cost of holding those sessions resident.
+
+```json
+{
+  "gateway": {
+    "sessionWarmup": {
+      "enabled": true,
+      "maxSessionsPerAgent": 10,
+      "retentionWindowHours": 24,
+      "collapseChannelContinuations": true
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether session pre-warming and multi-session subscription is enabled. |
+| `maxSessionsPerAgent` | int | 10 | Maximum number of sessions pre-warmed per agent. This is the bound on resident sessions, so it is the knob to lower on a memory-constrained host. |
+| `retentionWindowHours` | int | 24 | Retention window, in hours, within which a recently-active session is eligible for pre-warming. A session last touched outside this window is not warmed. |
+| `collapseChannelContinuations` | bool | `true` | Whether continuation sessions from the same channel are collapsed into one during pre-warming, so a long-running channel conversation does not consume several of the per-agent slots. |
+
+#### Delay tool (`delayTool`)
+
+`gateway.delayTool` bounds the built-in `delay` tool. The ceiling is a clamp, not a rejection - a
+longer request is served at the ceiling rather than failing the turn.
+
+```json
+{
+  "gateway": {
+    "delayTool": {
+      "maxDelaySeconds": 1800,
+      "defaultDelaySeconds": 60
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `maxDelaySeconds` | int | 1800 (30 min) | Maximum delay, in seconds, an agent may request. Longer requests are clamped to this ceiling. |
+| `defaultDelaySeconds` | int | 60 | Delay applied when a request omits a duration. |
+
+#### File watcher tool (`fileWatcherTool`)
+
+`gateway.fileWatcherTool` bounds the built-in `watch_file` tool.
+
+```json
+{
+  "gateway": {
+    "fileWatcherTool": {
+      "maxTimeoutSeconds": 1800,
+      "defaultTimeoutSeconds": 300,
+      "debounceMilliseconds": 500
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `maxTimeoutSeconds` | int | 1800 (30 min) | Maximum time, in seconds, an agent may wait on a file-watch request. Longer requests are clamped to this ceiling. |
+| `defaultTimeoutSeconds` | int | 300 (5 min) | Timeout applied when a request omits one. |
+| `debounceMilliseconds` | int | 500 | Debounce interval, in milliseconds, coalescing rapid filesystem events into a single wake. Some editors fire several events per save, so without a debounce one save wakes the agent repeatedly. |
+
+#### Conversation auto-archive (`conversations`)
+
+`gateway.conversations` is the **world-level** conversation retention policy, bound from
+`gateway:conversations` and applied by a background service. Per-agent overrides live on the agent's
+own `conversationRetention` block; this is the default those overrides inherit.
+
+```json
+{
+  "gateway": {
+    "conversations": {
+      "autoArchiveEnabled": false,
+      "autoArchiveAfterDays": 30,
+      "checkInterval": "01:00:00"
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `autoArchiveEnabled` | bool | `false` | Whether auto-archive runs at the world level. Opt-in: archiving a conversation is a visible change to a user's history, so it is never turned on implicitly. |
+| `autoArchiveAfterDays` | int | 30 | Days of inactivity after which a conversation is auto-archived. Zero or negative is treated as disabled, so the interval alone cannot cause archiving. |
+| `checkInterval` | TimeSpan | `01:00:00` | How often the retention service scans for conversations to archive. |
+
+#### Agent Exchange (`agentExchange`)
+
+Governs agent-to-agent conversations started with the `agent_converse` tool. Bound from `gateway:agentExchange`.
+
+```json
+{
+  "gateway": {
+    "agentExchange": {
+      "accessPolicy": "open",
+      "maxTurnsCeiling": 30,
+      "maxInboundQueueDepth": 8
+    }
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AgentExchange.AccessPolicy` | string | `open` | Which agents may initiate conversations with others. `open` lets any registered agent converse with any other; `whitelist` requires the initiator to have the target in its `SubAgentIds` list or a matching `SubAgentRoles` grant. Compared case-insensitively. |
+| `AgentExchange.MaxTurnsCeiling` | int | 30 | Upper bound applied to the `maxTurns` argument of a single `agent_converse` call, regardless of the value the agent requests. This is what stops one tool call from driving an unbounded number of provider round-trips — the conversation budget tracker caps exchanges per agent pair, not turns within an exchange. Values below 1 are treated as 1, so a misconfiguration can never disable exchanges entirely. |
+| `AgentExchange.MaxInboundQueueDepth` | int | 8 | How many inbound exchanges may **wait** for one agent's single execution slot before further callers are refused with explicit backpressure. An in-process agent runs one turn at a time; without a bound, a busy agent accumulates waiters until each expires on its own caller-side deadline, which is precisely the silent message loss this setting makes visible. The in-flight exchange itself does not count toward the bound — only genuinely blocked callers do. Values below 1 are treated as 1. |
+
+See [Agent Exchange](features/agent-exchange.md) for the tool surface and the budget system.
 
 #### SignalR Hub Limits
 
@@ -1868,7 +2052,9 @@ Configuration for the CodingAgent component (used when running BotNexus as a cod
 }
 ```
 
-**Note:** The `DefaultShellTimeoutSeconds` controls the CodingAgent's `bash` tool timeout. This is separate from `Tools.Exec.Timeout` which controls the Gateway's built-in shell tool. Set to `null` to allow unlimited execution time (process runs until the agent cancels it).
+**Note:** `DefaultShellTimeoutSeconds` belongs to the CodingAgent **sample** (`examples/BotNexus.CodingAgent/CodingAgentConfig.cs`) and controls only the shell tool that sample constructs. Set it to `null` to allow unlimited execution time (the process runs until the agent cancels it).
+
+It has no counterpart on the gateway. The gateway's built-in `exec` tool takes **no configuration key at all**: its timeout is the per-call `timeoutMs` argument, defaulting to `120000` ms (2 minutes), hardcoded at `src/extensions/BotNexus.Extensions.ExecTool/ExecTool.cs`. To change it, pass `timeoutMs` on the call - there is no `config.json` setting that raises the default.
 
 ### Telemetry: TelemetryConfig
 
@@ -2131,7 +2317,7 @@ botnexus config schema
 # Output: docs\botnexus-config.schema.json
 ```
 
-**Validating at the gateway:** Use the `POST /api/config/validate` endpoint (or `botnexus validate --remote`) to validate against the running gateway.
+**Validating at the gateway:** Use the `GET /api/config/validate` endpoint (or `botnexus validate --remote`) to validate against the running gateway.
 
 ### Error severity: survivability, not scope
 
@@ -2373,7 +2559,7 @@ Options:
   ```
 - **Environment variables** (production):
   ```bash
-  export BotNexus__providers__openai__apiKey=sk-...
+  export providers__openai__apiKey=sk-...
   ```
 - **Secret management** (Azure Key Vault, HashiCorp Vault, etc.)
 

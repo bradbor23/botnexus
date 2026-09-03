@@ -25,16 +25,22 @@ BotNexus uses a layered configuration model:
 1. **Code defaults** — Built-in constants in the codebase
 2. **`appsettings.json`** — Project-level defaults (in `src/gateway/BotNexus.Gateway.Api/`)
 3. **`~/.botnexus/config.json`** — User configuration (primary)
-4. **Environment variables** — Override any setting via `BotNexus__Section__Key` format
+4. **Environment variables** - Override a setting whose key is absent from `config.json`, using the
+   configuration path with `__` between levels and **no prefix**
 
 **Environment Variable Override Example:**
 ```bash
 # Override the listen URL
-export BotNexus__Gateway__ListenUrl="http://localhost:8080"
+export gateway__listenUrl="http://localhost:8080"
 
 # Override an agent's model
-export BotNexus__Agents__assistant__Model="claude-opus-4-6"
+export agents__assistant__model="claude-opus-4.6"
 ```
+
+> `config.json` is added to the pipeline *after* the environment source, so where a key is set in
+> both, the file wins. See
+> [Environment Variable Overrides](../configuration.md#environment-variable-overrides) for the
+> canonical rules.
 
 **Custom Home Directory:**
 ```bash
@@ -78,14 +84,14 @@ Gateway-level settings control the HTTP server, routing, and runtime behavior.
       "connectionString": "Data Source=~/.botnexus/sessions.sqlite"
     },
     "compaction": {
-      "maxMessagesBeforeCompaction": 100,
-      "retainLastMessages": 20
+      "preservedTurns": 3,
+      "tokenThresholdRatio": 0.6
     },
     "cors": {
       "allowedOrigins": ["http://localhost:3000", "https://app.example.com"]
     },
     "rateLimit": {
-      "requestsPerMinute": 60,
+      "requestsPerMinute": 300,
       "windowSeconds": 60
     },
     "logLevel": "Information",
@@ -108,19 +114,38 @@ Gateway-level settings control the HTTP server, routing, and runtime behavior.
 | `listenUrl` | string | `http://localhost:5005` | HTTP listen URL for REST API and WebUI. Loopback by default (#2798) — see [Remote and mesh access](#remote-and-mesh-access) before widening it. |
 | `defaultAgentId` | string | `null` | Agent to route to when none specified |
 | `agentsDirectory` | string | `~/.botnexus/agents` | Directory containing agent descriptor JSON files |
+| `defaultTimezone` | string | `null` | Server-wide default IANA timezone ID (e.g. `America/Los_Angeles`) used when an agent has no `soul.timezone` of its own. Blank or invalid falls back to UTC |
 | `sessionStore.type` | string | _(inferred)_ | Session store backend: `InMemory`, `File`, or `Sqlite`. When unset it resolves to `File` if `sessionsDirectory` is set, otherwise `Sqlite`. `InMemory` loses all data on restart. |
 | `sessionStore.filePath` | string | `null` | Directory for the `File` store. Required when `type` is `File`; a relative path resolves against the writable data directory. |
 | `sessionStore.connectionString` | string | `null` | SQLite connection string (when type=Sqlite). Defaults to `sessions.sqlite` in the writable data directory. |
-| `compaction.maxMessagesBeforeCompaction` | int | `100` | Trigger compaction after this many messages |
-| `compaction.retainLastMessages` | int | `20` | Keep this many recent messages after compaction |
+| `compaction.preservedTurns` | int | `3` | Most recent user turns preserved verbatim, never summarised |
+| `compaction.tokenThresholdRatio` | double | `0.6` | Fraction of the context window at which the token-count trigger fires |
+| `compaction.contextWindowTokens` | int | `128000` | Fallback context window (tokens) when no scoped window resolves |
 | `auxiliary.titling.enabled` | bool | `true` | Enable conversation auto-titling after the first exchange; false keeps the default title until renamed |
 | `auxiliary.titling.model` | string | `gpt-5.6-luna` | Auxiliary model ID for title generation; defaults to a fast non-reasoning model. Null uses the first registered model (unsafe with a reasoning model — it yields an empty title) |
 | `auxiliary.titling.timeoutSeconds` | int | `30` | Per-call titling timeout; non-positive falls back to 30 |
 | `cors.allowedOrigins` | array | `[]` | Allowed CORS origins for browser clients |
-| `rateLimit.requestsPerMinute` | int | `60` | Max requests per client per minute |
+| `rateLimit.requestsPerMinute` | int | `300` | Max requests per client per minute |
 | `rateLimit.windowSeconds` | int | `60` | Rate limit window size in seconds |
 | `rateLimit.maxEntries` | int | `10000` | Max distinct client windows tracked in memory; bounds the per-client dictionary so a flood of distinct clients cannot exhaust gateway memory. Actively rate-limited windows are never evicted. Non-positive disables the cap. |
 | `logLevel` | string | `Information` | Logging level: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical` |
+| `maxCallChainDepth` | int | `10` | Max depth for cross-agent and sub-agent call chains; a deeper chain is refused, not extended |
+| `crossAgentTimeoutSeconds` | int | `120` | Timeout for a cross-agent prompt call |
+| `agentConversationMaxDepth` | int | `3` | Max depth for `agent_converse` call chains; zero or less falls back to the default rather than disabling the guard |
+| `autoReplayInterruptedTurns` | bool | `false` | Re-dispatch the last user message from interactive sessions interrupted by an unclean restart. Off by default; when off the session is notified instead |
+| `maxAutoReplayAttempts` | int | `2` | Replay attempts per interrupted session before falling back to notification-only. Counted in session metadata so a crashing message cannot loop |
+| `sessionWarmup.enabled` | bool | `true` | Enable session pre-warming and multi-session subscription |
+| `sessionWarmup.maxSessionsPerAgent` | int | `10` | Max sessions pre-warmed per agent; the bound on resident sessions |
+| `sessionWarmup.retentionWindowHours` | int | `24` | Window within which a recently-active session is eligible for pre-warming |
+| `sessionWarmup.collapseChannelContinuations` | bool | `true` | Collapse continuation sessions from the same channel into one during warmup |
+| `delayTool.maxDelaySeconds` | int | `1800` | Max delay an agent may request; longer requests are clamped, not rejected |
+| `delayTool.defaultDelaySeconds` | int | `60` | Delay used when a request omits a duration |
+| `fileWatcherTool.maxTimeoutSeconds` | int | `1800` | Max file-watch wait; longer requests are clamped |
+| `fileWatcherTool.defaultTimeoutSeconds` | int | `300` | File-watch timeout used when a request omits one |
+| `fileWatcherTool.debounceMilliseconds` | int | `500` | Debounce coalescing rapid filesystem events into a single wake |
+| `conversations.autoArchiveEnabled` | bool | `false` | World-level conversation auto-archive. Opt-in; per-agent `conversationRetention` inherits this default |
+| `conversations.autoArchiveAfterDays` | int | `30` | Days of inactivity before auto-archive. Zero or negative disables archiving |
+| `conversations.checkInterval` | TimeSpan | `01:00:00` | How often the retention service scans for conversations to archive |
 | `extensions.path` | string | `~/.botnexus/extensions` | Root directory for extension assemblies |
 | `extensions.enabled` | bool | `true` | Enable/disable dynamic extension loading |
 | `world.id` | string | `local-gateway` | Unique identifier for this Gateway instance |
@@ -146,6 +171,23 @@ Gateway-level settings control the HTTP server, routing, and runtime behavior.
 | `crossWorld.inbound.enabled` | bool | `true` | Whether the inbound cross-world relay endpoint accepts traffic |
 | `crossWorld.inbound.allowedWorlds` | array | `[]` | Source world IDs permitted to relay in. Empty allows **no** source world — it is an allow-list |
 | `crossWorld.inbound.apiKeys` | map | `{}` | Shared keys keyed by source world ID. Secret — redacted by the config API |
+| `toolResultPersistence.enabled` | bool | `true` | Enables the write-time cap on tool results stored in session history |
+| `toolResultPersistence.maxBytes` | int | `16384` (16 KiB) | Max UTF-8 bytes of a single **persisted** tool result; larger results get a `[truncated N bytes]` marker at write time. `0` or less disables truncation. Distinct from `toolOutputBudget`, which bounds what reaches the model in the first place |
+| `claimAudit.enabled` | bool | `true` | Whether the post-turn claim auditor runs |
+| `claimAudit.mode` | string | `warn` | Reaction to an unbacked claim: `warn` emits an observable signal only; `block` also marks the turn as one that should be blocked. Unrecognised values fall back to `warn` |
+| `memoryEmbeddings.backend` | string | `none` | Embedding backend: `none` (lexical-only), `local` (on-box inference) or `provider`. An unrecognised token degrades to `none` rather than failing startup |
+| `memoryEmbeddings.enabled` | bool | `false` | Legacy toggle consulted only when `backend` is unset. Enabling embedding sends memory content to the configured endpoint |
+| `memoryEmbeddings.provider` | string | `null` | Provider key whose embeddings endpoint supplies vectors (e.g. `ollama`, `openai`) |
+| `memoryEmbeddings.model` | string | `null` | Embedding model identifier as the endpoint expects it |
+| `memoryEmbeddings.dimensions` | int | `0` | Vector width the model emits. Declared, not discovered — a response of a different width is discarded and that entry falls back to lexical-only |
+| `memoryEmbeddings.baseUrl` | string | `null` | Base URL of the OpenAI-compatible endpoint; `/embeddings` is appended |
+| `memoryEmbeddings.apiKey` | string | `null` | Bearer token for the embeddings endpoint. Optional for a local endpoint. Secret — stored and shown masked |
+| `dateTimeInjection.enabled` | bool | `false` | Prepend the current datetime to every user message so the agent has reliable temporal context |
+| `dateTimeInjection.timezone` | string | `null` | IANA timezone used to format the injected datetime. Falls back to the gateway default timezone, then UTC |
+| `dateTimeInjection.format` | string | `iso8601` | Output format. Only `iso8601` is supported today |
+| `agentExchange.accessPolicy` | string | `open` | Which agents may start an `agent_converse` exchange: `open` (any registered agent) or `whitelist` (initiator must have the target in `subAgentIds` or a matching `subAgentRoles` grant) |
+| `agentExchange.maxTurnsCeiling` | int | `30` | Upper bound on the `maxTurns` of a single `agent_converse` call, whatever the agent requests. Values below 1 are treated as 1 |
+| `agentExchange.maxInboundQueueDepth` | int | `8` | How many exchanges may queue for one busy agent before further callers are refused with backpressure. The in-flight exchange does not count. Values below 1 are treated as 1 |
 
 ### Remote and mesh access
 
@@ -177,11 +219,16 @@ leaves the decision to you.
 
 ## Agent Configuration
 
-Agents are defined in the `agents` section, keyed by agent ID.
+Agents are defined in the `agents` section, keyed by agent ID. One key is reserved: `defaults` holds
+world-level values that are merged into every agent, so it is not itself an agent.
 
 ```json
 {
   "agents": {
+    "defaults": {
+      "toolTimeoutSeconds": 300,
+      "toolIds": ["read_file", "write_file"]
+    },
     "assistant": {
       "displayName": "Assistant",
       "description": "General-purpose AI assistant",
@@ -293,6 +340,21 @@ The value supports `~` (home directory) and environment-variable expansion and i
 | `fileAccess.allowedReadPaths` | array | `[]` | Paths the agent can read (exact or glob). Workspace always readable |
 | `fileAccess.allowedWritePaths` | array | `[]` | Paths the agent can write (exact or glob). Workspace always writable |
 | `fileAccess.deniedPaths` | array | `[]` | Paths explicitly denied even if otherwise allowed |
+
+### `agents.defaults`
+
+The reserved `defaults` key holds world-level values merged into every agent. Only these five keys
+exist - a default that is not listed here is not merged, because there is no property to merge it
+into. See the [comprehensive configuration reference](../configuration#agents-defaults-properties)
+for the per-property inheritance policies.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `toolIds` | array | `null` | Default tool ids for agents that do not set their own `toolIds` |
+| `toolTimeoutSeconds` | int | `300` | Default per-tool timeout in seconds |
+| `memory` | object | `null` | Default memory configuration inherited by agents |
+| `heartbeat` | object | `null` | Default heartbeat configuration inherited by agents |
+| `fileAccess` | object | `null` | Default file access policy inherited by agents |
 
 ### Shell Execution
 
@@ -725,7 +787,8 @@ Bridges the Microsoft 365 Agents SDK `Activity` protocol to BotNexus (Register t
 round-trip only). Inbound activities arrive on `inboundRoute` (default `/agent365/messages`); replies
 are sent through the SDK connector authenticated with the Entra app client credentials. BotNexus
 remains the response engine. See the extension page `docs/extensions/agent365.md` for the full config
-surface.
+surface, and [docs/features/agent365-onboarding.md](../features/agent365-onboarding.md) for tenant
+prerequisites, licensing, and blueprint provisioning.
 
 **TUI (Terminal UI):**
 ```json
@@ -889,8 +952,8 @@ Sessions are persisted to a SQLite database by default.
       "connectionString": "Data Source=~/.botnexus/sessions.sqlite"
     },
     "compaction": {
-      "maxMessagesBeforeCompaction": 100,
-      "retainLastMessages": 20
+      "preservedTurns": 3,
+      "tokenThresholdRatio": 0.6
     }
   }
 }
@@ -940,8 +1003,12 @@ The gateway warns after prolonged inactivity and verifies the runtime scheduler 
    ```
 
 **Compaction Settings:**
-- `maxMessagesBeforeCompaction`: Trigger compaction after this many messages
-- `retainLastMessages`: Keep this many recent messages after compaction
+- `preservedTurns`: Most recent user turns preserved verbatim, never summarised
+- `tokenThresholdRatio`: Fraction of the context window at which compaction triggers
+- `contextWindowTokens`: Fallback context window size in tokens
+
+See [Configuration reference](../configuration.md#session-compaction) for the full set, including the
+additive per-entry byte trigger `largestEntryBytesThreshold`.
 
 ### Session Cleanup
 
@@ -1031,7 +1098,7 @@ A background cleanup service expires and prunes old sessions.
 {
   "gateway": {
     "rateLimit": {
-      "requestsPerMinute": 60,
+      "requestsPerMinute": 300,
       "windowSeconds": 60
     }
   }
@@ -1093,8 +1160,8 @@ A production-ready configuration with multiple agents, providers, and extensions
       "connectionString": "Data Source=~/.botnexus/sessions.sqlite"
     },
     "compaction": {
-      "maxMessagesBeforeCompaction": 100,
-      "retainLastMessages": 20
+      "preservedTurns": 3,
+      "tokenThresholdRatio": 0.6
     },
     "cors": {
       "allowedOrigins": ["http://localhost:3000"]

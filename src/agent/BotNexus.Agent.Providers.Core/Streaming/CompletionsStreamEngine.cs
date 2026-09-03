@@ -76,6 +76,20 @@ public static class CompletionsStreamEngine
                 EmitAborted(stream, profile.Api, model);
                 activity?.SetStatus(ActivityStatusCode.Error, "Operation canceled");
             }
+            catch (ProviderTransientFinishReasonException ex)
+            {
+                // #3567: a transport-level finish reason must reach AgentLoopRunner's retry lane,
+                // which only ever inspects exceptions. Routing it through EmitError like any other
+                // failure would convert it back into a returned StopReason.Error message and end the
+                // run having spent zero of its four attempts.
+                logger.LogWarning(
+                    ex,
+                    "{Api} stream reported a transient finish reason for model {Model}; surfacing for retry",
+                    profile.Api,
+                    model.Id);
+                stream.EndFaulted(ex);
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "{Api} stream failed for model {Model}", profile.Api, model.Id);
@@ -221,6 +235,12 @@ public static class CompletionsStreamEngine
     /// folding reported cached/cache-write tokens out of the billed input count, adding reasoning
     /// tokens into output, and attaching computed cost.
     /// </summary>
+    /// <remarks>
+    /// Reasoning tokens are BOTH summed into <see cref="Usage.Output"/> (preserving the inclusive
+    /// meaning every existing consumer and the cost arithmetic depend on) and carried separately on
+    /// <see cref="Usage.Reasoning"/> for attribution (#3297). The separate field stays <c>null</c>
+    /// when the provider reported no breakdown — absent is never coerced to a measured zero.
+    /// </remarks>
     public static Usage ParseUsage(JsonElement usageElement, Usage usage, LlmModel model)
     {
         var promptTokens = usage.Input + usage.CacheRead + usage.CacheWrite;
@@ -228,6 +248,10 @@ public static class CompletionsStreamEngine
         var reportedCachedTokens = usage.CacheRead;
         var cacheWriteTokens = usage.CacheWrite;
         var reasoningTokens = 0;
+
+        // Carried forward across chunks: a later usage element that omits the breakdown must not
+        // erase a reasoning count an earlier one reported. Stays null until something reports it.
+        var reportedReasoning = usage.Reasoning;
 
         if (usageElement.TryGetProperty("prompt_tokens", out var pt))
             promptTokens = pt.GetInt32();
@@ -251,6 +275,10 @@ public static class CompletionsStreamEngine
             completionDetails.TryGetProperty("reasoning_tokens", out var reasoning))
         {
             reasoningTokens = reasoning.GetInt32();
+
+            // #3297: attribute the reported count separately. Only assigned when the wire actually
+            // carried the field, so absent stays null rather than becoming a measured zero.
+            reportedReasoning = reasoningTokens;
         }
 
         var cacheReadTokens = cacheWriteTokens > 0
@@ -266,6 +294,7 @@ public static class CompletionsStreamEngine
             Output = outputTokens,
             CacheRead = cacheReadTokens,
             CacheWrite = cacheWriteTokens,
+            Reasoning = reportedReasoning,
             TotalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
         };
         updated = updated with { Cost = ModelRegistry.CalculateCost(model, updated) };
@@ -286,20 +315,32 @@ public static class CompletionsStreamEngine
     /// persisted history and inflated any error-rate signal derived from <c>StopReason.Error</c>.
     /// The human-readable message is deliberately retained -- it is the only place the reason for an
     /// otherwise empty turn is stated.
+    /// <para>
+    /// <c>network_error</c> does NOT return a tuple: it THROWS
+    /// <see cref="ProviderTransientFinishReasonException"/> (#3567). It names a transport failure,
+    /// not a model outcome, and the agent loop's retry lane consumes only exceptions -- a returned
+    /// <see cref="StopReason.Error"/> message ended the run having spent zero of its four attempts.
+    /// Every other failure-style reason, <c>content_filter</c> and unknown values included, keeps its
+    /// terminal tuple and still ends the run on the first occurrence.
+    /// </para>
     /// </remarks>
-    public static (StopReason StopReason, string? ErrorMessage) MapStopReason(string? reason) => reason switch
+    public static (StopReason StopReason, string? ErrorMessage) MapStopReason(string? reason)
     {
-        "stop" => (StopReason.Stop, null),
-        "end" => (StopReason.Stop, null),
-        "length" => (StopReason.Length, null),
-        "function_call" => (StopReason.ToolUse, null),
-        "tool_calls" => (StopReason.ToolUse, null),
-        "content_filter" => (StopReason.Sensitive, "Content filtered by provider"),
-        "refusal" => (StopReason.Refusal, null),
-        "network_error" => (StopReason.Error, "Provider finish_reason: network_error"),
-        null => (StopReason.Stop, null),
-        _ => (StopReason.Error, $"Provider finish_reason: {reason}")
-    };
+        TransientFinishReasons.ThrowIfTransient(reason);
+
+        return reason switch
+        {
+            "stop" => (StopReason.Stop, null),
+            "end" => (StopReason.Stop, null),
+            "length" => (StopReason.Length, null),
+            "function_call" => (StopReason.ToolUse, null),
+            "tool_calls" => (StopReason.ToolUse, null),
+            "content_filter" => (StopReason.Sensitive, "Content filtered by provider"),
+            "refusal" => (StopReason.Refusal, null),
+            null => (StopReason.Stop, null),
+            _ => (StopReason.Error, $"Provider finish_reason: {reason}")
+        };
+    }
 
     /// <summary>
     /// Maps a <see cref="ThinkingLevel"/> to the provider's reasoning-effort string, honouring a

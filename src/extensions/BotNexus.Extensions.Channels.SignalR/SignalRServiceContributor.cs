@@ -4,6 +4,7 @@ using BotNexus.Gateway.Abstractions.Sessions;
 using BotNexus.Gateway.Dispatching;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BotNexus.Extensions.Channels.SignalR;
 
@@ -32,6 +33,13 @@ public sealed class SignalRServiceContributor : IServiceContributor
         // hub's UserIdentifier is derived from authenticated claims rather than the connection id.
         services.AddSingleton<IUserIdProvider, ClaimsUserIdProvider>();
 
+        // #3679: absorb client-driven connection aborts before SignalR's dispatcher logs them as
+        // "Failed to invoke hub method" at Error. Registered as a GLOBAL filter so every hub verb
+        // that threads Context.ConnectionAborted into a store call is covered by one seam.
+        services.AddSingleton<ConnectionAbortHubFilter>();
+        services.AddOptions<HubOptions<GatewayHub>>()
+            .Configure<ConnectionAbortHubFilter>((options, filter) => options.AddFilter(filter));
+
         // Facade over the gateway's inbound-dispatch, warmup, conversation-resolution,
         // compaction, and (optional) conversation-reset collaborators. All are registered as
         // singletons by the gateway core, so the facade is a stateless singleton composed from
@@ -43,6 +51,7 @@ public sealed class SignalRServiceContributor : IServiceContributor
                 serviceProvider.GetRequiredService<ISessionWarmupService>(),
                 serviceProvider.GetRequiredService<IConversationDispatcher>(),
                 serviceProvider.GetRequiredService<ISessionCompactionCoordinator>(),
-                serviceProvider.GetService<IConversationResetService>()));
+                serviceProvider.GetService<IConversationResetService>(),
+                serviceProvider.GetService<ILogger<GatewayHubApplicationService>>()));
     }
 }

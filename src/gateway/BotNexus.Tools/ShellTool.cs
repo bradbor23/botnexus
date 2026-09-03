@@ -129,7 +129,10 @@ public sealed class ShellTool : IAgentTool
               "unnecessary, and with a DOUBLE-quoted argument the outer shell expands every $variable and mangles " +
               "every @{} literal before the child pwsh sees them (such calls are rejected). If you genuinely must " +
               "nest, single-quote the -Command argument or use 'pwsh -NoProfile -File tmp/script.ps1'. " +
-              "PowerShell gotchas (avoid ParserError): inside double-quoted strings wrap a variable followed by ':' as ${var} " +
+              "PowerShell gotchas (avoid ParserError): foreach/if/switch/while are STATEMENTS and cannot be piped from " +
+              "directly - wrap them in a subexpression, '$(foreach ($x in $xs) { ... }) | <cmd>', not " +
+              "'foreach ($x in $xs) { ... } | <cmd>' which fails with 'An empty pipe element is not allowed'; " +
+              "inside double-quoted strings wrap a variable followed by ':' as ${var} " +
               "(or use single quotes); no backtick line-continuations; pass -Filter a single string, not an array; for " +
               "multi-line or complex scripts write a tmp/*.ps1 file and run it. Inline Python on Windows prints cp1252 by " +
               "default (UnicodeEncodeError on emoji/em-dash/box glyphs) -- set $env:PYTHONUTF8=1 or write a tmp/*.py file and " +
@@ -248,6 +251,11 @@ public sealed class ShellTool : IAgentTool
         {
             SkillScriptPreflight.ThrowIfMissing(ResolveAgainstWorkingDirectory(scriptTarget));
         }
+
+        // #3569: before spawning anything, check whether this sub-agent's workspace was reclaimed
+        // mid-run. Without this the OS reports only "The directory name is invalid", which reads as
+        // a caller mistake and drives the agent to retry until its budget is gone.
+        ReclaimedWorkspacePreflight.ThrowIfReclaimed(_workingDirectory);
 
         // Combine the clamp warning (if any) with the shell-detection warning so both surface
         // on the tool result without threading two prefixes through every output build site.
