@@ -876,8 +876,8 @@ rather than as the explanation.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
 5. Bring the mobile client onto the same token layer. Its top-bar overflow is
    fixed, but the stylesheet is still raw hex throughout.
-6. Decide what to do about `ToolDescriptionFormatter` — it still maps 22 tool names
-   onto emoji (`📄` read, `💻` exec, `🗣️` agent_converse …) and those render in the
-   chat tool chips and the todo panel. This is the largest emoji surface left, and
+6. Decide what to do about `ToolDescriptionFormatter` — it still maps tool names onto
+   emoji across 24 switch arms (23 named plus the `_` fallback: `📄` read, `💻` exec,
+   `🗣️` agent_converse …) and those render in the chat tool chips and the todo panel. This is the largest emoji surface left, and
    several have no equivalent in the 45-icon set, so it needs a design decision
    rather than a mechanical swap.
