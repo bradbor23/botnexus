@@ -326,10 +326,18 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         // #2650: fail fast on a write-capable child that was handed read-only granted paths.
         WarnOnUnwritableGrantedPaths(request, toolIds);
 
+        // A relative deny is workspace-relative to whichever agent owns the policy, so re-anchor it
+        // before the policy crosses onto the child. See RebaseInheritedDenies.
+        var baseFileAccess = RebaseInheritedDenies(baseDescriptor.FileAccess, baseDescriptor.AgentId);
+
+        // #3562: the symmetric contradiction - a write grant handed to a toolset that cannot write.
+        // Rejects rather than warns; see ValidateWriteGrantIsUsable.
+        ValidateWriteGrantIsUsable(request, toolIds, archetype);
+
         // Build file access policy for workspace isolation. Null means "fully isolated" -
         // the child falls back to the base descriptor's FileAccess below. See
         // BuildChildFileAccessPolicy.
-        var childFileAccess = BuildChildFileAccessPolicy(request);
+        var childFileAccess = BuildChildFileAccessPolicy(request, baseFileAccess);
 
         // #2647: ONE resolution, consumed by both the descriptor the child actually runs on and the
         // SubAgentInfo reporting record below. Computing it twice is exactly how "what runs" and
@@ -393,7 +401,7 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 // resolution above - the same values the SubAgentInfo record reports.
                 ModelId = effectiveModel ?? baseDescriptor.ModelId,
                 ApiProvider = effectiveProvider,
-                FileAccess = childFileAccess ?? baseDescriptor.FileAccess
+                FileAccess = childFileAccess ?? baseFileAccess
             });
         }
 
@@ -642,7 +650,9 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     Archetype: SubAgentArchetype.General,
                     BaseDescriptor: targetDescriptor,
                     ChildAgentId: AgentId.From($"{request.ParentAgentId}--subagent--{mirror.TargetAgentId.Value}--{uniqueId}"),
-                    Name: null,
+                    // #3570: the run label, NOT a descriptor customisation. Everything below stays
+                    // null because Mirror remains strict pass-through of the target's descriptor.
+                    Name: string.IsNullOrWhiteSpace(mirror.RunName) ? null : mirror.RunName,
                     ModelOverride: null,
                     ApiProviderOverride: null,
                     ToolIds: null,
@@ -733,6 +743,92 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
     }
 
     /// <summary>
+    /// Re-anchors a base descriptor's relative deny paths onto the workspace of the agent that owns
+    /// them, before that policy is composed into a child policy or copied onto the child wholesale.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DefaultPathValidator"/> reads a relative deny as "&lt;my workspace&gt;/x", so an
+    /// entry carried across verbatim silently re-points at the CHILD's workspace and stops guarding
+    /// the directory the operator named - which the child can then reach through whatever it was
+    /// granted. No-op without an <see cref="IAgentWorkspaceManager"/>: there is no workspace to
+    /// anchor to, and dropping the entries instead would un-deny them.
+    /// <para>
+    /// Denies only, deliberately. A drifting deny stops guarding what the operator named, while a
+    /// drifting allow moves a grant without un-protecting anything; rebasing the allow-lists is a
+    /// wider change raised separately.
+    /// </para>
+    /// </remarks>
+    /// <param name="policy">The base descriptor's policy.</param>
+    /// <param name="ownerAgentId">The agent whose workspace the relative denies are written against.</param>
+    /// <returns>The policy with its denies re-anchored, or the input unchanged.</returns>
+    internal FileAccessPolicy? RebaseInheritedDenies(FileAccessPolicy? policy, AgentId ownerAgentId)
+    {
+        if (policy is null || policy.DeniedPaths.Count == 0 || _workspaceManager is null)
+            return policy;
+
+        return policy with
+        {
+            DeniedPaths = DefaultPathValidator.RebaseRelativePaths(
+                policy.DeniedPaths,
+                _workspaceManager.GetWorkspacePath(ownerAgentId.Value))
+        };
+    }
+
+    /// <summary>
+    /// Rejects a spawn that grants the child a writable location it has no tool to write with
+    /// (#3562). <c>grantedWritePaths</c>/<c>shareWorkspace</c> and the archetype tool allowlist are
+    /// resolved on independent code paths, so <c>spawn_subagent(archetype: "researcher",
+    /// grantedWritePaths: [...])</c> was accepted and produced a worker holding a writable directory
+    /// and no <c>write</c>, <c>edit</c> or <c>exec</c> tool.
+    /// </summary>
+    /// <remarks>
+    /// Throws rather than warning, per the issue: the failure otherwise surfaces at the END of the
+    /// child's run when it tries to produce its deliverable, after its whole token and wall-clock
+    /// budget is spent, and a parent-side log warning is never seen by the worker. The message names
+    /// both the archetype and the missing tools so the caller can correct the call without reading
+    /// gateway source. A <c>null</c>/empty <paramref name="toolIds"/> means "inherit the parent's
+    /// tools" and is never rejected - no restriction was resolved, so nothing contradicts the grant.
+    /// This is the mirror image of <see cref="WarnOnUnwritableGrantedPaths"/>, which is deliberately
+    /// left untouched: it covers write-capable tools with read-only <c>grantedPaths</c>.
+    /// </remarks>
+    /// <param name="request">The spawn request carrying the write grant.</param>
+    /// <param name="toolIds">The resolved tools the child would be granted, or <c>null</c>/empty.</param>
+    /// <param name="archetype">The resolved archetype, named in the rejection message.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a write grant is present and the resolved toolset contains no write-capable tool.
+    /// </exception>
+    internal void ValidateWriteGrantIsUsable(
+        SubAgentSpawnRequest request,
+        IReadOnlyList<string>? toolIds,
+        SubAgentArchetype archetype)
+    {
+        // AC3: shareWorkspace is the same contradiction expressed differently, so both grant shapes
+        // enter the same check.
+        var hasWriteGrant = request.ShareWorkspace || request.GrantedWritePaths is { Count: > 0 };
+        if (!hasWriteGrant)
+            return;
+
+        // No resolved restriction => the child inherits the parent's tools, which normally write.
+        if (toolIds is not { Count: > 0 })
+            return;
+
+        if (toolIds.Any(BuiltInArchetypes.WriteCapableToolIds.Contains))
+            return;
+
+        var grantDescription = request.ShareWorkspace && request.GrantedWritePaths is { Count: > 0 }
+            ? "shareWorkspace and grantedWritePaths"
+            : request.ShareWorkspace ? "shareWorkspace" : "grantedWritePaths";
+
+        throw new InvalidOperationException(
+            $"Sub-agent spawn requests {grantDescription} but archetype '{archetype.Value}' resolves a "
+            + $"toolset with no write-capable tool (has: {string.Join(", ", toolIds)}). The write grant "
+            + $"would be unusable and the child would lose its output at the end of its run. Supply one "
+            + $"of [{string.Join(", ", BuiltInArchetypes.WriteCapableToolIds.Order(StringComparer.Ordinal))}] "
+            + "via the 'tools' override, choose a write-capable archetype (for example 'coder' or "
+            + "'writer'), or drop the write grant and use grantedPaths for read-only access.");
+    }
+
+    /// <summary>
     /// Composes the child's <see cref="FileAccessPolicy"/> for workspace isolation, or returns
     /// <c>null</c> when the child should stay fully isolated (the caller then falls back to the
     /// base descriptor's <see cref="AgentDescriptor.FileAccess"/>). By default a sub-agent can only
@@ -750,10 +846,25 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
     /// kept path is resolved via <see cref="Path.GetFullPath(string)"/>. Extracted from
     /// <see cref="SpawnAsync"/> so the policy composition (read/write split, blank filtering, the
     /// isolated -> null contract) is independently unit-testable (#1630).
+    /// <para>
+    /// A composed policy REPLACES the base one on the child descriptor, so
+    /// <see cref="FileAccessPolicy.DeniedPaths"/> is inherited from <paramref name="basePolicy"/>:
+    /// asking for a grant must never erase the denies the operator configured. The allow-lists
+    /// are deliberately NOT inherited - starting the child from only what it was granted narrows it,
+    /// which is the intended isolation posture.
+    /// </para>
     /// </remarks>
     /// <param name="request">The spawn request carrying the share-workspace flag and granted paths.</param>
+    /// <param name="basePolicy">
+    /// The base descriptor's policy, source of the inherited denies, already re-anchored by
+    /// <see cref="RebaseInheritedDenies"/>. Required rather than optional-with-default so that
+    /// omitting it is a compile error: a caller that silently passed nothing is precisely how the
+    /// denies came to be dropped.
+    /// </param>
     /// <returns>The composed policy, or <c>null</c> when the child stays fully isolated.</returns>
-    internal FileAccessPolicy? BuildChildFileAccessPolicy(SubAgentSpawnRequest request)
+    internal FileAccessPolicy? BuildChildFileAccessPolicy(
+        SubAgentSpawnRequest request,
+        FileAccessPolicy? basePolicy)
     {
         if (!request.ShareWorkspace
             && request.GrantedPaths is not { Count: > 0 }
@@ -795,10 +906,15 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             }
         }
 
-        return new FileAccessPolicy
+        // Derived FROM the base rather than built fresh, so a field added to FileAccessPolicy later
+        // carries the operator's configuration forward instead of silently resetting to its default.
+        return (basePolicy ?? new FileAccessPolicy()) with
         {
             AllowedReadPaths = allowedRead,
-            AllowedWritePaths = allowedWrite
+            AllowedWritePaths = allowedWrite,
+            // Denies are the only policy field that subtracts access, and this policy replaces the
+            // base one wholesale, so not carrying them forward silently un-denies the child.
+            DeniedPaths = basePolicy?.DeniedPaths ?? []
         };
     }
 
@@ -918,7 +1034,11 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
     }
 
     /// <inheritdoc />
-    public async Task OnCompletedAsync(string subAgentId, string resultSummary, CancellationToken ct = default)
+    public async Task OnCompletedAsync(
+        string subAgentId,
+        string resultSummary,
+        SubAgentRunOutcome? outcome = null,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subAgentId);
 
@@ -934,20 +1054,39 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         const string emptyResponseDiagnostic = "Sub-agent failed because it returned an empty final response.";
         var hasFinalResponse = !string.IsNullOrWhiteSpace(resultSummary);
 
+        // #3565: text alone no longer decides success. A run that produced prose while every tool
+        // it invoked errored - or whose terminal assistant message carried a provider error - is a
+        // FAILURE, and must present as one to the parent. `outcome` is null only when the caller
+        // could not observe the run's timeline at all, in which case the historical text-only
+        // behaviour is preserved exactly.
+        var runFailed = outcome?.HasFailure == true;
+
         // Normalize pathological token-per-line whitespace at the earliest point so
         // the record, session persistence, LLM parent context, and every channel all
         // observe the same clean content (#2150). Done before the record is updated
         // rather than only at dispatch time to avoid a divergent persisted summary.
         var normalizedResultSummary = SubAgentSummaryNormalizer.Normalize(resultSummary);
 
+        // AC3: the text delivered to the parent names the sub-agent and the underlying tool error,
+        // so the parent can act without opening the child transcript. The run's own words are kept
+        // BELOW the diagnostic rather than discarded - they are often the only description of what
+        // was attempted - but they can no longer stand alone as an unqualified success.
+        var terminalSummary = runFailed
+            ? DescribeFailedRun(subAgentId, outcome!, hasFinalResponse ? normalizedResultSummary : null)
+            : hasFinalResponse ? normalizedResultSummary : emptyResponseDiagnostic;
+
+        var terminalStatus = hasFinalResponse && !runFailed
+            ? SubAgentStatus.Completed
+            : SubAgentStatus.Failed;
+
         if (!TryUpdateSubAgent(
                 subAgentId,
                 current => current.Status == SubAgentStatus.Running
                     ? current with
                     {
-                        Status = hasFinalResponse ? SubAgentStatus.Completed : SubAgentStatus.Failed,
+                        Status = terminalStatus,
                         CompletedAt = DateTimeOffset.UtcNow,
-                        ResultSummary = hasFinalResponse ? normalizedResultSummary : emptyResponseDiagnostic
+                        ResultSummary = terminalSummary
                     }
                     : current,
                 out var updated) || updated.Status == SubAgentStatus.Killed)
@@ -990,6 +1129,60 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         // sync with the live entry the way the old separate _childAgentIds map could —
         // the synthetic-fallback workaround that drift required is no longer needed (#1385).
         var childAgentId = record.ChildAgentId;
+
+        // #3703: the lifecycle activity is published AFTER dispatch, not before, because a
+        // completion whose announcement never reached the parent is not a completion the parent
+        // can act on. Publishing SubAgentCompleted first made the delivery-failed case
+        // indistinguishable from the delivered one on the activity stream as well as on the
+        // record. The teardown `finally` below is unchanged and still runs on every path.
+        if (!string.IsNullOrWhiteSpace(parentAgentId.Value))
+        {
+            try
+            {
+                // Dispatch half: deliver the completion follow-up to the parent session.
+                await DispatchCompletionFollowUpAsync(subAgentId, normalizedSummary, updated, parentAgentId, childAgentId, ct);
+            }
+            finally
+            {
+                // Teardown half: always release the child agent/session, even if dispatch threw.
+                await CleanupChildAgentAsync(subAgentId, updated.ChildSessionId, CancellationToken.None);
+            }
+
+            // Re-read the record so the activity payload carries the delivery verdict that
+            // DispatchCompletionFollowUpAsync just latched onto it.
+            if (_records.TryGetValue(subAgentId, out var afterDispatch))
+                updated = afterDispatch.Info;
+        }
+
+        await PublishTerminalLifecycleActivityAsync(subAgentId, updated, parentAgentId.Value);
+    }
+
+    /// <summary>
+    /// Publishes the single lifecycle activity that describes how a terminal sub-agent run ended,
+    /// taking BOTH the run's own status and the completion-delivery verdict into account (#3703).
+    /// <para>
+    /// A delivery failure is reported as <see cref="GatewayActivityType.SubAgentFailed"/> even when
+    /// the child's own work succeeded: from the supervisor's point of view a result it was never
+    /// handed is indistinguishable from a result that was never produced, and the one thing it must
+    /// not receive is a clean <see cref="GatewayActivityType.SubAgentCompleted"/>.
+    /// </para>
+    /// </summary>
+    private async Task PublishTerminalLifecycleActivityAsync(
+        string subAgentId,
+        SubAgentInfo updated,
+        string? parentAgentId)
+    {
+        if (updated.CompletionDelivery == SubAgentCompletionDelivery.Failed)
+        {
+            await PublishLifecycleActivityAsync(
+                GatewayActivityType.SubAgentFailed,
+                "subagent_delivery_failed",
+                updated,
+                parentAgentId,
+                $"Sub-agent '{subAgentId}' finished but its completion could not be delivered to the parent session.");
+            return;
+        }
+
         // #2725: HandedOff is a success disposition, so it publishes the completed activity
         // alongside Completed rather than falling through to no lifecycle event at all.
         if (updated.Status is SubAgentStatus.Completed or SubAgentStatus.HandedOff)
@@ -998,7 +1191,7 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 GatewayActivityType.SubAgentCompleted,
                 "subagent_completed",
                 updated,
-                parentAgentId.Value,
+                parentAgentId,
                 $"Sub-agent '{subAgentId}' completed.");
         }
         else if (SubAgentStatusPolicy.IsUnsuccessfulTermination(updated.Status))
@@ -1007,31 +1200,22 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 GatewayActivityType.SubAgentFailed,
                 "subagent_failed",
                 updated,
-                parentAgentId.Value,
+                parentAgentId,
                 $"Sub-agent '{subAgentId}' failed.");
-        }
-
-        if (string.IsNullOrWhiteSpace(parentAgentId.Value))
-            return;
-
-        try
-        {
-            // Dispatch half: deliver the completion follow-up to the parent session.
-            await DispatchCompletionFollowUpAsync(subAgentId, normalizedSummary, updated, parentAgentId, childAgentId, ct);
-        }
-        finally
-        {
-            // Teardown half: always release the child agent/session, even if dispatch threw.
-            await CleanupChildAgentAsync(subAgentId, updated.ChildSessionId, CancellationToken.None);
         }
     }
 
     /// <summary>
     /// Dispatch half of completion handling: builds the completion follow-up message and delivers
-    /// it to the parent session via <see cref="_dispatcher"/>, recording wake telemetry. Delivery
-    /// failures are logged and swallowed (the record-teardown in <see cref="OnCompletedAsync"/>
-    /// still runs). Separated from the record-teardown so the two concerns are independently
-    /// readable (#1565).
+    /// it to the parent session via <see cref="_dispatcher"/>, recording wake telemetry. Separated
+    /// from the record-teardown so the two concerns are independently readable (#1565).
+    /// <para>
+    /// #3703: a delivery failure is still swallowed here - the teardown in
+    /// <see cref="OnCompletedAsync"/> must run regardless - but it is no longer ONLY logged. The
+    /// verdict is latched onto the record as <see cref="SubAgentInfo.CompletionDelivery"/> so
+    /// <c>list_subagents</c>, <c>manage_subagent status</c> and the lifecycle activity can all
+    /// tell a stranded parent from a woken one.
+    /// </para>
     /// </summary>
     /// <param name="subAgentId">The completing sub-agent's id.</param>
     /// <param name="normalizedSummary">The normalized result summary.</param>
@@ -1096,9 +1280,16 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     ["subAgentId"] = subAgentId
                 }
             }, ct);
+
+            TryUpdateSubAgent(subAgentId, current => current with
+            {
+                CompletionDelivery = SubAgentCompletionDelivery.Delivered,
+                CompletionDeliveryError = null
+            });
         }
         catch (Exception ex)
         {
+            // Observability is ADDED to, not replaced: the counter keeps its existing producer.
             GatewayTelemetry.SubAgentWakeDeliveryFailed.Add(1,
                 new KeyValuePair<string, object?>("botnexus.parent.agent.id", parentAgentId),
                 new KeyValuePair<string, object?>("botnexus.parent.session.id", updated.ParentSessionId),
@@ -1108,6 +1299,14 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 "Failed delivering completion follow-up for sub-agent '{SubAgentId}' to parent session '{ParentSessionId}'.",
                 subAgentId,
                 updated.ParentSessionId);
+
+            // The record is the only durable trace the parent can still query. Without this the
+            // run reads as a clean Completed and the supervisor waits forever (#3703).
+            TryUpdateSubAgent(subAgentId, current => current with
+            {
+                CompletionDelivery = SubAgentCompletionDelivery.Failed,
+                CompletionDeliveryError = ex.Message
+            });
         }
     }
 
@@ -1166,7 +1365,7 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             }
             else
             {
-                await OnCompletedAsync(subAgentId, response.Content);
+                await OnCompletedAsync(subAgentId, response.Content, SubAgentRunOutcome.From(response));
             }
         }
         catch (Exception) when (record.BudgetExhausted)
@@ -1352,6 +1551,54 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         {
             await OnCompletedAsync(subAgentId, diagnostic);
         }
+    }
+
+    /// <summary>
+    /// Builds the failure text a parent receives when a sub-agent run narrated an answer but its
+    /// tools failed, or its terminal assistant message carried a provider error (#3565, AC3).
+    /// </summary>
+    /// <remarks>
+    /// The sub-agent id and the underlying error are both named so the parent can act without
+    /// opening the child transcript. The run's own words are appended rather than dropped: they are
+    /// frequently the only record of what was attempted, and discarding them would trade one
+    /// information loss for another. Vocabulary deliberately mirrors the existing
+    /// <c>emptyResponseDiagnostic</c> shape ("Sub-agent failed because ...") so the diagnostics on
+    /// this path stay recognisable as one family.
+    /// </remarks>
+    /// <param name="subAgentId">The run whose failure is being described.</param>
+    /// <param name="outcome">The measured tool/provider outcome of the run.</param>
+    /// <param name="narratedSummary">The run's own final text, or null when it produced none.</param>
+    internal static string DescribeFailedRun(
+        string subAgentId,
+        SubAgentRunOutcome outcome,
+        string? narratedSummary)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        var reason = outcome.FailedToolCount > 0
+            ? $"{outcome.FailedToolCount} tool invocation{(outcome.FailedToolCount == 1 ? string.Empty : "s")} failed"
+            : "the provider ended its final turn with an error";
+
+        var detail = outcome.FailedToolCount > 0
+            ? outcome.LastToolError
+            : outcome.TerminalError;
+
+        var text = $"Sub-agent '{subAgentId}' failed because {reason}.";
+
+        if (!string.IsNullOrWhiteSpace(detail))
+            text += $" Last error: {detail}";
+
+        if (!string.IsNullOrWhiteSpace(narratedSummary))
+        {
+            text += Environment.NewLine
+                + Environment.NewLine
+                + "The sub-agent nevertheless reported the following, which must NOT be treated as a "
+                + "confirmed result:"
+                + Environment.NewLine
+                + narratedSummary;
+        }
+
+        return text;
     }
 
     private static string DescribeStatus(SubAgentStatus status)

@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using BotNexus.Domain.Security;
 
 namespace BotNexus.Gateway.Configuration;
 
@@ -753,6 +754,17 @@ public static class PlatformConfigValidator
 
             if (!TryValidateLocationType(type))
                 errors.Add($"{fieldPath}.type must be one of: filesystem, api, mcp-server, database, remote-node.");
+
+            // Applies to every location type. A credential reference names where the credential is
+            // kept; putting the credential itself here is the mistake this rejects, and rejecting
+            // it at validation means the operator hears about it while editing the file rather than
+            // at the first call that tries to use it. The message never echoes the offending value:
+            // if it really is a pasted credential, this error may well end up in a log.
+            if (locationConfig.CredentialRef is not null
+                && !SecretRef.TryParse(locationConfig.CredentialRef, out _, out var credentialError))
+            {
+                errors.Add($"{fieldPath}.credentialRef is not a valid credential reference. {credentialError}");
+            }
 
             if (type.Equals("filesystem", StringComparison.OrdinalIgnoreCase))
             {

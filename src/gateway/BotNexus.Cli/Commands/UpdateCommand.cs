@@ -433,7 +433,9 @@ internal class UpdateCommand
             return 1;
         }
 
-        var gatewayUrl = $"http://localhost:{port}";
+        // The gateway binds gateway.listenUrl when one is configured, overriding the --urls
+        // argument below, so probe where it will actually listen rather than where we asked.
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromConfig(port);
         var options = new GatewayStartOptions(
             ExecutablePath: gatewayDll,
             Arguments: $"--urls \"{gatewayUrl}\" --environment Development",
@@ -1068,10 +1070,14 @@ internal class UpdateCommand
     /// Polls every 250ms for up to 15 seconds. Returns true when the port became free.
     /// Protected virtual so tests can drive both outcomes without binding a real socket.
     /// </summary>
+    /// <remarks>
+    /// #3738: the 15-second bound is monotonic. A backwards host clock step would otherwise keep this
+    /// poll running past its bound, stalling the update's restart on a port that never frees.
+    /// </remarks>
     protected virtual async Task<bool> WaitForPortFreeAsync(int port, CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(15) && !cancellationToken.IsCancellationRequested)
         {
             if (IsPortAvailable(port))
                 return true;

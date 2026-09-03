@@ -19,7 +19,7 @@ namespace BotNexus.Extensions.ExecTool;
 public sealed class ExecTool : IAgentTool
 {
     private const int DefaultTimeoutMs = 120_000;
-    private const int MaxOutputBytes = 100 * 1024;
+    private const int MaxOutputBytes = OutputRetentionPolicy.MaxOutputBytes;
 
     /// <summary>
     /// Retention cap on captured child output, in bytes. Exposed internally so tests can drive a
@@ -85,7 +85,9 @@ public sealed class ExecTool : IAgentTool
         "Execute a command with advanced process management: timeouts, background mode, stdin piping, and environment variable merging. " +
         "Commands run in the agent workspace by default - the same directory the shell tool uses - so workspace-relative " +
         "paths such as 'tmp/q.py' resolve correctly; pass workingDir to run elsewhere. " +
-        "On Windows PowerShell: wrap a variable followed by ':' as ${var} inside double-quoted strings (or use single quotes); " +
+        "On Windows PowerShell: foreach/if/switch/while are STATEMENTS and cannot be piped from directly - wrap them in a " +
+        "subexpression, '$(foreach ($x in $xs) { ... }) | <cmd>', not 'foreach ($x in $xs) { ... } | <cmd>' which fails with " +
+        "'An empty pipe element is not allowed'; wrap a variable followed by ':' as ${var} inside double-quoted strings (or use single quotes); " +
         "no backtick line-continuations; for multi-line/complex scripts write a tmp/*.ps1 file and run it. Inline Python prints " +
         "cp1252 by default (UnicodeEncodeError on emoji/em-dash/box glyphs) -- set $env:PYTHONUTF8=1 or write a tmp/*.py file " +
         "and run 'python -X utf8 file.py'. Never pipe a here-string into an interpreter; write a temp file and execute it.",
@@ -213,7 +215,8 @@ public sealed class ExecTool : IAgentTool
         var env = arguments["env"] as IReadOnlyDictionary<string, string>;
         var workingDir = arguments["workingDir"] as string;
 
-        var (fileName, processArgs) = ResolveCommand(command, _fileSystem);
+        var launch = ResolveCommand(command, _fileSystem);
+        var (fileName, processArgs) = launch;
 
         // Preflight inline pwsh/powershell -Command scripts: reject syntax errors (empty pipe
         // elements, malformed ${...} references, unbalanced braces) BEFORE spawning a process so the
@@ -245,7 +248,12 @@ public sealed class ExecTool : IAgentTool
         // an ARGUMENT-parsing error plus its generic usage banner, naming neither the skill nor any
         // candidate. Diagnose it here instead - name the skill and the closest existing wrapper names
         // enumerated from the skill's scripts/ directory. A near match is reported, never substituted.
-        if (SkillScriptPreflight.TryGetFileTarget(processArgs, out var scriptTarget))
+        //
+        // Issue #3566, clause 5: -File is only a script path on pwsh/powershell. Without this guard a
+        // `-File` element belonging to any other command (e.g. `Get-ChildItem <dir> -File`) was bound
+        // as a filename and the call refused for a script that never existed in the command at all.
+        if (PowerShellPreflight.IsPowerShellExecutable(fileName)
+            && SkillScriptPreflight.TryGetFileTarget(processArgs, out var scriptTarget))
         {
             var probeRoot = workingDir ?? _workingDirectory;
             var resolvedTarget = Path.IsPathRooted(scriptTarget) || string.IsNullOrWhiteSpace(probeRoot)
@@ -253,6 +261,10 @@ public sealed class ExecTool : IAgentTool
                 : Path.GetFullPath(scriptTarget, probeRoot);
             SkillScriptPreflight.ThrowIfMissing(resolvedTarget);
         }
+
+        // #3569: diagnose a reclaimed sub-agent workspace before the process start fails with a
+        // bare "The directory name is invalid", which names no cause and invites a futile retry.
+        ReclaimedWorkspacePreflight.ThrowIfReclaimed(workingDir ?? _workingDirectory);
 
         var startInfo = new ProcessStartInfo
         {
@@ -265,10 +277,11 @@ public sealed class ExecTool : IAgentTool
             WorkingDirectory = workingDir ?? _workingDirectory ?? string.Empty,
         };
 
-        foreach (var arg in processArgs)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
+        // Windows .cmd/.bat shims (#3568) need the line handed to cmd.exe verbatim; everything else,
+        // including the .ps1 host invocation (#3710), goes through ArgumentList. The seam decides -
+        // looping over Args by hand here is precisely how a raw cmd payload gets re-escaped.
+        launch.ApplyArgumentsTo(startInfo);
+
 
         if (env is not null)
         {
@@ -291,12 +304,18 @@ public sealed class ExecTool : IAgentTool
         {
             if (!process.Start())
             {
-                return NotDispatchedResult($"Failed to start process '{fileName}'.");
+                return NotDispatchedResult(
+                    $"Failed to start process '{fileName}'. {launch.FormatLaunchFailureDetail(command[0])}.");
             }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
         {
-            return NotDispatchedResult($"Failed to start process '{fileName}': {ex.Message}");
+            // #3710: the raw OS text ("The system cannot find the path specified.") named neither the
+            // command nor a path, so the agent could not tell the tool, the workingDir and an argument
+            // apart. Name what was actually resolved and attempted.
+            return NotDispatchedResult(
+                $"Failed to start process '{fileName}': {ex.Message} " +
+                $"({launch.FormatLaunchFailureDetail(command[0])}).");
         }
 
         StartedTestHook?.Invoke(process);
@@ -572,7 +591,7 @@ public sealed class ExecTool : IAgentTool
     /// Leading token every truncation banner starts with. Tests and callers match on this rather
     /// than on the full sentence so the wording can evolve without becoming unrecognisable.
     /// </summary>
-    internal const string TruncationBannerPrefix = "[output truncated:";
+    internal const string TruncationBannerPrefix = OutputRetentionPolicy.TruncationBannerPrefix;
 
     /// <summary>
     /// Renders the retention-cap banner for issue #2895.
@@ -588,104 +607,45 @@ public sealed class ExecTool : IAgentTool
     /// <param name="discardedBytes">Bytes produced by the child but dropped once the cap was hit.</param>
     internal static string FormatTruncationBanner(int retainedBytes, int discardedBytes)
     {
-        var produced = (long)retainedBytes + discardedBytes;
-
         // Collection is head-first: lines are appended until one no longer fits, after which every
-        // subsequent line is dropped. The surviving portion is therefore always the head.
-        return $"{TruncationBannerPrefix} retained {retainedBytes} bytes (head) of {produced} bytes produced, " +
-               $"discarded {discardedBytes} bytes (tail) at the {MaxOutputBytes / 1024}KB cap]";
+        // subsequent line is dropped. The surviving portion is therefore always the head. The
+        // wording itself is the shared one (#3704) so the process path cannot word it differently.
+        return OutputRetentionPolicy.FormatTruncationBanner(
+            retainedBytes,
+            discardedBytes,
+            RetainedOutputPortion.Head);
     }
 
     /// <summary>
-    /// Resolves command array into fileName and arguments, handling Windows .cmd/.bat shims.
+    /// Resolves the command array into a launch descriptor via the shared Windows shim seam.
     /// </summary>
-    internal static (string FileName, IReadOnlyList<string> Args) ResolveCommand(IReadOnlyList<string> command)
+    /// <remarks>
+    /// This used to be a second, independent copy of the PATH probe plus the cmd.exe quoting rules,
+    /// which is exactly the duplication #3642 consolidated into <see cref="WindowsShimLaunch"/> for
+    /// the MCP stdio transport. The copy still here was why #3568's <c>.cmd</c> fix did not extend to
+    /// <c>.ps1</c>: the seam and the copy could disagree. There is now one implementation (#3710).
+    /// </remarks>
+    internal static ProcessLaunch ResolveCommand(IReadOnlyList<string> command)
         => ResolveCommand(command, new FileSystem());
 
-    internal static (string FileName, IReadOnlyList<string> Args) ResolveCommand(
+    internal static ProcessLaunch ResolveCommand(
         IReadOnlyList<string> command,
         IFileSystem fileSystem)
     {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
         var exe = command[0];
-        var args = command.Count > 1 ? command.Skip(1).ToList() : new List<string>();
+        var args = command.Count > 1 ? command.Skip(1).ToList() : [];
 
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return (exe, args);
-        }
-
-        // On Windows, resolve .cmd/.bat files through cmd.exe
-        var resolved = ResolveWindowsExecutable(exe, fileSystem);
-        if (resolved is not null && IsWindowsBatchFile(resolved))
-        {
-            // Route through cmd.exe /c to handle .cmd/.bat
-            var cmdArgs = new List<string> { "/d", "/s", "/c" };
-            cmdArgs.Add(BuildCmdCommandLine(resolved, args));
-            return (Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", cmdArgs);
-        }
-
-        return (resolved ?? exe, args);
+        return WindowsShimLaunch.Resolve(exe, args, fileSystem.File.Exists);
     }
 
-    private static string? ResolveWindowsExecutable(string command, IFileSystem fileSystem)
-    {
-        if (Path.HasExtension(command))
-        {
-            return command;
-        }
-
-        // Look for common Windows script extensions
-        string[] extensions = [".exe", ".cmd", ".bat"];
-        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-
-        // Check current name first (might be in PATH as-is)
-        foreach (var ext in extensions)
-        {
-            var candidate = command + ext;
-
-            // Check in PATH directories
-            foreach (var dir in pathDirs)
-            {
-                var fullPath = Path.Combine(dir, candidate);
-                if (fileSystem.File.Exists(fullPath))
-                {
-                    return fullPath;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsWindowsBatchFile(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".cmd" or ".bat";
-    }
-
-    private static string BuildCmdCommandLine(string command, IReadOnlyList<string> args)
-    {
-        var sb = new StringBuilder();
-        sb.Append(QuoteForCmd(command));
-        foreach (var arg in args)
-        {
-            sb.Append(' ');
-            sb.Append(QuoteForCmd(arg));
-        }
-
-        return sb.ToString();
-    }
-
-    private static string QuoteForCmd(string arg)
-    {
-        if (!arg.Contains(' ') && !arg.Contains('"'))
-        {
-            return arg;
-        }
-
-        return $"\"{arg.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
-    }
+    /// <summary>
+    /// Builds the verbatim <c>cmd.exe</c> argument line for a resolved .cmd/.bat shim.
+    /// </summary>
+    /// <remarks>Forwards to the shared seam; retained as the name existing callers and tests use.</remarks>
+    internal static string BuildCmdRawArgumentLine(string resolved, IReadOnlyList<string> args)
+        => resolved.BuildCmdRawArgumentLine(args);
 
     private static void TryKill(Process process)
     {

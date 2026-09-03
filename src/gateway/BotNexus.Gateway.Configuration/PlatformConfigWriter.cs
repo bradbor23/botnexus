@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using BotNexus.Gateway.Configuration.Store;
 
 namespace BotNexus.Gateway.Configuration;
 
@@ -14,10 +15,12 @@ namespace BotNexus.Gateway.Configuration;
 /// <remarks>
 /// <para><b>Explicit-null semantics (#2705).</b> config.json has THREE distinct states per key:
 /// key absent, key present with value <c>null</c>, and key present with a value.
-/// <see cref="AgentConfigMerger" /> depends on that distinction in six places
-/// (<c>memory</c>, <c>search</c>, <c>temporalDecay</c>, <c>heartbeat</c>, <c>quietHours</c>,
-/// <c>fileAccess</c>): an explicit null means <em>suppress the inherited world default</em>,
-/// whereas absence means <em>inherit it</em>.</para>
+/// <see cref="BotNexus.Gateway.Configuration.Store.ConfigValueState" /> is the canonical model of
+/// that distinction today: the agent-level merger that originally consumed it was removed with the
+/// configuration reset (#3515), but the states did not go with it - an explicit null still means
+/// <em>suppress the inherited value</em>, whereas absence still means <em>inherit it</em>, and the
+/// store layer (<see cref="BotNexus.Gateway.Configuration.Store.ConfigDocumentFlattener" /> reading,
+/// <see cref="BotNexus.Gateway.Configuration.Store.ConfigDocumentPatcher" /> writing) preserves it.</para>
 /// <para>The writer therefore guarantees that <b>an explicit null present in the document on disk
 /// survives a whole-document write</b>. This is a deliberate contract, not an implementation
 /// accident: the typed <see cref="PlatformConfig" /> graph cannot represent "present and null"
@@ -54,15 +57,53 @@ public sealed class PlatformConfigWriter
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
     private static readonly JsonSerializerOptions PlatformPersistOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// Per-process key that makes the compare-and-swap revision opaque to its holder (#3469).
+    /// </summary>
+    /// <remarks>
+    /// Generated once per gateway process and never persisted, logged or exposed on any surface.
+    /// See <see cref="ComputeRevision"/> for why the token must not be derivable from document
+    /// content, and for the restart semantics this implies.
+    /// </remarks>
+    private static readonly byte[] RevisionKey = RandomNumberGenerator.GetBytes(32);
     private readonly string _configPath;
     private readonly IFileSystem _fileSystem;
     private readonly ConfigBackupService? _backup;
 
+    /// <summary>
+    /// The backends this writer persists to (#3527).
+    /// </summary>
+    /// <remarks>
+    /// Defaults to JSON-only, which is byte-identical to the behaviour before the writer seam
+    /// existed. A host that has a configuration store registers both, and then every write reaches
+    /// both - which is what stops a store-backed installation reading one document while the file
+    /// holds another.
+    /// </remarks>
+    private readonly Writers.IConfigurationWriter _writer;
+
     public PlatformConfigWriter(string configPath, IFileSystem fileSystem, ConfigBackupService? backup = null)
+        : this(configPath, fileSystem, backup, writer: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a writer that persists through <paramref name="writer"/>.
+    /// </summary>
+    /// <param name="writer">
+    /// The persistence backend. <see langword="null"/> builds the JSON-only writer, preserving the
+    /// existing behaviour for every caller that has not been given a store.
+    /// </param>
+    public PlatformConfigWriter(
+        string configPath,
+        IFileSystem fileSystem,
+        ConfigBackupService? backup,
+        Writers.IConfigurationWriter? writer)
     {
         _configPath = configPath;
         _fileSystem = fileSystem;
         _backup = backup;
+        _writer = writer ?? new Writers.JsonConfigurationWriter(configPath, fileSystem, backup);
     }
 
     /// <summary>
@@ -242,19 +283,21 @@ public sealed class PlatformConfigWriter
             // and an absent property are the same CLR state. So a whole-document write through
             // the typed model erases every explicit null in config.json.
             //
-            // That is not cosmetic. AgentConfigMerger treats absent / explicit-null / value as
-            // THREE distinct states in six places (memory, search, temporalDecay, heartbeat,
-            // quietHours, fileAccess): explicit null means "suppress the inherited default",
-            // absence means "inherit it". Erasing the null therefore flips the setting to the
-            // opposite of what the operator wrote, silently, on a write they did not initiate.
+            // That is not cosmetic. ConfigValueState models absent / explicit-null / value as
+            // THREE distinct states, and the store layer preserves them end to end
+            // (ConfigDocumentFlattener reading, ConfigDocumentPatcher writing): explicit null means
+            // "suppress the inherited value", absence means "inherit it". Erasing the null therefore
+            // flips the setting to the opposite of what the operator wrote, silently, on a write they
+            // did not initiate. The agent-level merger that first depended on this was removed with
+            // the configuration reset (#3515); the tri-state itself was not.
             //
             // Two rejected alternatives, recorded so they are not "simplified" back in:
             //  - Dropping WhenWritingNull globally would spray nulls for every unset optional
             //    property across the whole document - a far larger behaviour change than the
-            //    defect warrants, and it would not help the keys the merger reads anyway,
-            //    because the typed model cannot tell "operator wrote null" from "never set".
-            //  - Changing the merger's meaning of null is wrong: the merger is correct and six
-            //    call sites depend on it.
+            //    defect warrants, and it would not help the tri-state keys anyway, because the
+            //    typed model cannot tell "operator wrote null" from "never set".
+            //  - Redefining what a JSON null means in config.json is wrong: the reader and the
+            //    store both treat it as an explicit suppression, and both are correct.
             // Instead the preservation is scoped precisely to keys that were explicitly null in
             // the SOURCE document, and only where the regenerated document left them absent - a
             // real value in the new document always wins.
@@ -468,13 +511,40 @@ public sealed class PlatformConfigWriter
     }
 
     /// <summary>
-    /// Computes the revision token for a configuration document: a stable content digest of its
-    /// canonical serialization, used as the compare-and-swap token for whole-document replaces.
+    /// Computes the revision token for a configuration document: a keyed digest of its canonical
+    /// serialization, used as the compare-and-swap token for whole-document replaces.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Issue #3469 - why this is keyed rather than a bare content hash.</b> The revision
+    /// crosses the redaction boundary: <c>GET /api/config/snapshot</c> redacts every secret out of
+    /// the returned document but hands the caller this token, and the same value reaches the client
+    /// again on the <c>409 Conflict</c> path via
+    /// <see cref="PlatformConfigConcurrencyException.ActualRevision"/>. A bare
+    /// <c>SHA256(canonical)</c> therefore let anyone authorised only for the <em>redacted</em> view
+    /// verify a guessed secret offline in one hash - unrated-limited and unaudited - because the
+    /// redacted document already reveals the full structure, every non-secret value and the exact
+    /// set of configured providers. HMAC under a key the caller does not have breaks that
+    /// derivation while leaving the token a pure function of document state.</para>
+    /// <para><b>Why not hash a redacted canonicalisation instead.</b> That was the issue's first
+    /// suggestion and it is unsound here: <see cref="ConfigSecretMerge.Redact"/> collapses every
+    /// secret to the single literal <see cref="ConfigSecretMerge.Placeholder"/>, so two documents
+    /// differing <em>only</em> in a secret value produce an identical digest. A concurrent
+    /// secret-only write - rotating an API key is exactly that - would then be undetectable by
+    /// compare-and-swap, trading a confidentiality bug for a silent lost update. Matches upstream
+    /// OpenClaw <c>a4f17833ada0</c>, which bound its token to a startup-phase key for the same
+    /// reason.</para>
+    /// <para><b>Consequence: tokens do not survive a gateway restart.</b> The key is per-process and
+    /// never persisted, so a patch quoting a token minted by a previous process is rejected with
+    /// <c>409</c> and the client reloads. That is the sound direction to fail - a snapshot from a
+    /// previous process lifetime cannot prove what committed across the restart - and the key is
+    /// deliberately not derived from anything on disk, because a disk-derived key is recoverable by
+    /// precisely the reader this defends against.</para>
+    /// </remarks>
     private static string ComputeRevision(JsonObject root)
     {
         var canonical = root.ToJsonString(PlatformPersistOptions);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        return Convert.ToHexString(
+            HMACSHA256.HashData(RevisionKey, Encoding.UTF8.GetBytes(canonical)));
     }
 
     /// <summary>
@@ -685,7 +755,7 @@ public sealed class PlatformConfigWriter
                     return errors;
             }
 
-            await WriteRootAsync(root, reason, ct);
+            await WriteRootAsync(root, reason, pristine, ct);
             return [];
         }
         finally
@@ -713,51 +783,50 @@ public sealed class PlatformConfigWriter
         return JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
     }
 
-    private async Task WriteRootAsync(JsonObject root, string reason, CancellationToken ct)
+    /// <summary>
+    /// Persists the complete document through the configured backend(s).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// #3527: all seventeen public mutation methods funnel here, so this is the single point where a
+    /// document becomes durable - and therefore the only place the backend set has to be honoured.
+    /// The file-specific behaviour that used to live inline (no-op detection, backup, atomic replace
+    /// with retry, owner-only permissions applied twice, directory creation) moved verbatim into
+    /// <see cref="Writers.JsonConfigurationWriter"/>.
+    /// </para>
+    /// <para>
+    /// Nothing is lost by delegating: with only the JSON backend registered this is the same code
+    /// reached through one interface call. With a store also registered, every write now lands in
+    /// both - which is what the read path has assumed since the store became reachable (#3514).
+    /// </para>
+    /// </remarks>
+    /// <param name="pristine">
+    /// The document as it was before the mutation, when available. Supplying it lets the write be
+    /// expressed as the keys that actually changed (#3532) rather than as a whole-document replace.
+    /// </param>
+    private Task WriteRootAsync(JsonObject root, string reason, JsonObject? pristine, CancellationToken ct)
     {
-        var json = root.ToJsonString(PlatformPersistOptions);
-
-        // Issue #2114: no-op detection. If the resulting canonical JSON is byte-for-byte
-        // identical to what is already on disk, do not back up, replace, or otherwise touch
-        // the file. This prevents startup and redundant-mutation reload storms (an atomic
-        // File.Move rewrites the inode/timestamp and re-triggers the IConfiguration reload
-        // pipeline even when nothing effectively changed).
-        if (_fileSystem.File.Exists(_configPath))
+        if (pristine is null)
         {
-            var existing = await _fileSystem.File.ReadAllTextAsync(_configPath, ct);
-            if (JsonCanonicalEquals(existing, json))
-                return;
+            // No before-image: the caller cannot say what changed, so a full replace is the only
+            // honest write. This is the import path, where replacing everything is the intent.
+            return _writer.WriteAsync(root, reason, ct);
         }
 
-        _backup?.Backup(_configPath, reason);
+        // Diff document-against-document. The mutation has already produced the desired JSON in
+        // `root`, so re-projecting a CLR type here would add nothing and would drop every key the
+        // type does not model - the #2816 failure, and the reason the DTO-shaped writer overload was
+        // deleted unused. The DTO's role is the read side: bind through IOptions.
+        var changes = ConfigDocumentDiffer.Diff(pristine, root);
 
-        var directory = _fileSystem.Path.GetDirectoryName(_configPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            _fileSystem.Directory.CreateDirectory(directory);
-
-        var tempPath = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
+        if (changes.IsEmpty)
         {
-            await _fileSystem.File.WriteAllTextAsync(tempPath, json, ct);
+            // A mutation that changed nothing must not churn the file mtime or the backup history,
+            // or an unchanged save becomes indistinguishable from a real one.
+            return Task.CompletedTask;
+        }
 
-            // #2392: config.json carries provider API keys and channel bot tokens, so it must not
-            // inherit a default umask/parent-ACL that leaves it group- or world-readable.
-            //
-            // Restrict TWICE, deliberately:
-            //  - before the move, so the file is never owner-readable-only *after* it is already
-            //    visible at its final path (no window where a broad-permission config.json exists);
-            //  - after the move, because the semantics of replacing an existing destination differ
-            //    per platform, and this is a REWRITE path, not a first-create path - a fix applied
-            //    only when the file is first created would leave every subsequent save wrong.
-            SecureFilePermissions.RestrictToOwner(_fileSystem, tempPath);
-            await ReplaceWithRetryAsync(tempPath, ct);
-            SecureFilePermissions.RestrictToOwner(_fileSystem, _configPath);
-        }
-        finally
-        {
-            if (_fileSystem.File.Exists(tempPath))
-                _fileSystem.File.Delete(tempPath);
-        }
+        return _writer.ApplyChangeSetAsync(changes, reason, ct);
     }
 
     // #2357: Windows fails File.Move(..., overwrite: true) with UnauthorizedAccessException when

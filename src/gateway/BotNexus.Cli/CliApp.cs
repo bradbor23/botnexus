@@ -160,6 +160,7 @@ internal static class CliApp
             .AddSingleton<MemoryCommands>()
             .AddSingleton<ConfigCommands>()
             .AddSingleton<LocationsCommand>()
+            .AddSingleton<SecretCommand>()
             .AddSingleton<InstallCommand>()
             .AddSingleton<BuildCommand>()
             .AddSingleton<GatewayCommand>()
@@ -190,6 +191,7 @@ internal static class CliApp
         root.AddCommand(serviceProvider.GetRequiredService<MemoryCommands>().Build(verboseOption, targetOption));
         root.AddCommand(serviceProvider.GetRequiredService<ConfigCommands>().Build(verboseOption, targetOption));
         root.AddCommand(serviceProvider.GetRequiredService<LocationsCommand>().Build(verboseOption, targetOption));
+        root.AddCommand(serviceProvider.GetRequiredService<SecretCommand>().Build(verboseOption, targetOption));
         root.AddCommand(serviceProvider.GetRequiredService<DoctorCommand>().Build(verboseOption, targetOption));
         root.AddCommand(serviceProvider.GetRequiredService<InstallCommand>().Build(verboseOption, targetOption));
         root.AddCommand(serviceProvider.GetRequiredService<BuildCommand>().Build(verboseOption));

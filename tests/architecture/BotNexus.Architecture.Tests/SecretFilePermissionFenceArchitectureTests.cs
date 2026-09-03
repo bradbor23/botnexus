@@ -37,7 +37,11 @@ public sealed class SecretFilePermissionFenceArchitectureTests : ArchitectureTes
     private static readonly string[] SecretWritingSurfaces =
     {
         // Atomic temp-file + move rewrite of config.json (provider API keys, channel bot tokens).
-        "src/gateway/BotNexus.Gateway.Configuration/PlatformConfigWriter.cs",
+        //
+        // #3527: the write moved out of PlatformConfigWriter into the JSON writer backend. The file
+        // that PERFORMS the write is what this fence must track - naming the caller would leave the
+        // permission call unguarded the moment it moved again.
+        "src/gateway/BotNexus.Gateway.Configuration/Writers/JsonConfigurationWriter.cs",
         // Byte-for-byte backup copies of config.json, secrets included.
         "src/gateway/BotNexus.Gateway.Configuration/ConfigBackupService.cs",
         // auth.json - OAuth refresh/access tokens (gateway side).
@@ -45,6 +49,13 @@ public sealed class SecretFilePermissionFenceArchitectureTests : ArchitectureTes
         // auth.json - OAuth token persist + refresh (CLI side).
         "src/gateway/BotNexus.Cli/Commands/ProviderCommand.cs",
         "src/gateway/BotNexus.Cli/Commands/Provider/CopilotAuthLoader.cs",
+        // secrets.db - the sqlite: secret store, written by `botnexus secret set`.
+        "src/gateway/BotNexus.Cli/Commands/SecretCommand.cs",
+        // config.db - the SQLite configuration store, a full copy of every config.json value
+        // including provider API keys and channel bot tokens, plus its WAL/SHM sidecars (#3414).
+        // Narrowed inside the store rather than at its five construction sites, so the seam that
+        // must be pinned is the store itself.
+        "src/gateway/BotNexus.Gateway.Configuration/Store/SqliteConfigStore.cs",
     };
 
     /// <summary>A call to the central helper, in either overload form.</summary>

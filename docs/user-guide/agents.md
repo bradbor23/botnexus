@@ -221,6 +221,32 @@ Files are concatenated in the order specified. Paths are relative to `~/.botnexu
 
 Recent daily memory notes (`memory/{today}.md` and `memory/{yesterday}.md`) are auto-loaded regardless of `systemPromptFiles`, which only chooses which workspace prompt files to load. To suppress daily notes (and `MEMORY.md`), set `memory.promptInjection` to `"none"`.
 
+#### World-level instructions
+
+`WORLD.md` is the one instruction file that does **not** live in the agent's own
+directory. Put it at `~/.botnexus/WORLD.md` and it is prepended to the context of
+*every* agent, ahead of that agent's own files:
+
+```text
+~/.botnexus/WORLD.md          <- shared by every agent
+~/.botnexus/agents/<id>/...   <- that agent's own files
+```
+
+Use it for rules that hold across the whole installation - house conventions, standing
+prohibitions, facts about the environment the agents run in - rather than repeating
+them in each agent's `AGENTS.md`.
+
+Two things to know:
+
+- **Placement is the whole trick.** A `WORLD.md` inside an agent's directory is not
+  loaded. It is not in the default list above, so nothing reads it and nothing warns
+  you - the agent simply never sees the file.
+- **It is not affected by `systemPromptFiles`.** That setting selects workspace prompt
+  files; `WORLD.md` is injected separately and always applies.
+
+Like the other instruction files it supports model and provider variants, so
+`WORLD.gpt.md` can carry rules that only apply when a GPT model is serving the turn.
+
 ### Tool Assignment
 
 Grant tools to an agent:
@@ -390,14 +416,19 @@ System prompts define agent behavior. BotNexus supports a structured approach:
 ### File Structure
 
 ```text
-~/.botnexus/agents/<agentId>/
-├── SOUL.md          # Personality, values, tone
-├── IDENTITY.md      # Role, expertise, boundaries
-├── TOOLS.md         # Tool usage guidelines
-├── BOOTSTRAP.md     # Initialization instructions
-├── AGENTS.md        # Multi-agent coordination
-└── USER.md          # User-specific preferences
+~/.botnexus/
+├── WORLD.md             # Shared by every agent (optional)
+└── agents/<agentId>/
+    ├── SOUL.md          # Personality, values, tone
+    ├── IDENTITY.md      # Role, expertise, boundaries
+    ├── TOOLS.md         # Tool usage guidelines
+    ├── BOOTSTRAP.md     # Initialization instructions
+    ├── AGENTS.md        # Multi-agent coordination
+    └── USER.md          # User-specific preferences
 ```
+
+`WORLD.md` sits at the home root, not inside the agent directory - see
+[World-level instructions](#world-level-instructions).
 
 ### Example: SOUL.md
 
@@ -598,6 +629,34 @@ Reconciliation exists because neither `install` (clone and build) nor `update` (
 restart) is a migration point, so an *existing* installation would otherwise never receive a
 newly shipped agent.
 
+### What Trailguide is — and is not
+
+Trailguide is an **ordinary config-defined agent**, not a code-owned built-in. Its complete
+definition lives in your `config.json` under `agents.nexus-trailguide`, and you can read,
+edit, disable or re-point it with exactly the same keys as any agent you wrote yourself.
+Nothing about it is immutable.
+
+The entry the gateway inserts is deliberately minimal. It carries only:
+
+| Key | Source |
+| --- | --- |
+| `displayName` | shipped template (`Nexus Trailguide`) |
+| `emoji` | shipped template |
+| `description` | shipped template |
+| `provider`, `model` | adopted from your configuration — see below |
+| `enabled` | `true`, or `false` when no provider/model could be resolved |
+| `definitionVersion` | stamped by the reconciler |
+
+That is the whole entry. In particular the shipped template declares **no `toolIds` and no
+Skills configuration**, so Trailguide inherits whatever `agents.defaults` your installation
+applies, the same as any other agent that omits those keys. A curated workspace, a
+least-privilege tool allowlist and bundled onboarding skills are planned but **have not
+shipped yet**; do not expect them in the entry you see today. If you want Trailguide
+constrained, set `toolIds` on it yourself — it is your entry to edit.
+
+Because the reconciler is insert-only, any key you add is permanent: the gateway will never
+come back and rewrite it.
+
 ### Insert-only, never overwrite
 
 The contract is deliberately narrow:
@@ -627,11 +686,32 @@ A newly inserted entry copies provider and model from your own configuration, in
    telling you to set `provider` and `model` on `agents.nexus-trailguide` and flip
    `enabled` to `true`.
 
-### Removing it
+### Disabling versus deleting
 
-Deleting the key is not permanent — the next startup sees a missing entry and re-inserts it.
-To keep the agent out of the way, set `"enabled": false` on it instead; the insert-only rule
-guarantees that choice is never overwritten.
+These two look similar and behave completely differently. Pick deliberately:
+
+| Action | Effect |
+| --- | --- |
+| `"enabled": false` on `agents.nexus-trailguide` | **Persistent opt-out.** The agent is not registered and does not appear in the UI. The key still exists, so the insert-only rule guarantees the gateway never overwrites your choice — it survives every restart and update. |
+| Delete the `agents.nexus-trailguide` key | **Temporary.** The next startup sees a missing entry and re-inserts a fresh one, adopting provider and model again. |
+
+If you want Trailguide gone, disable it. Deleting it is a way to *reset* it, not to remove it.
+
+Disabling an agent changes only whether it is registered. It does **not** delete its
+workspace directory under `~/.botnexus/agents/nexus-trailguide/`, its memory files, or any
+skills stored there — that content is left untouched on disk, and re-enabling the agent picks
+it back up unchanged.
+
+::: warning `doctor agents --cleanup-orphans` does not spare disabled agents
+`botnexus doctor agents` classifies a workspace as *orphaned* by comparing the directories
+under the agents root against the **enabled** agents in `config.json`. A disabled agent's
+workspace therefore shows up as orphaned, and running the command with `--cleanup-orphans`
+(or approving the interactive prompt) **will delete it**.
+
+Without that flag the command only prints the plan and deletes nothing, so an ordinary
+`botnexus doctor` run is safe. If you keep an agent disabled but want its workspace, do not
+opt in to orphan cleanup.
+:::
 
 ---
 
@@ -669,6 +749,47 @@ Remove an agent by:
 3. Configuration reload applies changes
 
 Session history is preserved in `~/.botnexus/sessions.sqlite` (session data only — agent memory is stored as workspace Markdown files).
+
+### Updating an agent with the `update_agent` tool
+
+Registration and removal are file-driven, but an agent that holds the `update_agent` tool
+can amend a **registered** agent's descriptor in place. Only the fields you pass are
+changed; everything omitted is preserved.
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `id` | string | **Required.** The agent to update. |
+| `displayName` | string | New human-readable display name. |
+| `description` | string | New description. |
+| `summary` | string | Agent-maintained account of what the agent is currently doing. Self-only — see below. Empty string clears it. |
+| `emoji` | string | New emoji. |
+| `modelId` | string | Persisted as `model`. Must be registered for the agent's provider. |
+| `apiProvider` | string | Provider **instance key** (`github-copilot`, `anthropic`), not an API contract name. Persisted as `provider`. |
+| `systemPrompt` | string | New system prompt. |
+| `toolIds` | string | A JSON array string; **replaces** the existing list rather than merging into it. |
+| `thinking` | string | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or an empty string to clear. |
+| `contextWindow` | int | New default window in tokens, or `0` to clear. |
+
+Four rules are worth knowing before you call it:
+
+- **Reserved archetype ids are refused.** The [sub-agent archetypes](../features/built-in-agents.md)
+  are implementation-only roles, not named agents, so updating one is rejected outright.
+- **`summary` is self-only.** An agent may write the summary of its own id and no other;
+  a caller with a different id — or no id at all, as when the host rather than an agent
+  invokes the tool — is refused. The denial applies to that *argument*, so every other
+  field keeps its normal reach. An over-long summary is **refused, never truncated**,
+  because a silently cut summary reads as a complete statement. The bound is
+  `gateway.agentSummary.maxLength`.
+- **The merged descriptor is validated, not just your edit.** Model/provider resolvability
+  and the thinking and context-window capabilities are checked against the descriptor
+  *after* your changes are applied, so a provider-only or model-only edit that breaks the
+  pair is caught rather than persisted.
+- **Config is written before runtime state changes.** If persisting to disk fails, the
+  agent is left untouched and the tool reports the failure — the runtime registry can
+  never end up ahead of `config.json`.
+
+Use `create_agent` to register a new agent; `update_agent` only amends one that already
+exists and reports an error otherwise.
 
 ---
 

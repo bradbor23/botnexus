@@ -10,6 +10,7 @@ using BotNexus.Agent.Core.Hooks;
 using BotNexus.Agent.Core.Types;
 using BotNexus.Agent.Providers.Core.Resolution;
 using BotNexus.Cron;
+using BotNexus.Domain.Text;
 using BotNexus.Cron.Tools;
 using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Abstractions.Conversations;
@@ -613,7 +614,14 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
         };
         IAgentHandle handle = inProcessHandle;
 
-        _logger.LogWarning(
+        // #3746: Debug, not Warning. This sits unconditionally on the SUCCESS return path - there is
+        // no failure semantics here for an operator to act on, and at fleet scale it produced 44% of
+        // every warning the gateway emitted (671 lines/day), making the WRN channel useless as a
+        // health signal. Information would still be redundant: the caller already records the same
+        // lifecycle event at INFO ("Created agent instance '{AgentId}' for session '{SessionId}'
+        // (isolation: in-process)"). What this line adds over that one is the resolved tool roster,
+        // which is diagnostic detail - exactly what Debug is for. Same defect class as #2751.
+        _logger.LogDebug(
             "Created agent handle for '{AgentId}' session '{SessionId}' with {ToolCount} tools: {ToolNames}",
             descriptor.AgentId, context.SessionId, tools.Count,
             string.Join(", ", tools.Select(t => t.Name)));
@@ -676,18 +684,23 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
             new ToolProviders.AgentConverseToolProvider(
                 _serviceProvider.GetService<IAgentExchangeService>(),
                 sessionStore,
-                _serviceProvider.GetService<IOptions<AgentExchangeOptions>>()),
+                _serviceProvider.GetService<IOptions<AgentExchangeOptions>>(),
+                _serviceProvider.GetService<IAgentRegistry>(),
+                _serviceProvider.GetService<IAgentSupervisor>()),
             new ToolProviders.FinishAgentExchangeToolProvider(sessionStore),
             new ToolProviders.ListAgentsToolProvider(
                 _serviceProvider.GetService<IAgentRegistry>(),
                 _serviceProvider.GetService<IOptions<AgentExchangeOptions>>()),
+            new ToolProviders.ListLocationsToolProvider(
+                _serviceProvider.GetService<IOptionsMonitor<PlatformConfig>>()),
             new ToolProviders.AgentManagementToolProvider(
                 _serviceProvider.GetService<IAgentRegistry>(),
                 _serviceProvider.GetService<IAgentConfigurationWriter>(),
                 _serviceProvider.GetService<BotNexusHome>(),
                 _serviceProvider.GetServices<IAgentChangeNotifier>(),
                 _serviceProvider.GetService<IOptions<PlatformConfig>>(),
-                _llmClient),
+                _llmClient,
+                _serviceProvider.GetService<IOptions<AgentSummaryOptions>>()),
             new ToolProviders.CanvasToolProvider(
                 _serviceProvider.GetService<IConversationStore>(),
                 _serviceProvider.GetServices<IAgentCanvasNotifier>(),
@@ -965,6 +978,34 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// </summary>
     private readonly ToolAuditWriteAhead? _toolWriteAhead;
 
+    /// <summary>
+    /// The THIRD deliberate-cancellation source (#3384): signalled when the gateway itself destroys
+    /// this handle via <see cref="IAgentSupervisor.StopAsync"/> - abandoned-turn recovery (#790) and
+    /// the system-prompt-refresh stop both take that path, and both land here as
+    /// <see cref="DisposeAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The #3230 guard consults the caller's turn token and the linked prompt source. Both describe
+    /// the SAME thing - the caller's turn - so a supervisor stop, which originates OUTSIDE the
+    /// streaming call, trips neither: the orderly teardown fell through to the general catch and was
+    /// logged as two <c>[ERR]</c> records plus a synthetic <c>Internal streaming error</c> pushed at
+    /// the client while the platform was successfully recovering.
+    /// <para>
+    /// This is deliberately a third TERM in the existing predicate, not a fourth catch clause: the
+    /// classification stays expressed once, so a future cancellation source joins the same seam
+    /// (#3384 AC6) and the two teardown gates can never silently disagree.
+    /// </para>
+    /// </remarks>
+    private readonly CancellationTokenSource _deliberateStop = new();
+
+    /// <summary>
+    /// True once the gateway has deliberately torn this handle down. The streaming guard ANDs this
+    /// with the exception being cancellation-shaped, so it is a NARROWING of the fault path, never a
+    /// blanket swallow: an <see cref="OperationCanceledException"/> raised while no source is
+    /// signalled remains a genuine fault with its Error log, client error event and faulted channel.
+    /// </summary>
+    internal bool IsDeliberatelyStopped => _deliberateStop.IsCancellationRequested;
+
     public InProcessAgentHandle(
         BotNexus.Agent.Core.Agent agent,
         AgentId agentId,
@@ -1058,33 +1099,56 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
             _ => 0
         });
 
+        // #3655: the TOKEN figures below are script-weighted through the shared estimator, so a CJK
+        // transcript is not reported at a quarter of its real cost. The CHARACTER figures beside
+        // them stay raw - they are a different unit and the report shows both.
+        var userAssistantUnits = state.Messages.Sum(static message => message switch
+        {
+            AgentCoreUserMessage user => TokenEstimator.WeightedCharUnits(user.Content),
+            AssistantAgentMessage assistant => TokenEstimator.WeightedCharUnits(assistant.Content),
+            SystemAgentMessage system => TokenEstimator.WeightedCharUnits(system.Content),
+            SubAgentCompletionMessage subAgent => TokenEstimator.WeightedCharUnits(subAgent.Content),
+            _ => 0L
+        });
+
         var toolResultChars = state.Messages.Sum(static message => message switch
         {
             ToolResultAgentMessage tool => tool.Result.Content.Sum(static c => c.Value?.Length ?? 0),
             _ => 0
         });
 
+        var toolResultUnits = state.Messages.Sum(static message => message switch
+        {
+            ToolResultAgentMessage tool => tool.Result.Content.Sum(static c => TokenEstimator.WeightedCharUnits(c.Value)),
+            _ => 0L
+        });
+
+        var systemPromptUnits = TokenEstimator.WeightedCharUnits(state.SystemPrompt);
+        var toolDefinitionChars = toolDefinitions.Sum(static t => t.SchemaChars);
         var historyChars = userAssistantChars + toolResultChars;
-        var totalChars = systemPromptChars
-            + toolDefinitions.Sum(static t => t.SchemaChars + t.Name.Length + (t.Description?.Length ?? 0))
-            + historyChars;
-        var estimatedTokens = totalChars / 4;
+        var historyUnits = userAssistantUnits + toolResultUnits;
+        var totalUnits = systemPromptUnits
+            + ((long)toolDefinitions.Sum(static t => t.SchemaChars + t.Name.Length + (t.Description?.Length ?? 0)))
+            + historyUnits;
+        var estimatedTokens = TokenEstimator.TokensFromUnits(totalUnits);
 
         return new ContextDiagnostics
         {
             SystemPromptChars = systemPromptChars,
-            SystemPromptTokens = systemPromptChars / 4,
+            SystemPromptTokens = TokenEstimator.TokensFromUnits(systemPromptUnits),
             ToolCount = state.Tools.Count,
-            ToolDefinitionChars = toolDefinitions.Sum(static t => t.SchemaChars),
-            ToolDefinitionTokens = toolDefinitions.Sum(static t => t.SchemaChars) / 4,
+            ToolDefinitionChars = toolDefinitionChars,
+            // Tool schemas are JSON emitted by the runtime: structurally ASCII, so the script-blind
+            // ratio is the right estimate and inspecting them would cost a scan for no accuracy.
+            ToolDefinitionTokens = TokenEstimator.EstimateTokensFromCharCount(toolDefinitionChars),
             Tools = toolDefinitions,
             HistoryEntryCount = historyEntries,
             HistoryChars = historyChars,
-            HistoryTokens = historyChars / 4,
+            HistoryTokens = TokenEstimator.TokensFromUnits(historyUnits),
             UserAssistantChars = userAssistantChars,
-            UserAssistantTokens = userAssistantChars / 4,
+            UserAssistantTokens = TokenEstimator.TokensFromUnits(userAssistantUnits),
             ToolResultChars = toolResultChars,
-            ToolResultTokens = toolResultChars / 4,
+            ToolResultTokens = TokenEstimator.TokensFromUnits(toolResultUnits),
             TotalEstimatedTokens = estimatedTokens,
             SystemPrompt = state.SystemPrompt
         };
@@ -1183,8 +1247,33 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
             Usage = lastAssistant?.Usage is { } u ? new AgentResponseUsage(u.InputTokens, u.OutputTokens) : null,
             RunUsage = AggregateRunUsage(messages),
             TurnCount = messages.OfType<AssistantAgentMessage>().Count(),
-            ToolCalls = BuildToolCalls(messages, pendingToolCallIds: null)
+            ToolCalls = BuildToolCalls(messages, pendingToolCallIds: null),
+            // #3565: the blocking boundary now carries the terminal message's provider error, so a
+            // sub-agent run that ended on a rejected turn is distinguishable from one that merely
+            // said little. Gated strictly on StopReason.Error for the same reason MapTurnError is:
+            // an aborted turn also carries an ErrorMessage, and keying on a non-empty message alone
+            // would promote every ordinary cancellation into a fault.
+            TerminalError = DescribeTerminalError(lastAssistant)
         };
+    }
+
+    /// <summary>
+    /// Returns the provider error to report for a run's terminal assistant message, or
+    /// <see langword="null"/> when the message did not end in a provider error (#3565).
+    /// </summary>
+    /// <remarks>
+    /// A provider that errors without detail still yields a non-null string: the presence of the
+    /// error is the load-bearing signal, and collapsing a detail-free failure to <c>null</c> would
+    /// make it indistinguishable from a clean run - the exact conflation #3565 exists to remove.
+    /// </remarks>
+    internal static string? DescribeTerminalError(AssistantAgentMessage? lastAssistant)
+    {
+        if (lastAssistant is not { FinishReason: StopReason.Error })
+            return null;
+
+        return string.IsNullOrWhiteSpace(lastAssistant.ErrorMessage)
+            ? "The provider ended the turn with an error but supplied no detail."
+            : lastAssistant.ErrorMessage;
     }
 
     /// <summary>
@@ -1252,7 +1341,8 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
             // instead of leaving the most expensive runs on the platform unmeasured.
             RunUsage = AggregateRunUsage(snapshot),
             TurnCount = snapshot.OfType<AssistantAgentMessage>().Count(),
-            ToolCalls = BuildToolCalls(snapshot, _agent.State.PendingToolCalls)
+            ToolCalls = BuildToolCalls(snapshot, _agent.State.PendingToolCalls),
+            TerminalError = DescribeTerminalError(lastAssistant)
         };
         return new AgentPromptInterruptedException(partial, oce.CancellationToken);
     }
@@ -1548,6 +1638,34 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
         };
 
     /// <summary>
+    /// The single classification seam for "this cancellation was deliberate" (#3230, extended by
+    /// #3384). Returns true when ANY known teardown source is signalled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three sources, and they are genuinely distinct despite the first two overlapping:
+    /// <list type="number">
+    /// <item><paramref name="callerToken"/> - the caller's turn token (client disconnect, host
+    /// shutdown, conversation archive #3230).</item>
+    /// <item><paramref name="promptCancellation"/> - the linked source over that token, which the
+    /// stream's own <c>finally</c> also cancels when the enumeration ends.</item>
+    /// <item><see cref="IsDeliberatelyStopped"/> - the gateway destroying this handle from OUTSIDE
+    /// the streaming call via the supervisor (#3384). Neither token above is signalled in that
+    /// case, which is exactly why the orderly teardown used to be logged as a fault.</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// Expressed ONCE and consulted by delegate so it is evaluated at throw time against live token
+    /// state, never captured at subscribe time. A fourth source joins this method (#3384 AC6) rather
+    /// than acquiring another catch clause, so the classification cannot fork and disagree.
+    /// </para>
+    /// </remarks>
+    internal bool IsDeliberateTeardown(CancellationTokenSource promptCancellation, CancellationToken callerToken)
+        => promptCancellation.IsCancellationRequested
+            || callerToken.IsCancellationRequested
+            || IsDeliberatelyStopped;
+
+    /// <summary>
     /// Maps one agent event and writes it to the stream channel, classifying any failure as either
     /// caller-initiated cancellation (control flow) or a genuine fault (issue #3230).
     /// </summary>
@@ -1567,6 +1685,47 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// Extracted as an internal static so both branches are pinned independently by test.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Projects a turn that ended in a provider error onto an <see cref="AgentStreamEventType.Error"/>
+    /// stream event, or <see langword="null"/> when the turn ended normally.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="MapAgentEvent"/> maps <c>TurnEndEvent</c> onto a bare <c>TurnEnd</c> that carries
+    /// neither <c>FinishReason</c> nor <c>ErrorMessage</c>, and the agent loop settles an errored turn
+    /// through that same <c>TurnEndEvent</c> rather than through a distinct error event. Nothing else
+    /// produced <c>AgentStreamEventType.Error</c> except the stall watchdog and the two internal
+    /// exception paths, so a genuine provider failure — a 404 for a retired model id, a rejected
+    /// credential — reached every consumer keyed on that type as silence. The run was then reported
+    /// as "terminated on an empty assistant completion", a symptom that names neither the fault nor
+    /// the provider and sends the reader looking for a bug in the agent instead of the request.
+    /// </para>
+    /// <para>
+    /// Gated strictly on <see cref="StopReason.Error"/>. A cancelled turn also carries an
+    /// <c>ErrorMessage</c> ("Operation aborted"), so keying on a non-empty message alone would
+    /// promote every ordinary abort into a client-visible error.
+    /// </para>
+    /// </remarks>
+    /// <param name="agentEvent">The agent event being written.</param>
+    /// <param name="messageId">The stream message id to stamp onto the event.</param>
+    /// <returns>An error stream event, or null when this is not an errored turn end.</returns>
+    internal static AgentStreamEvent? MapTurnError(AgentEvent agentEvent, string messageId)
+    {
+        if (agentEvent is not TurnEndEvent { Message.FinishReason: StopReason.Error } turnEnd)
+            return null;
+
+        return new AgentStreamEvent
+        {
+            Type = AgentStreamEventType.Error,
+            // A provider that errors without detail is rare but must still be distinguishable from
+            // a turn that simply produced nothing, so the event is emitted either way.
+            ErrorMessage = string.IsNullOrWhiteSpace(turnEnd.Message.ErrorMessage)
+                ? "The provider ended the turn with an error but supplied no detail."
+                : turnEnd.Message.ErrorMessage,
+            MessageId = messageId
+        };
+    }
+
     internal static async Task WriteAgentEventAsync(
         AgentEvent agentEvent,
         string messageId,
@@ -1584,6 +1743,14 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
 
             if (streamEvent is not null)
                 await writer.WriteAsync(streamEvent, cancellationToken);
+
+            // Written AFTER the mapped event on purpose: a turn that produced partial output before
+            // failing still flushes that content on TurnEnd, and the error then explains why the
+            // turn stopped rather than displacing what the model did manage to say.
+            var turnError = MapTurnError(agentEvent, messageId);
+
+            if (turnError is not null)
+                await writer.WriteAsync(turnError, cancellationToken);
         }
         catch (OperationCanceledException) when (isCallerCancellation())
         {
@@ -1644,7 +1811,10 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
                 events.Writer,
                 MapAgentEvent,
                 eventCancellation,
-                () => promptCancellation.IsCancellationRequested || cancellationToken.IsCancellationRequested,
+                // #3384: the predicate now also covers a supervisor-initiated stop of THIS handle,
+                // which originates outside the streaming call and trips neither token above.
+                // Expressed once in IsDeliberateTeardown so both teardown gates cannot diverge.
+                () => IsDeliberateTeardown(promptCancellation, cancellationToken),
                 _logger,
                 AgentId,
                 SessionId);
@@ -1905,6 +2075,12 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        // #3384: signal BEFORE aborting. AbortAsync is what cancels the in-flight run, so any
+        // cancellation it raises inside the streaming pipeline must already see the deliberate-stop
+        // source set, or the guard races the teardown it is classifying.
+        try { await _deliberateStop.CancelAsync(); }
+        catch (ObjectDisposedException) { /* already torn down; nothing to signal. */ }
+
         try { await _agent.AbortAsync(); }
         catch (Exception ex) { _logger.LogWarning(ex, "Error aborting agent during dispose"); }
 
@@ -1923,6 +2099,8 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
                 catch (Exception ex) { _logger.LogWarning(ex, "Error disposing resource {ResourceType}", resource.GetType().Name); }
             }
         }
+
+        _deliberateStop.Dispose();
     }
 }
 

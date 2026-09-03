@@ -232,6 +232,12 @@ builder.Services.Configure<CronOptions>(options =>
 
     options.Enabled = cron.Enabled;
     options.TickIntervalSeconds = cron.TickIntervalSeconds;
+    // #3779: the operator-configured webhook blocked-host list must reach BOTH the API create/update
+    // seam and the scheduler's config reconciliation. Binding it here - onto the single CronOptions
+    // both already read - is what stops either seam constructing its own copy of the policy.
+    options.WebhookBlockedHosts = cron.WebhookBlockedHosts is null
+        ? []
+        : [.. cron.WebhookBlockedHosts.Where(host => !string.IsNullOrWhiteSpace(host)).Select(host => host.Trim())];
     options.Jobs = cron.Jobs?
         .ToDictionary(
             pair => pair.Key,
@@ -446,9 +452,17 @@ builder.Services.AddSingleton<LlmClient>(serviceProvider =>
         },
         loggerFactory.CreateLogger<CopilotModelDiscoveryProvider>());
 
+    // The Anthropic-direct list was hardcoded in BuiltInModels, so a retired model id stayed
+    // selectable in the portal until someone traced a 404 that surfaced only as an empty run.
+    // Overlay the account's real models exactly as the Copilot path above already does.
+    var anthropicDiscovery = new AnthropicModelDiscoveryProvider(
+        httpClient,
+        ct => authManager.GetApiKeyAsync("anthropic", ct),
+        loggerFactory.CreateLogger<AnthropicModelDiscoveryProvider>());
+
     var discoveryService = new ModelDiscoveryService(
         models,
-        [copilotDiscovery],
+        [copilotDiscovery, anthropicDiscovery],
         loggerFactory.CreateLogger<ModelDiscoveryService>());
     discoveryService.DiscoverAndRegisterAsync().GetAwaiter().GetResult();
 
@@ -680,7 +694,26 @@ var gatewayStartedAtUtc = DateTimeOffset.UtcNow;
 app.MapGet("/api/uptime", () => Results.Ok(new { startedAt = gatewayStartedAtUtc }));
 app.MapGet("/api/world", () => Results.Ok(worldDescriptor));
 
-LogGatewayStartup(app, builder.Environment, startupPlatformConfig, worldDescriptor, listenUrl);
+// #3660: the readiness banner must not be emitted until Kestrel is actually listening.
+// Calling LogGatewayStartup inline here logged "Gateway startup complete" *before* app.Run()
+// started the server and before the blocking IHostedService pass had finished, so during a slow
+// start the log asserted readiness while the port was still closed - which is precisely why a
+// 3.5-minute startup stall was diagnosed as a crash. ApplicationStarted fires after the server
+// has bound its addresses, so the banner now describes a gateway that can accept connections.
+// Pinned by GatewayStartupReadinessOrderingArchitectureTests.
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        LogGatewayStartup(app, builder.Environment, startupPlatformConfig, worldDescriptor, listenUrl);
+    }
+    catch (Exception ex)
+    {
+        // The banner is diagnostics: a failure assembling it must never take down a gateway
+        // that has already successfully bound its port.
+        app.Logger.LogWarning(ex, "Failed to emit the gateway startup banner (continuing).");
+    }
+});
 
 // Crash observability (#1901): install the last-chance fault handler, warn if the previous run
 // terminated uncleanly, and manage the clean-shutdown marker. All wiring is defensive - a

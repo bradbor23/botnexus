@@ -135,6 +135,25 @@ internal sealed class CronToolProvider(
             ? await context.ResolveConversationId(conversationStore).ConfigureAwait(false)
             : null;
 
+        // #3521: the binding decision needs the conversation's PROVENANCE, not just its id. The id
+        // alone cannot distinguish an agent-owned or cron-owned conversation (bind, #2412) from a
+        // human's own long-running thread (never adopt - adopting one relocates it into the portal's
+        // Cron bucket and makes it an archive target when the job is deleted). Read the row once,
+        // here, at the same seam that already resolved the id. A row that cannot be read leaves the
+        // provenance null, which preserves the pre-#3521 behaviour rather than silently disabling
+        // the #2412 binding.
+        ConversationKind? creatingConversationKind = null;
+        var creatingConversationIsDefault = false;
+        if (conversationStore is not null && creatingConversationId is { } bound)
+        {
+            var conversation = await conversationStore.GetAsync(bound).ConfigureAwait(false);
+            if (conversation is not null)
+            {
+                creatingConversationKind = conversation.Kind;
+                creatingConversationIsDefault = conversation.IsDefault;
+            }
+        }
+
         IReadOnlyList<IAgentTool> tools =
             // #2462: the command-authoring gate is threaded in here so the model-facing cron tool
             // refuses to persist a shellCommand the exec-tool policy would deny. A null authorizer
@@ -145,7 +164,7 @@ internal sealed class CronToolProvider(
             // #3338: the configured self-pacing bound is threaded in so the `next_check` clamp uses
             // the operator's floor/ceiling. A null options object falls back to the built-in default
             // bound inside CronSelfPacingBound - never to an unbounded self-pacing surface.
-            [new CronTool(cronStore!, cronScheduler!, context.AgentId, allowCrossAgentCron, modelRegistry, commandAuthorizer, alertTargetResolver, creatingConversationId, cronOptions)];
+            [new CronTool(cronStore!, cronScheduler!, context.AgentId, allowCrossAgentCron, modelRegistry, commandAuthorizer, alertTargetResolver, creatingConversationId, cronOptions, creatingConversationKind, creatingConversationIsDefault)];
         return tools;
     }
 
@@ -473,7 +492,9 @@ internal sealed class SubAgentToolProvider(
 internal sealed class AgentConverseToolProvider(
     IAgentExchangeService? conversationService,
     ISessionStore? sessionStore,
-    IOptions<AgentExchangeOptions>? exchangeOptions) : IToolProvider
+    IOptions<AgentExchangeOptions>? exchangeOptions,
+    IAgentRegistry? agentRegistry = null,
+    IAgentSupervisor? agentSupervisor = null) : IToolProvider
 {
     /// <inheritdoc />
     public bool ShouldInclude(ToolProviderContext context)
@@ -484,7 +505,18 @@ internal sealed class AgentConverseToolProvider(
     {
         IReadOnlyList<IAgentTool> tools =
         [
-            new AgentConverseTool(conversationService!, sessionStore!, context.AgentId, context.SessionId, exchangeOptions?.Value)
+            // #3577: the registry and supervisor are what let a cancellation name the target's state
+            // rather than returning a bare "A task was canceled.". Both are optional so the tool
+            // still constructs in hosts that do not expose them - it degrades to "unknown" state.
+            new AgentConverseTool(
+                conversationService!,
+                sessionStore!,
+                context.AgentId,
+                context.SessionId,
+                exchangeOptions?.Value,
+                agentRegistry,
+                agentSupervisor,
+                context.Logger)
         ];
         return Task.FromResult(tools);
     }
@@ -533,6 +565,55 @@ internal sealed class ListAgentsToolProvider(
 }
 
 /// <summary>
+/// List-locations tool (<c>list_locations</c>). Gated by the standard allowlist, like every other
+/// provider here: available unless the agent's <c>toolIds</c> restricts it away.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This was built opt-in first - included only when <c>toolIds</c> named it - on the reasoning that
+/// an agent with no business touching infrastructure should not be able to enumerate it. Two things
+/// made that the wrong call.
+/// </para>
+/// <para>
+/// <b>The grant is not additive.</b> A non-empty <c>toolIds</c> restricts to <em>exactly</em> that
+/// list, and <c>InProcessIsolationStrategy</c> applies it to the workspace tools too. So the only
+/// way to grant this tool would also have stripped <c>read</c>, <c>write</c>, <c>edit</c>,
+/// <c>shell</c>, <c>ls</c>, <c>grep</c> and <c>glob</c> from that agent unless every one of them
+/// was re-listed by hand. That produces mysteriously crippled agents, which is a worse outcome
+/// than the one being defended against.
+/// </para>
+/// <para>
+/// <b>The marginal exposure is small.</b> <c>ShellTool</c> - arbitrary command execution - is in
+/// the default toolset, alongside <c>write</c> and <c>edit</c>. Anyone who can inject into an
+/// agent's context already has a shell on its workspace; a read-only list of names and endpoints
+/// adds little to that. The protection that carries the weight here is not who may call the tool
+/// but what the tool can say: no credential reaches the payload, which
+/// <c>LocationsToolExposureFenceArchitectureTests</c> enforces and which holds however the gate is
+/// set.
+/// </para>
+/// <para>
+/// For an agent genuinely exposed to untrusted input, the control is <c>toolIds</c> on that agent -
+/// which is what the mechanism is for.
+/// </para>
+/// </remarks>
+internal sealed class ListLocationsToolProvider(
+    IOptionsMonitor<PlatformConfig>? platformConfig) : IToolProvider
+{
+    internal const string ToolName = "list_locations";
+
+    /// <inheritdoc />
+    public bool ShouldInclude(ToolProviderContext context)
+        => platformConfig is not null && context.ToolAllowed(ToolName);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<IAgentTool>> CreateToolsAsync(ToolProviderContext context)
+    {
+        IReadOnlyList<IAgentTool> tools = [new ListLocationsTool(platformConfig!)];
+        return Task.FromResult(tools);
+    }
+}
+
+/// <summary>
 /// Agent lifecycle tools (<c>create_agent</c>, <c>update_agent</c>). Requires the registry,
 /// configuration writer, and BotNexus home; each tool has its own allowlist sub-gate.
 /// </summary>
@@ -542,7 +623,8 @@ internal sealed class AgentManagementToolProvider(
     BotNexusHome? botNexusHome,
     IEnumerable<IAgentChangeNotifier> changeNotifiers,
     IOptions<PlatformConfig>? platformConfigOptions,
-    LlmClient llmClient) : IToolProvider
+    LlmClient llmClient,
+    IOptions<AgentSummaryOptions>? agentSummaryOptions = null) : IToolProvider
 {
     /// <inheritdoc />
     public bool ShouldInclude(ToolProviderContext context)
@@ -562,8 +644,11 @@ internal sealed class AgentManagementToolProvider(
 
         if (context.ToolAllowed("update_agent"))
         {
+            // #3596: the caller id is what makes the summary write self-only; without it the tool
+            // refuses every summary write rather than defaulting to permitting them.
             tools.Add(new UpdateAgentTool(
-                agentRegistry!, configurationWriter!, changeNotifiers, llmClient.Models));
+                agentRegistry!, configurationWriter!, changeNotifiers, llmClient.Models,
+                context.AgentId, agentSummaryOptions?.Value));
         }
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);

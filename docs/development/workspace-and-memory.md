@@ -480,7 +480,39 @@ opposite responses.
 **Exclusion is disclosed.** When the injection gate withholds notes it appends a
 `> [memory injection: N note(s) withheld ...]` line naming the count and pointing at
 `memory_search`, so the agent can still retrieve the content deliberately instead of concluding the
-note was never written.
+note was never written. When `memory_search` is *not* available to the agent for the turn the
+disclosure is still emitted but stops naming the tool - see [Capability scoping](#capability-scoping)
+below.
+
+### Capability scoping
+
+Provenance answers *may this content be pushed*. It does not answer *is this agent configured to
+have memory at all*. Those are two orthogonal axes, and always-on injection is gated on both.
+
+Before any daily note is read off disk, the prompt builder resolves the turn's effective tool policy
+for the agent - the descriptor's `toolIds` allowlist (including an archetype-derived one for a
+spawned sub-agent) unioned with the effective deny-list, with runtime-pinned tools exempt. If no
+memory recall tool (`memory_search`, `memory_get`) survives that resolution:
+
+- **No memory content is injected at all**, regardless of provenance. An agent spawned without
+  memory tools was scoped that way deliberately; injecting its notes anyway pushes private content
+  across an agent boundary that was drawn on purpose.
+- **No disclosure is emitted either.** A disclosure is a recovery affordance, and there is nothing
+  here for this agent to recover with.
+
+When memory *is* available but `memory_search` specifically is not, notes are injected normally and
+any exclusion disclosure drops the retrieval instruction: naming an unregistered tool induces a
+guaranteed-failing call and a `Tool 'memory_search' is not registered` error that misdirects
+diagnosis.
+
+The capability signal is **resolved in the gateway layer and passed to the memory provider as a
+plain boolean** on `AgentMemoryPromptRequest`. The memory assembly deliberately takes no dependency
+on the tool-policy provider; the layer entitled to know about security resolves the question and
+hands over the answer, so the injection gate stays a pure function.
+
+The signal defaults to *available*, so a composition that supplies no policy provider behaves
+exactly as it did before this gate existed. Fail-open is deliberate here: this is a scoping control,
+not the trust boundary, and a missing registration must not silently blind every agent's memory.
 
 **Mixtures take the least-trusted contributor.** A summary distilled from several rows is stamped
 with the worst provenance that went into it, never the most common one, and the contributing set is
@@ -1212,9 +1244,9 @@ dotnet run -- --agent mybot "What's in SOUL.md?"
 
 ## Implementation References
 
-- **AgentWorkspace**: `src/BotNexus.Agent/AgentWorkspace.cs`
-- **WorkspaceContextBuilder**: `src/BotNexus.Agent/WorkspaceContextBuilder.cs`
-- **MemoryStore**: `src/BotNexus.Agent/MemoryStore.cs`
-- **Memory Tools**: `src/BotNexus.Agent/Tools/MemorySearchTool.cs`, `MemorySaveTool.cs`, `MemoryGetTool.cs`
-- **Configuration**: `src/BotNexus.Core/Configuration/AgentConfig.cs`, `BotNexusHome.cs`
-- **Abstractions**: `src/BotNexus.Core/Abstractions/IAgentWorkspace.cs`, `IContextBuilder.cs`, `IMemoryStore.cs`
+- **AgentWorkspace**: `src/gateway/BotNexus.Gateway.Contracts/Agents/AgentWorkspace.cs`
+- **WorkspaceContextBuilder**: `src/gateway/BotNexus.Gateway/Agents/WorkspaceContextBuilder.cs`
+- **Memory store**: `src/gateway/BotNexus.Memory/SqliteMemoryStore.cs` (the concrete store; there is no `MemoryStore.cs`)
+- **Memory Tools**: `src/gateway/BotNexus.Memory/Tools/MemorySearchTool.cs`, `MemorySaveTool.cs`, `MemoryGetTool.cs`
+- **Configuration**: `src/gateway/BotNexus.Gateway.Configuration/BotNexusHome.cs`, `AgentConfigurationHostedService.cs`
+- **Abstractions**: `src/gateway/BotNexus.Gateway.Contracts/Agents/IContextBuilder.cs`, `src/gateway/BotNexus.Memory/IMemoryStore.cs`

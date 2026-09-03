@@ -60,6 +60,7 @@ public sealed class UnresolvedRegistrationFenceTests : ArchitectureTest
     {
         ["ICitizenRegistry"] = "citizens seam; to be populated with the agents (Jon, 2026-08-21)",
         ["IAgentIdentityResolver"] = "conversation agent-identity hydration seam, referenced by the P9-H design notes in SqliteSessionStore",
+        ["ISecretResolver"] = "credential resolution seam, Phase 1 of docs/development/connection-registry-and-secrets.md; consumed by the locations tool in Phase 3 (2026-08-25)",
     };
 
     private static readonly Regex Registration =

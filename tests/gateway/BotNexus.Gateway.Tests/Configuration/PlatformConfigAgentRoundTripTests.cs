@@ -191,6 +191,19 @@ public sealed class PlatformConfigAgentRoundTripTests : IDisposable
     // Field-parity fitness function
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// Property-classification fence: every settable descriptor property must carry an explicit
+    /// persistence decision.
+    /// </summary>
+    /// <remarks>
+    /// #3560: this is NOT a key-preservation guarantee and must not be read as one. It answers "has
+    /// someone made a decision about this property?", not "does a save preserve what was already
+    /// stored?". The live #3547 incident deleted eleven keys from an agent whose every affected
+    /// property (ExtensionConfig, MaxConcurrentSessions, FileAccess) was correctly classified here,
+    /// so this test was GREEN on the losing commit. Key preservation is fenced separately by
+    /// <see cref="PlatformConfigAgentKeyPreservationTests"/>. Both guarantees are required and
+    /// neither substitutes for the other.
+    /// </remarks>
     [Fact]
     public void FieldParity_EveryDescriptorProperty_HasAnExplicitPersistenceDecision()
     {
@@ -313,6 +326,8 @@ public sealed class PlatformConfigAgentRoundTripTests : IDisposable
             ApiProvider = "github-copilot",
             Emoji = "🤖",
             Description = "A portal-created agent",
+            // #3596: the agent-owned summary must round-trip on the same path as every other field.
+            Summary = "Currently triaging platform issues and shipping fixes.",
             SystemPromptFile = "AGENTS.md",
             SystemPromptFiles = ["AGENTS.md", "SOUL.md"],
             ToolIds = ["read", "write"],
@@ -379,6 +394,7 @@ public sealed class PlatformConfigAgentRoundTripTests : IDisposable
         effective.DisplayName.ShouldBe(submitted.DisplayName);
         effective.Emoji.ShouldBe(submitted.Emoji);
         effective.Description.ShouldBe(submitted.Description);
+        effective.Summary.ShouldBe(submitted.Summary);
         effective.ModelId.ShouldBe(submitted.ModelId);
         effective.ApiProvider.ShouldBe(submitted.ApiProvider);
         effective.SystemPromptFile.ShouldBe(submitted.SystemPromptFile);

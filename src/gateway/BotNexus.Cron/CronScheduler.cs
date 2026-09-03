@@ -51,6 +51,23 @@ public sealed class CronScheduler(
     private readonly ConcurrentDictionary<string, ActiveCronRun> _activeRuns = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// #3517: how many consecutive one-shot deletion failures a job is allowed before it is driven
+    /// to a terminal state instead of being re-armed for another attempt.
+    /// </summary>
+    /// <remarks>
+    /// Three, not one: a single transient store or archive hiccup should not strand a job that would
+    /// have cleaned itself up on the next tick. What must not survive is the UNBOUNDED case - the
+    /// reported incident retried the identical failure 154 times over 15 hours with no decay.
+    /// </remarks>
+    internal const int MaxOneShotDeleteAttempts = 3;
+
+    // #3517: consecutive one-shot deletion failures per job id. Process-scoped and deliberately not
+    // persisted - the bound exists to stop a wedged run's job hammering the error channel for the
+    // life of THIS process, and a gateway restart clears the wedged run along with the counter, so
+    // a fresh attempt after a restart is the correct behaviour rather than a leak.
+    private readonly ConcurrentDictionary<string, int> _oneShotDeleteFailures = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Number of runs currently registered as in flight in this process (#3160). Exposed so the
     /// registry's lifecycle is assertable as an observable on every terminal path rather than
     /// inferred from a log line - a leaked entry is both a memory leak and a stale cancellation
@@ -131,6 +148,16 @@ public sealed class CronScheduler(
     /// archive surfaces an error and leaves the job intact for retry. Session cleanup (#2893)
     /// runs next and is best-effort in the opposite direction - a session-store failure is logged
     /// and never aborts the delete.
+    /// #3517: the archive is SKIPPED (with a warning) when cancellation was not actually observed,
+    /// because a still-live run holds the conversation's write stripe and the archive is then
+    /// guaranteed to fail. Aborting the delete on that guaranteed failure is what produced the
+    /// unbounded retry loop.
+    /// #3521: the archive is also skipped when the job merely ADOPTED the conversation instead of
+    /// minting it. Ownership is the typed pair <c>(Source == Cron, SourceId == jobId)</c> stamped at
+    /// creation by <c>ConversationFactory.CreateForCron</c>; anything else is somebody else's thread
+    /// - in the reported incident, a human's 6,324-message default conversation. The skip logs at
+    /// Information (an adopted binding is a normal state, not a fault) and must NOT throw, or it
+    /// would re-enter the #3517 retry loop it was written alongside.
     /// </remarks>
     public async Task DeleteJobAsync(JobId jobId, CancellationToken cancellationToken = default)
     {
@@ -148,19 +175,59 @@ public sealed class CronScheduler(
         // the action is still executing is not merely untidy - the run keeps writing into a
         // conversation that has just been archived (resurrecting it) and the sweep deletes the very
         // session rows the run is mid-write on. Both are states #3160 observed in production.
-        await CancelActiveRunAsync(jobId, cancellationToken).ConfigureAwait(false);
+        var cancellation = await CancelActiveRunsAsync(jobId, cancellationToken).ConfigureAwait(false);
 
-        if (existing.ConversationId.HasValue)
+        // #3517: the #3160 ordering only holds when the cancellation was actually OBSERVED. When it
+        // was not, the run is still live and still holding this conversation's write stripe, so the
+        // archive below is not merely risky - it is guaranteed to fail, and its failure used to
+        // abort the whole delete and re-arm an unbounded retry. Skip it explicitly and say so.
+        // The delete itself still proceeds: fail-open, exactly as the cancellation watchdog does.
+        if (existing.ConversationId.HasValue && !cancellation.Observed)
+        {
+            _logger.LogWarning(
+                "Not archiving conversation '{ConversationId}' for cron job '{JobId}': {Count} in-flight run(s) never "
+                + "observed cancellation, so the conversation is still being written to. The job is being deleted anyway; "
+                + "the conversation is left active rather than blocking the delete on a step that cannot succeed.",
+                existing.ConversationId.Value,
+                jobId,
+                cancellation.Signalled);
+        }
+        else if (existing.ConversationId.HasValue)
         {
             try
             {
                 using var scope = _scopeFactory.CreateScope();
                 var conversations = scope.ServiceProvider.GetRequiredService<IConversationStore>();
-                await conversations.ArchiveAsync(existing.ConversationId.Value, "cron-delete-after-run", jobId.Value, "system", cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Archived conversation '{ConversationId}' for deleted cron job '{JobId}'.",
-                    existing.ConversationId.Value,
-                    jobId);
+
+                // #3521: archive ONLY a conversation this job owns. `ConversationId` records where
+                // the job writes, which is not the same claim as "this job minted it" - #2412 also
+                // binds a job to a conversation that already existed. Ownership is read from the
+                // conversation's own write-once provenance rather than inferred from the id, because
+                // an id prefix is a convention and provenance is a fact.
+                //
+                // Every failure mode here is fail-OPEN by design: an unreadable row, a store that
+                // throws on the read, or a non-owned binding all SKIP the archive and let the delete
+                // proceed. Throwing would re-arm the unbounded MaybeDeleteOneShotJobAsync retry loop
+                // of #3517, and leaving a conversation active is trivially recoverable whereas
+                // archiving a human's thread is not.
+                if (!await OwnsConversationAsync(conversations, existing.ConversationId.Value, jobId, cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogInformation(
+                        "Not archiving conversation '{ConversationId}' for cron job '{JobId}': the job ADOPTED this "
+                        + "conversation rather than minting it (its provenance is not Source=Cron with SourceId='{JobId}'). "
+                        + "The job is being deleted; the conversation is left active because it belongs to whoever created it.",
+                        existing.ConversationId.Value,
+                        jobId,
+                        jobId);
+                }
+                else
+                {
+                    await conversations.ArchiveAsync(existing.ConversationId.Value, "cron-delete-after-run", jobId.Value, "system", cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "Archived conversation '{ConversationId}' for deleted cron job '{JobId}'.",
+                        existing.ConversationId.Value,
+                        jobId);
+                }
             }
             catch (Exception ex)
             {
@@ -176,6 +243,60 @@ public sealed class CronScheduler(
         await DeleteOwnedRunSessionsAsync(existing, cancellationToken).ConfigureAwait(false);
 
         await _cronStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #3521: whether <paramref name="conversationId"/> was MINTED by <paramref name="jobId"/>, as
+    /// opposed to merely bound to it by the #2412 mid-conversation default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ownership is the write-once pair <see cref="Conversation.Source"/> ==
+    /// <see cref="ConversationSource.Cron"/> AND <see cref="Conversation.SourceId"/> == the job id,
+    /// exactly as <c>ConversationFactory.CreateForCron</c> stamps it. The <c>SourceId</c> half is
+    /// load-bearing: without it, deleting job A would happily archive a conversation minted by job B.
+    /// </para>
+    /// <para>
+    /// Returns <c>false</c> - never throws - when the conversation cannot be read or the store
+    /// itself fails. A delete must not be blocked by an ownership check that could not be evaluated,
+    /// and an unarchived conversation is a recoverable state while a wrongly archived human thread
+    /// and an unbounded retry loop (#3517) are not.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> OwnsConversationAsync(
+        IConversationStore conversations,
+        ConversationId conversationId,
+        JobId jobId,
+        CancellationToken cancellationToken)
+    {
+        Conversation? conversation;
+        try
+        {
+            conversation = await conversations.GetAsync(conversationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(
+                ex,
+                "Could not read conversation '{ConversationId}' to determine whether cron job '{JobId}' owns it; "
+                + "skipping the archive rather than risking one that was never the job's to make.",
+                conversationId,
+                jobId);
+            return false;
+        }
+
+        if (conversation is null)
+        {
+            // Already hard-deleted, or a dangling binding. Nothing to archive either way.
+            _logger.LogInformation(
+                "Conversation '{ConversationId}' bound to cron job '{JobId}' no longer exists; nothing to archive.",
+                conversationId,
+                jobId);
+            return false;
+        }
+
+        return conversation.Source == ConversationSource.Cron
+               && string.Equals(conversation.SourceId, jobId.Value, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -767,6 +888,30 @@ public sealed class CronScheduler(
     /// </para>
     /// </remarks>
     public async Task<int> CancelActiveRunAsync(JobId jobId, CancellationToken cancellationToken = default)
+        => (await CancelActiveRunsAsync(jobId, cancellationToken).ConfigureAwait(false)).Signalled;
+
+    /// <summary>
+    /// Outcome of a cancellation sweep: how many runs were signalled, and whether every one of them
+    /// was actually seen to leave its action body before the grace period elapsed (#3517).
+    /// </summary>
+    /// <param name="Signalled">How many in-flight runs were signalled. Zero means the job was idle.</param>
+    /// <param name="Observed">
+    /// <c>true</c> when every signalled run observed its cancellation (trivially true when none were
+    /// signalled). <c>false</c> means at least one run is STILL EXECUTING and still holds whatever
+    /// the run holds - which is precisely when a follow-on teardown step must not be attempted.
+    /// </param>
+    internal readonly record struct CancellationSweep(int Signalled, bool Observed);
+
+    /// <summary>
+    /// The <see cref="CancelActiveRunAsync"/> body, reporting whether cancellation was OBSERVED as
+    /// well as how many runs were signalled (#3517).
+    /// </summary>
+    /// <remarks>
+    /// The distinction is the whole of #3517. <see cref="CancelActiveRunAsync"/> returns a count,
+    /// which tells a caller nothing about whether the runs are gone - so <see cref="DeleteJobAsync"/>
+    /// proceeded into an archive that a still-live run made impossible, failed, and retried forever.
+    /// </remarks>
+    internal async Task<CancellationSweep> CancelActiveRunsAsync(JobId jobId, CancellationToken cancellationToken = default)
     {
         var matches = _activeRuns
             .Where(entry => entry.Value.Job == jobId)
@@ -774,7 +919,7 @@ public sealed class CronScheduler(
             .ToList();
 
         if (matches.Count == 0)
-            return 0;
+            return new CancellationSweep(0, Observed: true);
 
         foreach (var active in matches)
             active.RequestOperatorCancel();
@@ -786,7 +931,11 @@ public sealed class CronScheduler(
 
         var graceSeconds = _optionsMonitor.CurrentValue?.ActiveRunCancellationGraceSeconds ?? 30;
         if (graceSeconds <= 0)
-            return matches.Count;
+        {
+            // No grace configured means no opportunity to observe. Report that honestly rather than
+            // claiming an observation that was never waited for.
+            return new CancellationSweep(matches.Count, Observed: false);
+        }
 
         // Linked source so the grace timer is torn down the instant the runs are observed, rather
         // than being left pending on the TimeProvider for the whole grace period on every delete.
@@ -809,7 +958,7 @@ public sealed class CronScheduler(
                 graceSeconds);
         }
 
-        return matches.Count;
+        return new CancellationSweep(matches.Count, Observed: winner == observed);
     }
 
     /// <summary>
@@ -852,14 +1001,30 @@ public sealed class CronScheduler(
         if (!job.DeleteJobAfterRun)
             return;
 
+        // #3517: already terminal. Once the bound is reached the job has been disabled and no
+        // further deletion is attempted for the life of this process - re-entering here would let
+        // the attempt count (and the error) keep growing, which is the defect.
+        if (_oneShotDeleteFailures.TryGetValue(job.Id.Value, out var priorFailures) && priorFailures >= MaxOneShotDeleteAttempts)
+        {
+            _logger.LogDebug(
+                "One-shot removal not re-attempted for job '{JobId}': it already failed {Attempts} times and was disabled.",
+                job.Id,
+                priorFailures);
+            return;
+        }
+
         try
         {
             var latest = await _cronStore.GetAsync(job.Id, CancellationToken.None).ConfigureAwait(false);
             if (latest is null)
+            {
+                _oneShotDeleteFailures.TryRemove(job.Id.Value, out _);
                 return;
+            }
 
             if (!latest.DeleteJobAfterRun)
             {
+                _oneShotDeleteFailures.TryRemove(job.Id.Value, out _);
                 _logger.LogDebug(
                     "One-shot removal skipped for job '{JobId}': deleteJobAfterRun was cleared while the run was in flight.",
                     job.Id);
@@ -867,6 +1032,7 @@ public sealed class CronScheduler(
             }
 
             await DeleteJobAsync(job.Id, CancellationToken.None).ConfigureAwait(false);
+            _oneShotDeleteFailures.TryRemove(job.Id.Value, out _);
             _logger.LogInformation(
                 "Deleted one-shot cron job '{JobId}' ('{JobName}') after its terminal run (deleteJobAfterRun).",
                 job.Id,
@@ -874,10 +1040,70 @@ public sealed class CronScheduler(
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
+            var failures = _oneShotDeleteFailures.AddOrUpdate(job.Id.Value, 1, static (_, current) => current + 1);
+
+            if (failures < MaxOneShotDeleteAttempts)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to delete one-shot cron job '{JobId}' after its run (attempt {Attempt} of {Max}). The run outcome is "
+                    + "unaffected; removal will be retried after the next run.",
+                    job.Id,
+                    failures,
+                    MaxOneShotDeleteAttempts);
+                return;
+            }
+
+            // #3517: the bound. Past this point retrying is not a policy, it is a stuck job
+            // re-emitting an identical error every schedule interval forever - 81% of the platform's
+            // whole error budget in the reported window. Drive the job to a TERMINAL state instead
+            // and say so exactly once.
+            await DisableUndeletableOneShotJobAsync(job, failures, ex).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Terminal state for a one-shot job whose deletion has failed <see cref="MaxOneShotDeleteAttempts"/>
+    /// times: disabled, so it stops firing, with a single actionable error (#3517).
+    /// </summary>
+    /// <remarks>
+    /// Disabling rather than force-deleting is deliberate. The delete failed for a reason nobody has
+    /// diagnosed yet, and silently dropping the row would destroy the only evidence an operator has.
+    /// A disabled job stops consuming a provider round-trip every interval, stops re-emitting the
+    /// error, and stays visible for a human to inspect - which is what "terminal" has to mean here.
+    /// </remarks>
+    private async Task DisableUndeletableOneShotJobAsync(CronJob job, int failures, Exception cause)
+    {
+        try
+        {
+            var latest = await _cronStore.GetAsync(job.Id, CancellationToken.None).ConfigureAwait(false);
+            if (latest is null)
+            {
+                _oneShotDeleteFailures.TryRemove(job.Id.Value, out _);
+                return;
+            }
+
+            await _cronStore.UpdateDefinitionAsync(latest with { Enabled = false }, expectedOwnership: null, CancellationToken.None).ConfigureAwait(false);
+            await _cronStore.SetNextRunAtAsync(job.Id, null, CancellationToken.None).ConfigureAwait(false);
+
+            _logger.LogError(
+                cause,
+                "One-shot cron job '{JobId}' ('{JobName}') could not be deleted after {Attempts} attempts and has been "
+                + "DISABLED so it stops firing. This is the terminal outcome: no further deletion attempts will be made. "
+                + "Investigate the cause below and remove the job manually.",
+                job.Id,
+                job.Name,
+                failures);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort to the last: this runs from a finally and must never escape it.
+            _logger.LogError(
                 ex,
-                "Failed to delete one-shot cron job '{JobId}' after its run. The run outcome is unaffected; removal will be retried after the next run.",
-                job.Id);
+                "One-shot cron job '{JobId}' could not be deleted after {Attempts} attempts, and disabling it also failed. "
+                + "The job requires manual removal.",
+                job.Id,
+                failures);
         }
     }
 
@@ -1827,7 +2053,10 @@ public sealed class CronScheduler(
             // #2552: the declarative surface goes through the same shared boundary as the API so
             // the two cannot drift. A config-declared job with a credential-bearing or non-http(s)
             // webhook URL is skipped loudly rather than materialised into the store.
-            if (!CronWebhookUrl.TryNormalize(configuredJob.WebhookUrl, out var normalizedWebhookUrl, out var webhookRejectionReason))
+            // #3779: and with the same operator-configured blocked-host list, read off the very
+            // options instance being reconciled - so a host the operator blocked cannot enter the
+            // store through the declarative door after being refused at the API one.
+            if (!CronWebhookUrl.TryNormalize(configuredJob.WebhookUrl, options.WebhookBlockedHosts, out var normalizedWebhookUrl, out var webhookRejectionReason))
             {
                 // #2745: log the rule-specific reason so an operator can tell a blocked address
                 // class apart from a scheme/credentials rejection without reading the source.
@@ -1916,7 +2145,7 @@ public sealed class CronScheduler(
 
             // #2133: config-sync is a definition write only; runtime/conversation columns
             // are scheduler/CAS-owned and must not be round-tripped here.
-            await _cronStore.UpdateDefinitionAsync(merged, ct).ConfigureAwait(false);
+            await _cronStore.UpdateDefinitionAsync(merged, expectedOwnership: null, ct).ConfigureAwait(false);
         }
     }
 
