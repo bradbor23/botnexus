@@ -283,9 +283,13 @@ structure.
 - `IExecApprovalManager.Issue/TryRedeem` is the usable primitive. A token is bound to **session
   plus canonical action** with a 15-minute TTL, so an approval for one action cannot be spent on
   another. This is what the mutating path must use.
-- `ToolPolicyProvider.RequiresApproval` is **not** interactive. Its own comment: "Approval is
-  required and there is no workflow at this seam that can obtain it" - it applies a configured
-  fallback posture, deny or allow. Useful as an outer guard, useless as an ask-a-human loop.
+- `IToolPolicyProvider.RequiresApproval` is **not** interactive - it returns a bool. The seam that
+  calls it says so outright, in `ToolPolicyHookHandler.cs`: "Approval is required and there is no
+  workflow at this seam that can obtain it. Apply the configured fallback posture instead of falling
+  through silently." It then applies `GetApprovalFallback`, deny or allow. Useful as an outer guard,
+  useless as an ask-a-human loop.
+  (Declared on `IToolPolicyProvider` in `Gateway.Contracts/Security/ToolPolicy.cs`, implemented in
+  `Gateway/Security/DefaultToolPolicyProvider.cs`; the comment is in the caller, not either of them.)
 - Therefore approval must be **enforced in the tool**, never in `SOUL.md`. A prompt-level rule is a
   preference that a confused turn or injected text bypasses silently, which is the same reasoning
   that keeps credentials out of agent context.
