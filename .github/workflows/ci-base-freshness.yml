@@ -25,6 +25,16 @@ name: "CI: Base Freshness & Main Health"
 on:
   pull_request:
     branches: [ main ]
+  # Fires the moment main's build CONCLUDES, so a red main is surfaced in seconds
+  # rather than whenever the scheduler next happens to run. Deliberately not `push`:
+  # on a push the newest CI run for main is the one that push just queued, whose
+  # conclusion is still null, and the probe below would read that as "not failure"
+  # and report green on every single merge - a false green masking the real result
+  # minutes later.
+  workflow_run:
+    workflows: ["CI: Build & Test"]
+    branches: [ main ]
+    types: [ completed ]
   schedule:
     # Every 15 minutes: a red main is detected within one gate cycle rather than
     # being discovered hours later by whoever opens the next unrelated PR.
@@ -173,8 +183,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
+          # --status completed is load-bearing: an in-flight run reports conclusion
+          # null, which is not "failure", so without this filter the probe would call a
+          # main whose tests are still running green.
           RUN_JSON="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow 'CI: Build & Test' \
-            --branch main --limit 1 --json conclusion,databaseId,headSha,url \
+            --branch main --status completed --limit 1 --json conclusion,databaseId,headSha,url \
             --jq '.[0] // empty')"
           if [ -z "$RUN_JSON" ]; then
             echo "No completed run found for main; nothing to report." >> "$GITHUB_STEP_SUMMARY"
