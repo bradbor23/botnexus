@@ -51,17 +51,17 @@
         <a href="." class="reload">Reload</a>
         <span class="dismiss">X</span>
     </div>
-    <script src="js/errorReporting.js"></script>
-    <script src="js/marked.min.js"></script>
-    <script src="js/purify.min.js"></script>
-    <script src="js/markdown.js"></script>
-    <script src="js/chat.js"></script>
-    <script src="js/audio.js"></script>
-    <script src="js/splitter.js"></script>
-    <script src="js/canvasBridge.js"></script>
-    <script src="js/toolFrame.js"></script>
-    <script src="js/desktopNotifications.js"></script>
-    <script src="js/conversationSwitcher.js"></script>
+    <script src="js/errorReporting.js?v=ds18"></script>
+    <script src="js/marked.min.js?v=ds18"></script>
+    <script src="js/purify.min.js?v=ds18"></script>
+    <script src="js/markdown.js?v=ds18"></script>
+    <script src="js/chat.js?v=ds18"></script>
+    <script src="js/audio.js?v=ds18"></script>
+    <script src="js/splitter.js?v=ds18"></script>
+    <script src="js/canvasBridge.js?v=ds18"></script>
+    <script src="js/toolFrame.js?v=ds18"></script>
+    <script src="js/desktopNotifications.js?v=ds18"></script>
+    <script src="js/conversationSwitcher.js?v=ds18"></script>
     <script>
         // Clipboard helper for copy-to-clipboard via JS interop
         window.BotNexus = window.BotNexus || {};
@@ -72,7 +72,7 @@
             return Promise.resolve(false);
         };
     </script>
-    <script src="js/bootDiagnostics.js"></script>
+    <script src="js/bootDiagnostics.js?v=ds18"></script>
     <script src="_framework/blazor.webassembly#[.{fingerprint}].js" autostart="false"></script>
     <script>
         // #2880: default autostart leaves a failed boot as an unhandled rejection, so the static
@@ -81,7 +81,7 @@
         // actionable panel, and distinguishes an auth-proxy login interstitial from a real fault.
         window.BotNexusBoot.startBlazor();
     </script>
-    <script src="js/swUpdate.js"></script>
+    <script src="js/swUpdate.js?v=ds18"></script>
     <script>
         // Register the PWA service worker so Edge/Chromium treats the portal as installable.
         // #2591: registration alone let a cached worker pin a stale bundle forever, so this goes
