@@ -1,23 +1,46 @@
 namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 
 /// <summary>
-/// The rendered shape of the desktop conversation switcher: the grouped rows to draw, plus the
-/// same rows flattened into the exact order they appear on screen.
+/// One selectable row in the conversation switcher: a conversation plus the agent that owns it.
 /// </summary>
-/// <param name="Groups">
-/// Labelled groups in render order, already partitioned by <see cref="PortalConversationGrouping"/>.
-/// Never contains an empty group.
-/// </param>
+/// <remarks>
+/// The owning agent is carried explicitly because <see cref="ConversationState"/> does not know it -
+/// it has no <c>AgentId</c> field, since it is always stored inside the agent that owns it. Once the
+/// switcher can list another agent's conversations, "which agent does this row belong to" stops
+/// being answerable from ambient context and has to travel with the row, or selecting a row would
+/// route to the wrong agent.
+/// </remarks>
+/// <param name="AgentId">The agent that owns <paramref name="Conversation"/>.</param>
+/// <param name="AgentDisplayName">That agent's display name, for labelling a cross-agent row.</param>
+/// <param name="Conversation">The conversation this row opens.</param>
+/// <param name="GroupLabel">The label of the group this row renders under.</param>
+/// <param name="IsOtherAgent">True when this row belongs to an agent other than the active one.</param>
+public sealed record ConversationSwitcherRow(
+    string AgentId,
+    string AgentDisplayName,
+    ConversationState Conversation,
+    string GroupLabel,
+    bool IsOtherAgent);
+
+/// <summary>A labelled group of switcher rows, in render order. Never empty.</summary>
+/// <param name="Label">The group heading.</param>
+/// <param name="Rows">The rows in the group, already in display order.</param>
+public sealed record ConversationSwitcherGroup(string Label, IReadOnlyList<ConversationSwitcherRow> Rows);
+
+/// <summary>
+/// The rendered shape of the conversation switcher: the grouped rows to draw, plus the same rows
+/// flattened into the exact order they appear on screen.
+/// </summary>
+/// <param name="Groups">Labelled groups in render order. Never contains an empty group.</param>
 /// <param name="Flattened">
-/// Every conversation in <paramref name="Groups"/>, concatenated group by group in render order.
-/// The keyboard highlight is an index into THIS list, which is why it is built here beside the
-/// groups rather than re-derived by the component: a flatten computed separately from the render
-/// could disagree with what the user sees, and arrow-down would then select a different row from
-/// the highlighted one.
+/// Every row in <paramref name="Groups"/>, concatenated group by group in render order. The keyboard
+/// highlight is an index into THIS list, which is why it is built here beside the groups rather than
+/// re-derived by the component: a flatten computed separately from the render could disagree with
+/// what the user sees, and arrow-down would then select a different row from the highlighted one.
 /// </param>
 public sealed record ConversationSwitcherView(
-    IReadOnlyList<PortalConversationGroup> Groups,
-    IReadOnlyList<ConversationState> Flattened)
+    IReadOnlyList<ConversationSwitcherGroup> Groups,
+    IReadOnlyList<ConversationSwitcherRow> Flattened)
 {
     /// <summary>An empty view - no groups, nothing to highlight.</summary>
     public static readonly ConversationSwitcherView Empty = new([], []);
@@ -25,22 +48,23 @@ public sealed record ConversationSwitcherView(
     /// <summary>Total rows across all groups; the bound for a keyboard highlight index.</summary>
     public int Count => Flattened.Count;
 
-    /// <summary>True when the query matched nothing (or the agent has no switchable conversations).</summary>
+    /// <summary>True when the query matched nothing (or there are no switchable conversations).</summary>
     public bool IsEmpty => Flattened.Count == 0;
 }
 
 /// <summary>
-/// Builds the desktop conversation switcher's contents: which conversations are switchable, how a
-/// typed query narrows them, and how the survivors group.
+/// Builds the conversation switcher's contents: which conversations are switchable, how a typed
+/// query narrows them, and how the survivors group.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This exists as a pure function rather than as logic inside the component so the three rules that
-/// decide what a user can reach - visibility, archived-ness and the query match - are testable
+/// This exists as a pure function rather than as logic inside the component so the rules that decide
+/// what a user can reach - visibility, archived-ness, agent scope and the query match - are testable
 /// without rendering, and so the switcher cannot drift from the sidebar's own notion of which
-/// conversations exist. Grouping is <b>delegated</b> to <see cref="PortalConversationGrouping.ForPicker"/>,
-/// the single client-wide partition the desktop sidebar and the mobile picker already share; this
-/// type deliberately adds no fifth group and re-implements no precedence rule.
+/// conversations exist. Grouping of the active agent's rows is <b>delegated</b> to
+/// <see cref="PortalConversationGrouping.ForPicker"/>, the single client-wide partition the desktop
+/// sidebar and the mobile picker already share; this type deliberately adds no group of its own to
+/// that partition and re-implements no precedence rule.
 /// </para>
 /// <para>
 /// <b>Sections are intentionally not honoured.</b> The desktop sidebar subtracts a section-assigned
@@ -53,45 +77,136 @@ public sealed record ConversationSwitcherView(
 /// </remarks>
 public static class ConversationSwitcherModel
 {
+    /// <summary>The heading for conversations belonging to agents other than the active one.</summary>
+    public const string OtherAgentsLabel = "Other agents";
+
     /// <summary>
-    /// Build the switcher view for one agent's conversations under a query.
+    /// Build the switcher view for the active agent, extending to every other agent once the user
+    /// has typed something.
     /// </summary>
-    /// <param name="conversations">The agent's conversations. Enumerated once.</param>
+    /// <param name="currentAgentId">The agent whose panel the switcher is mounted in.</param>
+    /// <param name="agents">
+    /// Every agent in the store. All of them already carry their conversations: the portal fetches
+    /// conversations for every agent during bootstrap (<c>PortalLoadService</c> fans
+    /// <c>GetConversationsAsync</c> across the whole roster), so cross-agent search needs no
+    /// additional request and no loading state.
+    /// </param>
     /// <param name="selectionSource">Current view-selection source, fed to the render projection.</param>
     /// <param name="cronConversationIds">
-    /// Authoritative cron-job to conversation-id map, or null. Passed straight through to the
-    /// shared grouping helper; a null/empty set degrades to projection-only grouping exactly as it
-    /// does for the sidebar and the mobile picker.
+    /// Authoritative cron-job to conversation-id map, or null. Passed straight through to the shared
+    /// grouping helper; a null/empty set degrades to projection-only grouping exactly as it does for
+    /// the sidebar and the mobile picker.
     /// </param>
     /// <param name="query">The typed filter. Null, empty or whitespace means "no filter".</param>
     /// <returns>The grouped and flattened view.</returns>
     public static ConversationSwitcherView Build(
-        IEnumerable<ConversationState> conversations,
+        string currentAgentId,
+        IEnumerable<AgentState> agents,
         SelectionSource selectionSource,
         IReadOnlySet<string>? cronConversationIds,
         string? query)
     {
-        ArgumentNullException.ThrowIfNull(conversations);
+        ArgumentNullException.ThrowIfNull(agents);
 
-        // Visibility first: PortalListOrdering.IsUserFacingConversation is the ONE predicate for
-        // "may the user see this at all". PortalConversationGrouping.ForPicker does not apply it -
-        // it partitions whatever it is handed - so omitting it here would let runtime-internal
-        // bookkeeping threads (ConversationVisibility.InternalHidden) into the switcher even though
-        // the sidebar hides them. Archived rows are dropped for the same reason the cold-start
-        // resolver drops them: they are not somewhere the user can switch TO.
-        var candidates = conversations
-            .Where(PortalListOrdering.IsUserFacingConversation)
-            .Where(c => !PortalListOrdering.IsArchivedConversation(c))
-            .Where(c => Matches(c, query))
-            .ToList();
+        var roster = agents.ToList();
+        var current = roster.FirstOrDefault(a => string.Equals(a.AgentId, currentAgentId, StringComparison.Ordinal));
 
-        if (candidates.Count == 0)
+        var groups = new List<ConversationSwitcherGroup>();
+
+        if (current is not null)
+            groups.AddRange(BuildCurrentAgentGroups(current, selectionSource, cronConversationIds, query));
+
+        var otherAgents = BuildOtherAgentsGroup(currentAgentId, roster, query);
+        if (otherAgents is not null)
+            groups.Add(otherAgents);
+
+        if (groups.Count == 0)
             return ConversationSwitcherView.Empty;
 
-        var groups = PortalConversationGrouping.ForPicker(candidates, selectionSource, cronConversationIds);
-        var flattened = groups.SelectMany(g => g.Conversations).ToList();
-        return new ConversationSwitcherView(groups, flattened);
+        return new ConversationSwitcherView(groups, groups.SelectMany(g => g.Rows).ToList());
     }
+
+    /// <summary>
+    /// The active agent's rows, partitioned by the shared picker grouping.
+    /// </summary>
+    private static List<ConversationSwitcherGroup> BuildCurrentAgentGroups(
+        AgentState agent,
+        SelectionSource selectionSource,
+        IReadOnlySet<string>? cronConversationIds,
+        string? query)
+    {
+        var candidates = Reachable(agent).Where(c => Matches(c, query)).ToList();
+        if (candidates.Count == 0)
+            return [];
+
+        return PortalConversationGrouping.ForPicker(candidates, selectionSource, cronConversationIds)
+            .Select(g => new ConversationSwitcherGroup(
+                g.Label,
+                g.Conversations
+                    .Select(c => new ConversationSwitcherRow(agent.AgentId, agent.DisplayName, c, g.Label, IsOtherAgent: false))
+                    .ToList()))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Matches from every OTHER agent, as a single trailing group, or null when there are none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Only when the user has typed something.</b> With an empty query this returns null, so an
+    /// unfiltered switcher lists exactly what it always did - the current agent. Listing every
+    /// conversation of every agent by default would put hundreds of rows behind a control whose
+    /// entire purpose is to make one conversation quick to reach.
+    /// </para>
+    /// <para>
+    /// <b>One flat group, not one group per agent.</b> A deployment with sixteen agents would
+    /// otherwise render sixteen headings above one or two rows each. The owning agent is shown on
+    /// each row instead, and rows sort by agent then title so an agent's matches stay together.
+    /// </para>
+    /// <para>
+    /// Observer/read-only agents are excluded, matching the sidebar's own agent dropdown, which
+    /// lists only <c>!IsReadOnly</c> agents. Surfacing conversations here for an agent the user
+    /// cannot otherwise select would offer a destination the rest of the portal hides.
+    /// </para>
+    /// </remarks>
+    private static ConversationSwitcherGroup? BuildOtherAgentsGroup(
+        string currentAgentId,
+        IEnumerable<AgentState> roster,
+        string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        var rows = roster
+            .Where(a => !string.Equals(a.AgentId, currentAgentId, StringComparison.Ordinal))
+            .Where(a => !a.IsReadOnly)
+            .OrderBy(a => a.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(a => a.AgentId, StringComparer.Ordinal)
+            .SelectMany(a => Reachable(a)
+                .Where(c => Matches(c, query))
+                .OrderByDescending(c => c.UpdatedAt)
+                .Select(c => new ConversationSwitcherRow(a.AgentId, a.DisplayName, c, OtherAgentsLabel, IsOtherAgent: true)))
+            .ToList();
+
+        return rows.Count == 0 ? null : new ConversationSwitcherGroup(OtherAgentsLabel, rows);
+    }
+
+    /// <summary>
+    /// The conversations of one agent that the user may switch to at all.
+    /// </summary>
+    /// <remarks>
+    /// Visibility first: <see cref="PortalListOrdering.IsUserFacingConversation"/> is the ONE
+    /// predicate for "may the user see this". <see cref="PortalConversationGrouping.ForPicker"/> does
+    /// not apply it - it partitions whatever it is handed - so omitting it would let runtime-internal
+    /// bookkeeping threads into the switcher even though the sidebar hides them. Archived rows are
+    /// dropped for the same reason the cold-start resolver drops them: they are not somewhere the
+    /// user can switch TO.
+    /// </remarks>
+    private static IEnumerable<ConversationState> Reachable(AgentState agent) =>
+        agent.Conversations.Values
+            .ToArray() // the live dictionary is mutated by SignalR handlers mid-render (#2320)
+            .Where(PortalListOrdering.IsUserFacingConversation)
+            .Where(c => !PortalListOrdering.IsArchivedConversation(c));
 
     /// <summary>
     /// True when a conversation survives the typed query.
@@ -154,5 +269,4 @@ public static class ConversationSwitcherModel
         return string.Equals(groupLabel, PortalConversationGrouping.ScheduledLabel, StringComparison.Ordinal)
             || string.Equals(groupLabel, PortalConversationGrouping.WebhooksLabel, StringComparison.Ordinal);
     }
-
 }

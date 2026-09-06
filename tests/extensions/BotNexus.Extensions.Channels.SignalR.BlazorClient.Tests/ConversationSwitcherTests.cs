@@ -63,6 +63,19 @@ public sealed class ConversationSwitcherTests : IDisposable
         _store.SelectView("agent-1", string.Empty, SelectionSource.UserClick);
     }
 
+    /// <summary>Seeds two agents so the cross-agent path has somewhere to search.</summary>
+    private void SeedTwoAgents(ConversationSummaryDto[] mine, ConversationSummaryDto[] theirs)
+    {
+        _store.SeedAgents([new AgentSummary("agent-1", "Alpha"), new AgentSummary("agent-2", "Beta")]);
+        _store.SeedConversations("agent-1", mine);
+        _store.SeedConversations("agent-2", theirs);
+        _store.SelectView("agent-1", string.Empty, SelectionSource.UserClick);
+    }
+
+    private static ConversationSummaryDto ConversationFor(string agentId, string id, string title) => new(
+        ConversationId: id, AgentId: agentId, Title: title, IsDefault: false, Status: "Active",
+        ActiveSessionId: null, BindingCount: 0, CreatedAt: DateTimeOffset.UtcNow, UpdatedAt: DateTimeOffset.UtcNow);
+
     private IRenderedComponent<ConversationSwitcher> Render(string? active = "c-1") =>
         _ctx.Render<ConversationSwitcher>(p => p
             .Add(c => c.AgentId, "agent-1")
@@ -420,5 +433,117 @@ public sealed class ConversationSwitcherTests : IDisposable
         var cut = Render(active: "c-1");
 
         Assert.Contains("Alpha", Trigger(cut).GetAttribute("aria-label") ?? "", StringComparison.Ordinal);
+    }
+    // ---- cross-agent search -------------------------------------------------------------------
+
+    [Fact]
+    public void OtherAgentsAreNotListedUntilSomethingIsTyped()
+    {
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "c-1", "Mine")],
+            [ConversationFor("agent-2", "c-2", "Theirs")]);
+
+        var cut = Render();
+        Open(cut);
+
+        Assert.Single(Rows(cut));
+        Assert.Empty(cut.FindAll("[data-testid='conversation-switcher-agent-label']"));
+    }
+
+    [Fact]
+    public void TypingSurfacesAnotherAgentsConversationLabelledWithItsAgent()
+    {
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "c-1", "Deploy notes")],
+            [ConversationFor("agent-2", "c-2", "Deploy runbook")]);
+
+        var cut = Render();
+        Open(cut);
+        Input(cut).Input("deploy");
+
+        var foreign = Rows(cut).Single(r => r.GetAttribute("data-conversation-id") == "c-2");
+        Assert.Equal("agent-2", foreign.GetAttribute("data-agent-id"));
+        Assert.Contains("Beta", foreign.TextContent, StringComparison.Ordinal);
+        Assert.Contains(ConversationSwitcherModel.OtherAgentsLabel,
+            cut.FindAll(".conversation-switcher-group-label").Select(e => e.TextContent.Trim()));
+    }
+
+    [Fact]
+    public void SelectingAnotherAgentsConversationSwitchesAgentAndNavigatesThere()
+    {
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "c-1", "Deploy notes")],
+            [ConversationFor("agent-2", "c-2", "Deploy runbook")]);
+
+        var cut = Render();
+        Open(cut);
+        Input(cut).Input("deploy");
+        Rows(cut).Single(r => r.GetAttribute("data-conversation-id") == "c-2").Click();
+
+        // routed to the OWNING agent, not the one the switcher was mounted in
+        _interaction.Received(1).SelectConversationAsync("agent-2", "c-2");
+        _interaction.DidNotReceive().SelectConversationAsync("agent-1", "c-2");
+        Assert.Equal("agent-2", _store.ActiveAgentId);
+
+        var nav = _ctx.Services.GetRequiredService<NavigationManager>();
+        Assert.EndsWith("agent/agent-2/conversation/c-2", nav.Uri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnterOpensAHighlightedCrossAgentRowOnItsOwnAgent()
+    {
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "c-1", "Deploy notes")],
+            [ConversationFor("agent-2", "c-2", "Deploy runbook")]);
+
+        var cut = Render();
+        Open(cut);
+        Input(cut).Input("deploy");
+
+        // walk the rendered list to the foreign row rather than assuming its index
+        var ids = RenderedIds(cut);
+        for (var i = 0; i < ids.Count && HighlightedId(cut) != "c-2"; i++)
+            Input(cut).KeyDown(new KeyboardEventArgs { Key = "ArrowDown" });
+
+        Assert.Equal("c-2", HighlightedId(cut));
+        Input(cut).KeyDown(new KeyboardEventArgs { Key = "Enter" });
+
+        _interaction.Received(1).SelectConversationAsync("agent-2", "c-2");
+    }
+
+    [Fact]
+    public void AQueryMatchingOnlyAnotherAgentStillFindsIt()
+    {
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "c-1", "Nothing relevant")],
+            [ConversationFor("agent-2", "c-2", "Gateway restart guide")]);
+
+        var cut = Render();
+        Open(cut);
+        Input(cut).Input("gateway");
+
+        var rows = Rows(cut);
+        Assert.Single(rows);
+        Assert.Equal("c-2", rows[0].GetAttribute("data-conversation-id"));
+        Assert.Empty(cut.FindAll("[data-testid='conversation-switcher-empty']"));
+    }
+
+    [Fact]
+    public void TheActiveMarkerNeverLandsOnAnotherAgentsRowWithTheSameId()
+    {
+        // Two agents can hold conversations with the same id only by coincidence, but if that
+        // happens the foreign row must not be painted as the one on screen.
+        SeedTwoAgents(
+            [ConversationFor("agent-1", "dup", "Deploy mine")],
+            [ConversationFor("agent-2", "dup", "Deploy theirs")]);
+
+        var cut = Render(active: "dup");
+        Open(cut);
+        Input(cut).Input("deploy");
+
+        var foreign = Rows(cut).Single(r => r.GetAttribute("data-agent-id") == "agent-2");
+        Assert.Equal("false", foreign.GetAttribute("aria-selected"));
+        var own = Rows(cut).Single(r => r.GetAttribute("data-agent-id") == "agent-1");
+        Assert.Equal("true", own.GetAttribute("aria-selected"));
     }
 }

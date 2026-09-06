@@ -8372,6 +8372,23 @@ h3.conversation-title.editable:hover {
     background: var(--color-accent-wash-soft);
 }
 
+/* The owning agent on a cross-agent row. Rendered before the title and allowed to shrink only
+   after the title has, so "which agent" stays readable when both are long. */
+.conversation-switcher-agent {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 40%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    padding: 0.05rem 0.35rem;
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+}
+
 .conversation-switcher-row-title {
     flex: 1;
     min-width: 0;
