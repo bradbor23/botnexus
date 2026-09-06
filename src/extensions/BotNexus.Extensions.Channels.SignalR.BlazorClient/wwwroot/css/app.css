@@ -8233,3 +8233,180 @@ h3.conversation-title.editable:hover {
     border-color: var(--accent);
     color: var(--accent);
 }
+
+/* ==========================================================================
+   Conversation switcher
+   Type-to-filter conversation picker anchored to the chat header title.
+   ========================================================================== */
+
+.conversation-switcher {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.conversation-switcher-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.conversation-switcher-trigger:hover,
+.conversation-switcher-trigger[aria-expanded="true"] {
+    background: var(--bg-hover);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+.conversation-switcher-caret {
+    font-size: 0.7rem;
+}
+
+/* Transparent dismiss surface. Sits under the panel but over everything else, so the first click
+   anywhere outside closes the switcher instead of activating what was clicked. */
+.conversation-switcher-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+}
+
+/* Fixed, NOT absolute. Three ancestors of this panel - .chat-title-heading-row, .chat-title-stack
+   and .chat-header - set `overflow: hidden` so a long conversation title truncates rather than
+   painting beneath the header actions (#2141, #2441). Those rules are load-bearing, and an
+   absolutely positioned descendant is clipped by all three, which shaved the panel to nothing
+   inside a ~28px header. `position: fixed` escapes the clipping because none of those ancestors
+   establishes a containing block. Offsets are then viewport-relative and are set by
+   js/conversationSwitcher.js on open; with no JS the auto offsets leave the panel at its
+   hypothetical static position, i.e. still beside the trigger and still unclipped. */
+.conversation-switcher-panel {
+    position: fixed;
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    width: 22rem;
+    /* The panel is anchored to a header near the left edge of the canvas, so on a narrow window a
+       fixed 22rem would overflow the viewport. */
+    max-width: calc(100vw - 2rem);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-raised);
+    overflow: hidden;
+}
+
+.conversation-switcher-search {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+}
+
+.conversation-switcher-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+}
+
+.conversation-switcher-input::placeholder {
+    color: var(--text-muted);
+}
+
+.conversation-switcher-list {
+    /* Bounded so a long list scrolls inside the panel rather than running off the viewport. */
+    max-height: 24rem;
+    overflow-y: auto;
+    padding: 0.25rem 0;
+}
+
+.conversation-switcher-group-label {
+    padding: 0.35rem 0.75rem 0.2rem;
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.conversation-switcher-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    color: var(--text-primary);
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    text-align: left;
+    cursor: pointer;
+}
+
+/* Keyboard highlight and mouse hover are the SAME visual state, driven by the same _highlight
+   index, so arrowing and pointing cannot disagree about which row Enter would take. */
+.conversation-switcher-row.highlighted {
+    background: var(--bg-hover);
+}
+
+.conversation-switcher-row.active {
+    border-left-color: var(--accent);
+    background: var(--color-accent-wash-soft);
+}
+
+.conversation-switcher-row-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.conversation-switcher-badge {
+    flex-shrink: 0;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-muted);
+}
+
+.conversation-switcher-badge.readonly {
+    border-color: transparent;
+    background: var(--bg-tertiary);
+}
+
+.conversation-switcher-unread {
+    flex-shrink: 0;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+.conversation-switcher-empty {
+    padding: 0.75rem;
+    color: var(--text-muted);
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    text-align: center;
+}
