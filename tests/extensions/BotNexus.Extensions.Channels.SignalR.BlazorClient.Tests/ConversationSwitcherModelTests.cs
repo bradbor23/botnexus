@@ -30,8 +30,26 @@ public sealed class ConversationSwitcherModelTests
             UpdatedAt = DateTimeOffset.UtcNow,
         };
 
+    private static AgentState Agent(string agentId, string displayName, bool observer = false, params ConversationState[] conversations)
+    {
+        var agent = new AgentState { AgentId = agentId, DisplayName = displayName, IsObserverAgent = observer };
+        foreach (var c in conversations)
+            agent.Conversations[c.ConversationId] = c;
+        return agent;
+    }
+
+    /// <summary>Single-agent build - the common case, with only the active agent on the roster.</summary>
     private static ConversationSwitcherView Build(IEnumerable<ConversationState> conversations, string? query = null) =>
-        ConversationSwitcherModel.Build(conversations, SelectionSource.UserClick, null, query);
+        ConversationSwitcherModel.Build(
+            "a-1",
+            [Agent("a-1", "Alpha", false, conversations.ToArray())],
+            SelectionSource.UserClick,
+            null,
+            query);
+
+    /// <summary>Multi-agent build, for the cross-agent behaviour.</summary>
+    private static ConversationSwitcherView BuildRoster(string currentAgentId, IEnumerable<AgentState> roster, string? query) =>
+        ConversationSwitcherModel.Build(currentAgentId, roster, SelectionSource.UserClick, null, query);
 
     [Fact]
     public void NoQuery_ReturnsEveryReachableConversation()
@@ -48,7 +66,7 @@ public sealed class ConversationSwitcherModelTests
         var view = Build([Conv("c-1", "Daily Cost Monitor"), Conv("c-2", "Skill Review")], "COST");
 
         Assert.Single(view.Flattened);
-        Assert.Equal("c-1", view.Flattened[0].ConversationId);
+        Assert.Equal("c-1", view.Flattened[0].Conversation.ConversationId);
     }
 
     [Fact]
@@ -105,7 +123,7 @@ public sealed class ConversationSwitcherModelTests
         ]);
 
         Assert.Single(view.Flattened);
-        Assert.Equal("c-1", view.Flattened[0].ConversationId);
+        Assert.Equal("c-1", view.Flattened[0].Conversation.ConversationId);
     }
 
     [Fact]
@@ -123,7 +141,7 @@ public sealed class ConversationSwitcherModelTests
         var view = Build([Conv("c-1", "Live"), Conv("c-2", "Old", status: "Archived")]);
 
         Assert.Single(view.Flattened);
-        Assert.Equal("c-1", view.Flattened[0].ConversationId);
+        Assert.Equal("c-1", view.Flattened[0].Conversation.ConversationId);
     }
 
     [Fact]
@@ -147,8 +165,8 @@ public sealed class ConversationSwitcherModelTests
             Conv("c-cron", "Nightly", source: ConversationSource.Cron),
         ]);
 
-        var expected = view.Groups.SelectMany(g => g.Conversations.Select(c => c.ConversationId)).ToList();
-        Assert.Equal(expected, view.Flattened.Select(c => c.ConversationId).ToList());
+        var expected = view.Groups.SelectMany(g => g.Rows.Select(r => r.Conversation.ConversationId)).ToList();
+        Assert.Equal(expected, view.Flattened.Select(r => r.Conversation.ConversationId).ToList());
     }
 
     [Fact]
@@ -218,6 +236,163 @@ public sealed class ConversationSwitcherModelTests
         var chat = Conv("c-1", "Pinned ordinary", pinned: true);
 
         Assert.False(ConversationSwitcherModel.IsReadOnlyRow(chat, PortalConversationGrouping.PinnedLabel));
+    }
+
+    // ---- cross-agent search -------------------------------------------------------------------
+
+    [Fact]
+    public void WithNoQuery_OtherAgentsAreNotListed()
+    {
+        // An unfiltered switcher must list exactly what it always did: the current agent. Dumping
+        // every agent's conversations by default would bury the control's whole purpose.
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Mine")),
+            Agent("a-2", "Beta", false, Conv("c-2", "Theirs")),
+        ], query: null);
+
+        Assert.Single(view.Flattened);
+        Assert.Equal("c-1", view.Flattened[0].Conversation.ConversationId);
+        Assert.DoesNotContain(ConversationSwitcherModel.OtherAgentsLabel, view.Groups.Select(g => g.Label));
+    }
+
+    [Fact]
+    public void WithAQuery_MatchesFromOtherAgentsAppearUnderTheirOwnGroup()
+    {
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes")),
+            Agent("a-2", "Beta", false, Conv("c-2", "Deploy runbook")),
+        ], "deploy");
+
+        Assert.Equal(2, view.Count);
+        Assert.Equal(ConversationSwitcherModel.OtherAgentsLabel, view.Groups[^1].Label);
+
+        var foreign = view.Flattened.Single(r => r.IsOtherAgent);
+        Assert.Equal("c-2", foreign.Conversation.ConversationId);
+        Assert.Equal("a-2", foreign.AgentId);
+        Assert.Equal("Beta", foreign.AgentDisplayName);
+    }
+
+    [Fact]
+    public void OtherAgentsGroupIsAlwaysLast()
+    {
+        // It is the widening of the search, so it must never push the current agent's own matches
+        // down the list.
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes", pinned: true), Conv("c-3", "Deploy plan")),
+            Agent("a-2", "Beta", false, Conv("c-2", "Deploy runbook")),
+        ], "deploy");
+
+        Assert.Equal(ConversationSwitcherModel.OtherAgentsLabel, view.Groups[^1].Label);
+        Assert.All(view.Groups.Take(view.Groups.Count - 1), g => Assert.All(g.Rows, r => Assert.False(r.IsOtherAgent)));
+    }
+
+    [Fact]
+    public void CurrentAgentRowsAreNeverMarkedAsOtherAgent()
+    {
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes")),
+            Agent("a-2", "Beta", false, Conv("c-2", "Deploy runbook")),
+        ], "deploy");
+
+        var own = view.Flattened.Single(r => r.Conversation.ConversationId == "c-1");
+        Assert.False(own.IsOtherAgent);
+        Assert.Equal("a-1", own.AgentId);
+    }
+
+    [Fact]
+    public void ObserverAgentsAreExcludedFromCrossAgentResults()
+    {
+        // The sidebar's agent dropdown lists only !IsReadOnly agents, so surfacing an observer
+        // agent's conversation here would offer a destination the rest of the portal hides.
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes")),
+            Agent("a-obs", "Observer", true, Conv("c-obs", "Deploy watched")),
+        ], "deploy");
+
+        Assert.Single(view.Flattened);
+        Assert.Equal("c-1", view.Flattened[0].Conversation.ConversationId);
+    }
+
+    [Fact]
+    public void CrossAgentResultsRespectVisibilityAndArchivedRules()
+    {
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes")),
+            Agent("a-2", "Beta", false,
+                Conv("c-hidden", "Deploy internal", visibility: ConversationVisibility.InternalHidden),
+                Conv("c-old", "Deploy archived", status: "Archived"),
+                Conv("c-ok", "Deploy live")),
+        ], "deploy");
+
+        var foreignIds = view.Flattened.Where(r => r.IsOtherAgent).Select(r => r.Conversation.ConversationId).ToList();
+        Assert.Equal(new List<string> { "c-ok" }, foreignIds);
+    }
+
+    [Fact]
+    public void OtherAgentRowsSortByAgentNameThenRecency()
+    {
+        var older = DateTimeOffset.UtcNow.AddHours(-2);
+        var zed = Agent("a-z", "Zed", false, Conv("c-z", "Deploy z"));
+        var beta = new AgentState { AgentId = "a-2", DisplayName = "Beta" };
+        beta.Conversations["c-old"] = Conv("c-old", "Deploy older");
+        beta.Conversations["c-old"].UpdatedAt = older;
+        beta.Conversations["c-new"] = Conv("c-new", "Deploy newer");
+
+        var view = BuildRoster("a-1", [Agent("a-1", "Alpha", false), beta, zed], "deploy");
+
+        Assert.Equal(
+            new List<string> { "c-new", "c-old", "c-z" },
+            view.Flattened.Where(r => r.IsOtherAgent).Select(r => r.Conversation.ConversationId).ToList());
+    }
+
+    [Fact]
+    public void FlattenedOrderStillMatchesRenderOrderWithOtherAgents()
+    {
+        // The keyboard highlight indexes into Flattened, so the invariant has to survive the extra
+        // group - otherwise arrowing into cross-agent results opens the wrong conversation.
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Deploy notes"), Conv("c-p", "Deploy pinned", pinned: true)),
+            Agent("a-2", "Beta", false, Conv("c-2", "Deploy runbook")),
+        ], "deploy");
+
+        var expected = view.Groups.SelectMany(g => g.Rows.Select(r => r.Conversation.ConversationId)).ToList();
+        Assert.Equal(expected, view.Flattened.Select(r => r.Conversation.ConversationId).ToList());
+    }
+
+    [Fact]
+    public void AQueryMatchingOnlyAnotherAgent_StillReturnsThatAgentsRows()
+    {
+        // The point of the feature: the current agent has no match at all, and the user still finds
+        // the conversation.
+        var view = BuildRoster("a-1",
+        [
+            Agent("a-1", "Alpha", false, Conv("c-1", "Nothing relevant")),
+            Agent("a-2", "Beta", false, Conv("c-2", "Gateway restart guide")),
+        ], "gateway");
+
+        Assert.Single(view.Flattened);
+        Assert.True(view.Flattened[0].IsOtherAgent);
+        Assert.Equal("c-2", view.Flattened[0].Conversation.ConversationId);
+        Assert.Single(view.Groups);
+        Assert.Equal(ConversationSwitcherModel.OtherAgentsLabel, view.Groups[0].Label);
+    }
+
+    [Fact]
+    public void AnUnknownCurrentAgentStillSearchesEveryOtherAgent()
+    {
+        // Defensive: the parameter names an agent the store does not hold. The switcher degrades to
+        // cross-agent results rather than throwing or rendering empty.
+        var view = BuildRoster("a-missing", [Agent("a-2", "Beta", false, Conv("c-2", "Deploy runbook"))], "deploy");
+
+        Assert.Single(view.Flattened);
+        Assert.True(view.Flattened[0].IsOtherAgent);
     }
 
     [Fact]

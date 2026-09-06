@@ -56,7 +56,7 @@
                        value="@_query"
                        @oninput="OnQueryInput"
                        @onkeydown="OnKeyDownAsync"
-                       placeholder="Search conversations…"
+                       placeholder="Search all conversations…"
                        aria-label="Search conversations"
                        aria-controls="conversation-switcher-list"
                        autocomplete="off"
@@ -74,7 +74,7 @@
                 @if (view.IsEmpty)
                 {
                     <div class="conversation-switcher-empty" data-testid="conversation-switcher-empty">
-                        No conversations match &ldquo;@_query&rdquo;.
+                        No conversations match &ldquo;@_query&rdquo; in any agent.
                     </div>
                 }
                 else
@@ -85,19 +85,30 @@
                     @foreach (var group in view.Groups)
                     {
                         <div class="conversation-switcher-group-label">@group.Label</div>
-                        @foreach (var conversation in group.Conversations)
+                        @foreach (var row in group.Rows)
                         {
+                            var conversation = row.Conversation;
                             var index = flatIndex++;
-                            var isActive = string.Equals(conversation.ConversationId, ActiveConversationId, StringComparison.Ordinal);
+                            @* A row is "active" only when it is the conversation on screen AND belongs
+                               to this agent: two agents can hold conversations with the same id only
+                               by coincidence, but the owning agent is what makes the match meaningful. *@
+                            var isActive = !row.IsOtherAgent
+                                && string.Equals(conversation.ConversationId, ActiveConversationId, StringComparison.Ordinal);
                             var isReadOnly = ConversationSwitcherModel.IsReadOnlyRow(conversation, group.Label);
                             <button type="button"
                                     class="conversation-switcher-row @(index == _highlight ? "highlighted" : "") @(isActive ? "active" : "")"
                                     data-testid="conversation-switcher-row"
                                     data-conversation-id="@conversation.ConversationId"
+                                    data-agent-id="@row.AgentId"
                                     role="option"
                                     aria-selected="@(isActive ? "true" : "false")"
-                                    @onclick="() => SelectAsync(conversation.ConversationId)"
+                                    @onclick="() => SelectAsync(row)"
                                     @onmouseover="() => _highlight = index">
+                                @if (row.IsOtherAgent)
+                                {
+                                    <span class="conversation-switcher-agent"
+                                          data-testid="conversation-switcher-agent-label">@PortalText.SingleLine(row.AgentDisplayName)</span>
+                                }
                                 <span class="conversation-switcher-row-title"
                                       title="@PortalText.SingleLine(conversation.Title)">@PortalText.SingleLine(conversation.Title)</span>
                                 @if (conversation.IsDefault)
@@ -237,10 +248,12 @@
     }
 
     private ConversationSwitcherView BuildView() => ConversationSwitcherModel.Build(
-        // Materialised before the model walks it: agent.Conversations is the LIVE dictionary the
-        // SignalR handlers mutate, and enumerating it during a render raced an inbound conversation
-        // event into "Collection was modified" (#2320).
-        Agent?.Conversations.Values.ToArray() ?? [],
+        AgentId,
+        // Materialised before the model walks it: Store.Agents is the LIVE dictionary the SignalR
+        // handlers mutate, and enumerating it during a render raced an inbound event into
+        // "Collection was modified" (#2320). The model snapshots each agent's conversations for the
+        // same reason.
+        Store.Agents.Values.ToArray(),
         Store.ActiveSelectionSource,
         _cronConversationIds,
         _query);
@@ -314,7 +327,9 @@
 
         for (var i = 0; i < view.Flattened.Count; i++)
         {
-            if (string.Equals(view.Flattened[i].ConversationId, ActiveConversationId, StringComparison.Ordinal))
+            var row = view.Flattened[i];
+            if (!row.IsOtherAgent
+                && string.Equals(row.Conversation.ConversationId, ActiveConversationId, StringComparison.Ordinal))
                 return i;
         }
 
@@ -359,7 +374,7 @@
                 // keystroke, so an inbound archive event between the last render and this keypress
                 // can shrink it under a highlight that was in range when it was set.
                 if (_highlight >= 0 && _highlight < view.Count)
-                    await SelectAsync(view.Flattened[_highlight].ConversationId);
+                    await SelectAsync(view.Flattened[_highlight]);
                 break;
 
             case "Escape":
@@ -369,11 +384,29 @@
         }
     }
 
-    private async Task SelectAsync(string conversationId)
+    /// <summary>
+    /// Open the conversation a row points at, switching agent first when the row belongs to another.
+    /// </summary>
+    /// <remarks>
+    /// The agent switch mirrors what <c>MainLayout.OnAgentSelected</c> does for the sidebar dropdown:
+    /// promote the view with <see cref="SelectionSource.UserClick"/>, clear the agent's unread count,
+    /// then select the conversation so its history loads. It deliberately does NOT re-fetch the
+    /// agent's conversation list first - the portal seeded every agent's conversations at bootstrap,
+    /// and this row was built from that same store, so the conversation is known to exist.
+    /// </remarks>
+    private async Task SelectAsync(ConversationSwitcherRow row)
     {
         Close();
-        await Interaction.SelectConversationAsync(AgentId, conversationId);
-        NavigateToChat(conversationId);
+
+        if (row.IsOtherAgent)
+        {
+            Store.SelectView(row.AgentId, string.Empty, SelectionSource.UserClick);
+            if (Store.GetAgent(row.AgentId) is { UnreadCount: > 0 } target)
+                target.UnreadCount = 0;
+        }
+
+        await Interaction.SelectConversationAsync(row.AgentId, row.Conversation.ConversationId);
+        NavigateToChat(row.AgentId, row.Conversation.ConversationId);
     }
 
     /// <summary>
@@ -381,9 +414,9 @@
     /// rather than only mutating store state. Desktop-only path shape - the mobile shell has its own
     /// picker and its own /mobile/ prefix, and this component is never mounted there.
     /// </summary>
-    private void NavigateToChat(string conversationId)
+    private void NavigateToChat(string agentId, string conversationId)
     {
-        var relPath = $"agent/{Uri.EscapeDataString(AgentId)}/conversation/{Uri.EscapeDataString(conversationId)}";
+        var relPath = $"agent/{Uri.EscapeDataString(agentId)}/conversation/{Uri.EscapeDataString(conversationId)}";
         var current = Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/');
         if (!string.Equals(current, relPath, StringComparison.OrdinalIgnoreCase))
             Nav.NavigateTo(relPath);
