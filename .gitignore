@@ -58,6 +58,16 @@ config.local.json
 # must not be committable - this repository is public.
 *.env
 !*.env.example
+# Personal world data. Agent definitions, live config and credentials all live in
+# ~/.botnexus, outside this repository - nothing syncs them today. These rules are the
+# backstop for a copy pulled in here for convenience, since this repository is PUBLIC.
+# Verified against the index when added: no tracked file matches any of them.
+.botnexus/
+/agents/
+botnexus.env
+*.key
+*.pem
+sasl_passwd*
 *.log
 *.txt
 # Keep tracked .txt files despite the *.txt rule above
