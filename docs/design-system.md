@@ -785,7 +785,7 @@ Documented honestly, so a designer knows where the system does not yet hold.
 | **Icon tones do not theme.** The 33 generated tone rules are raw hex, chosen against a dark surface. | Icons keep dark-theme hues in light mode. Acceptable but not ideal; avoid relying on icon colour to carry meaning. |
 | **~29 legacy token aliases remain** (`--bg-primary`, `--border`, `--text-muted`, …) mapping onto the semantic names. | Two names for the same value. Prefer the `--color-*` names in new work. |
 | **`--radius` legacy alias** still used at many call sites. | Prefer `--radius-sm` / `--radius-lg` explicitly. |
-| **The mobile client does not share these tokens.** `BlazorClient.Mobile` has its own stylesheet and palette. | Anything designed for `/mobile` is a separate visual system today. Do not assume a portal token exists there. |
+| **The mobile client does not share these tokens.** `BlazorClient.Mobile` has its own stylesheet and palette. | Anything designed for `/mobile` is a separate visual system today. Do not assume a portal token exists there. Its cache-busting is now in place (`mobile.css?v=mN`), but its palette is still raw hex. |
 | **No "follow system" theme option.** | A light-mode OS user gets dark until they toggle. |
 
 ---
@@ -827,10 +827,30 @@ A plain `curl` reads the uncompressed file and will cheerfully confirm a change 
 user can see. This cost real time: several rounds of "verified, it is serving the
 fix" were all reading a file no browser ever receives.
 
-**Bump `?v=` in `index.html` whenever `app.css` changes.** It is hand-maintained
-and it is the cache key; a stale one leaves returning visitors on the old
-stylesheet. Bump it in the **source and rebuild** — editing the deployed copy
-leaves the compressed variant behind and reintroduces the problem above.
+**Bump `?v=` in `index.html` whenever any hand-maintained asset changes.** It is
+the cache key; a stale one leaves returning visitors on the old file. Bump it in
+the **source and rebuild** — editing the deployed copy leaves the compressed
+variant behind and reintroduces the problem above.
+
+Each client carries **one token**, on its stylesheet and on every script it adds
+itself:
+
+| client | token | covers |
+|---|---|---|
+| portal | `app.css?v=dsNN` | `app.css` + 13 `js/*.js` |
+| mobile | `mobile.css?v=mN` | `mobile.css` + 9 `js/*.js` |
+
+One number per client rather than one per asset, because this whole class of bug
+exists *because* a hand-maintained version was forgotten — halving the things to
+forget is worth the occasional redundant fetch. Assets under `_framework` are
+fingerprinted by the Blazor build and must not be given a query string; that
+fights the build rather than helping it.
+
+`CI: CSS Cache-Buster Guard` fails a PR that changes `app.css` without moving the
+portal token. It exists because #30 shipped 20 unstyled component rules past
+thirteen green checks — nothing else in CI looks at the pairing, since the tests
+pass, the rules are in the file, and even `curl` confirms they are served. The
+guard does not yet cover `mobile.css` or the scripts.
 
 A service worker also ships (`service-worker.js`, registered from
 `index.html`). It was previously believed to be the cause of stale assets; that
@@ -874,8 +894,8 @@ rather than as the explanation.
 2. Move icon tones onto tokens so they respond to the theme.
 3. Retire the legacy colour aliases once no rule references them.
 4. Migrate remaining `var(--radius)` call sites onto the explicit names.
-5. Bring the mobile client onto the same token layer. Its top-bar overflow is
-   fixed, but the stylesheet is still raw hex throughout.
+5. Bring the mobile client onto the same token layer. Its top-bar overflow and
+   cache-busting are fixed, but the stylesheet is still raw hex throughout.
 6. Decide what to do about `ToolDescriptionFormatter` — it still maps tool names onto
    emoji across 24 switch arms (23 named plus the `_` fallback: `📄` read, `💻` exec,
    `🗣️` agent_converse …) and those render in the chat tool chips and the todo panel. This is the largest emoji surface left, and
