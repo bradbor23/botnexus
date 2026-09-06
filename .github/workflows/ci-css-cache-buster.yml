@@ -1,0 +1,114 @@
+name: "CI: CSS Cache-Buster Guard"
+
+# Why this exists
+# ---------------
+# The portal stylesheet is cache-busted by a HAND-MAINTAINED query string in
+# index.html (`css/app.css?v=dsNN`). That string is the cache key: a browser
+# holding `app.css?v=ds16` will not refetch the stylesheet just because its
+# contents changed on the server. Ship CSS without moving the version and every
+# returning visitor keeps the old stylesheet until they happen to hard-refresh.
+#
+# This is not hypothetical. #30 added 20 conversation-switcher rules and left the
+# version at ds16; the component would have rendered completely unstyled for every
+# existing user. It passed review and all thirteen checks, because nothing in CI
+# looked at the pairing - the tests pass, the CSS is present in the file, and even
+# `curl` confirms it is served. The only symptom is a browser that never asks.
+#
+# NOT COVERED: the mobile client's stylesheet is referenced as `css/mobile.css`
+# with no version query at all, so there is nothing to compare and this guard
+# stays silent on it. That is a real gap, not an oversight of this workflow - a
+# mobile CSS change reaches nobody who has the old file cached. Give mobile a
+# `?v=` and add it to STYLESHEETS below.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+# Read-only, and deliberately `pull_request` rather than `pull_request_target`:
+# this guard reads two files and runs no code from the PR, so it needs neither a
+# privileged token nor the trusted-base checkout dance that pr-conventions-guard
+# requires.
+permissions:
+  contents: read
+
+concurrency:
+  group: css-cache-buster-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cache-buster:
+    name: CSS cache-buster bumped with the stylesheet
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare stylesheet changes against the version query
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          PORTAL=src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient/wwwroot
+          CSS="$PORTAL/css/app.css"
+          INDEX="$PORTAL/index.html"
+
+          # Pull the version token out of index.html at a given revision. Prints
+          # nothing if the file or the query string is absent, which the caller
+          # treats as "cannot compare" rather than "unchanged".
+          version_at() {
+            git show "$1:$INDEX" 2>/dev/null \
+              | grep -oE 'app\.css\?v=[A-Za-z0-9._-]+' \
+              | head -1 || true
+          }
+
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$CSS"; then
+            echo "app.css is unchanged in this PR; nothing to check."
+            echo "app.css unchanged - guard not applicable." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          BASE_V="$(version_at "$BASE_SHA")"
+          HEAD_V="$(version_at "$HEAD_SHA")"
+
+          if [ -z "$BASE_V" ] || [ -z "$HEAD_V" ]; then
+            echo "::error::Could not read the app.css version query from $INDEX at one or both revisions (base='$BASE_V' head='$HEAD_V'). If the cache-busting scheme changed, update this guard."
+            exit 1
+          fi
+
+          {
+            echo "## CSS cache-buster"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| app.css changed | yes |"
+            echo "| version at base | \`$BASE_V\` |"
+            echo "| version at head | \`$HEAD_V\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BASE_V" = "$HEAD_V" ]; then
+            echo "::error::app.css changed but the cache-buster is still $BASE_V. Every browser holding the old stylesheet will keep it, so these style changes reach nobody until they hard-refresh."
+            {
+              echo ""
+              echo "**\`app.css\` changed without bumping \`?v=\`.**"
+              echo ""
+              echo "The query string is the cache key. Leaving it at \`$BASE_V\` means a returning"
+              echo "visitor keeps the stylesheet they already have, and the new rules never load."
+              echo ""
+              echo "Bump it in the SOURCE \`index.html\` (not the deployed copy) and rebuild, so the"
+              echo "pre-compressed \`.br\`/\`.gz\` variants regenerate with it:"
+              echo ""
+              echo '```'
+              echo "sed -i 's/app\\.css?v=$(echo "$BASE_V" | sed 's/.*v=//')/app.css?v=<next>/' $INDEX"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "app.css changed and the version moved $BASE_V -> $HEAD_V."
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version moved with the stylesheet. ✅" >> "$GITHUB_STEP_SUMMARY"
