@@ -430,15 +430,17 @@ public sealed class MainLayoutTests : IDisposable
 
         var cut = RenderLayout();
 
-        // The configuration and agents links should be siblings of the scroll region, not children
+        // Navigation lives in the toolbar now, so the property this pinned - that these links are
+        // NOT inside the scrolling conversation region, where they would scroll away with the
+        // conversation list - is asserted against the region and the toolbar rather than two
+        // parts of the sidebar.
         var scrollRegion = cut.Find(".sidebar-scroll-region");
         Assert.DoesNotContain("Configuration", scrollRegion.TextContent);
         Assert.DoesNotContain("Agents", scrollRegion.TextContent);
 
-        // But they should exist in the sidebar nav
-        var nav = cut.Find(".sidebar-nav");
-        Assert.Contains("Configuration", nav.TextContent);
-        Assert.Contains("Agents", nav.TextContent);
+        var toolbar = cut.Find(".app-toolbar");
+        Assert.Contains("Configuration", toolbar.TextContent);
+        Assert.Contains("Agents", toolbar.TextContent);
     }
 
     [Fact]
@@ -993,35 +995,7 @@ public sealed class MainLayoutTests : IDisposable
 
     // #2441: with tools configured the list is collapsed by default behind a chevron toggle,
     // matching the Scheduled group's persistence pattern.
-    [Fact]
-    public void Tools_section_is_collapsed_by_default_when_tools_exist()
-    {
-        _toolsHandler.SetTools("""
-            [ { "id": "t-1", "name": "Grafana", "url": "https://grafana", "icon": "", "order": 0 } ]
-            """);
 
-        var cut = RenderLayout();
-
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-collapse-toggle']"));
-        Assert.Empty(cut.FindAll("[data-testid='tools-subnav']"));
-        Assert.Equal("false", cut.Find("[data-testid='tools-collapse-toggle']").GetAttribute("aria-expanded"));
-    }
-
-    [Fact]
-    public void Tools_section_expands_on_toggle_click()
-    {
-        _toolsHandler.SetTools("""
-            [ { "id": "t-1", "name": "Grafana", "url": "https://grafana", "icon": "", "order": 0 } ]
-            """);
-
-        var cut = RenderLayout();
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-collapse-toggle']"));
-
-        cut.Find("[data-testid='tools-collapse-toggle']").Click();
-
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-subnav']"));
-        Assert.Single(cut.FindAll("[data-testid='tools-subnav-item']"));
-    }
 
     // #2441: the density preference is projected onto the app shell so the CSS token set switches.
     [Fact]
@@ -1041,12 +1015,12 @@ public sealed class MainLayoutTests : IDisposable
             ]
             """);
 
-        var cut = RenderLayout();
+        // Tool rows are contextual: they render in the toolbar's sub-nav row while you are on
+        // the Tools page, exactly as they rendered under the sidebar's Tools item before.
+        // Set the route BEFORE rendering - the layout reads it at render time.
+        _ctx.Services.GetRequiredService<NavigationManager>().NavigateTo("http://localhost/tools");
 
-        // #2441: the Tools sub-list is collapsed by default; expand it before asserting
-        // on its contents.
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-collapse-toggle']"));
-        cut.Find("[data-testid='tools-collapse-toggle']").Click();
+        var cut = RenderLayout();
 
         cut.WaitForAssertion(() =>
             Assert.Equal(2, cut.FindAll("[data-testid='tools-subnav-item']").Count));
@@ -1061,12 +1035,12 @@ public sealed class MainLayoutTests : IDisposable
             [ { "id": "t-1", "name": "Grafana", "url": "https://grafana", "icon": "", "order": 0 } ]
             """);
 
-        var cut = RenderLayout();
+        // Tool rows are contextual: they render in the toolbar's sub-nav row while you are on
+        // the Tools page, exactly as they rendered under the sidebar's Tools item before.
+        // Set the route BEFORE rendering - the layout reads it at render time.
+        _ctx.Services.GetRequiredService<NavigationManager>().NavigateTo("http://localhost/tools");
 
-        // #2441: the Tools sub-list is collapsed by default; expand it before asserting
-        // on its contents.
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-collapse-toggle']"));
-        cut.Find("[data-testid='tools-collapse-toggle']").Click();
+        var cut = RenderLayout();
 
         cut.WaitForAssertion(() =>
         {
@@ -1085,12 +1059,12 @@ public sealed class MainLayoutTests : IDisposable
             ]
             """);
 
-        var cut = RenderLayout();
+        // Tool rows are contextual: they render in the toolbar's sub-nav row while you are on
+        // the Tools page, exactly as they rendered under the sidebar's Tools item before.
+        // Set the route BEFORE rendering - the layout reads it at render time.
+        _ctx.Services.GetRequiredService<NavigationManager>().NavigateTo("http://localhost/tools");
 
-        // #2441: the Tools sub-list is collapsed by default; expand it before asserting
-        // on its contents.
-        cut.WaitForAssertion(() => cut.Find("[data-testid='tools-collapse-toggle']"));
-        cut.Find("[data-testid='tools-collapse-toggle']").Click();
+        var cut = RenderLayout();
 
         cut.WaitForAssertion(() =>
         {
@@ -1221,7 +1195,7 @@ public sealed class MainLayoutTests : IDisposable
 
         var home = cut.Find("[data-testid='nav-home']");
         Assert.Equal("a", home.TagName, ignoreCase: true);
-        Assert.Contains("sidebar-nav-item", home.ClassName);
+        Assert.Contains("toolbar-item", home.ClassName);
         // Blazor resolves an empty href against the base href, i.e. the application root.
         Assert.Equal(string.Empty, home.GetAttribute("href"));
     }

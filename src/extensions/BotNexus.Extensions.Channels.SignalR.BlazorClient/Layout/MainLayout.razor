@@ -82,6 +82,65 @@
     }
 
     @* Two-column body *@
+    @* Primary navigation, in the user's configured order (#2236), with plugin contributions.
+       Items that do not fit move into the overflow menu - measured, not guessed, because the
+       entry count is not fixed: plugins contribute entries and the user reorders them. *@
+    <nav class="app-toolbar" @ref="_toolbarRef" data-testid="app-toolbar">
+        <div class="toolbar-items">
+            @foreach (var item in VisibleToolbarEntries())
+            {
+                @RenderToolbarItem(item)
+            }
+        </div>
+
+        @if (OverflowToolbarEntries().Any())
+        {
+            <div class="toolbar-overflow">
+                <button class="toolbar-item toolbar-more-btn @(_overflowOpen ? "open" : "")"
+                        data-testid="toolbar-more"
+                        @onclick="ToggleOverflow"
+                        aria-expanded="@(_overflowOpen ? "true" : "false")"
+                        aria-haspopup="menu"
+                        title="More">
+                    <Icon Name="more" Size="16" />
+                    <span class="toolbar-item-label">More</span>
+                </button>
+
+                @if (_overflowOpen)
+                {
+                    <div class="toolbar-overflow-backdrop" @onclick="CloseOverflow"></div>
+                    <div class="toolbar-overflow-menu" data-testid="toolbar-overflow-menu" role="menu">
+                        @foreach (var item in OverflowToolbarEntries())
+                        {
+                            @RenderToolbarItem(item, inOverflow: true)
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* Off-layout copy of the FULL set. The measurer reads its widths, so an item that is
+           currently inside the overflow menu still has a measurable natural width - otherwise the
+           bar could never work out that it would fit again on widening. *@
+        <div class="toolbar-ghost" aria-hidden="true" data-testid="toolbar-ghost">
+            @foreach (var item in ToolbarNavItems())
+            {
+                @RenderToolbarItem(item, ghost: true)
+            }
+        </div>
+    </nav>
+
+    @* Second row: the sub-navigation for the section you are in. These were inline sub-lists under
+       their sidebar item and are CONTEXTUAL - they appear only while you are on that page - so they
+       become a second toolbar row rather than dropdowns, which would have promised persistent menus
+       the sidebar never had. *@
+    @if (HasActiveSubNav())
+    {
+        <div class="app-subtoolbar" data-testid="app-subtoolbar">
+            @RenderActiveSubNav()
+        </div>
+    }
+
     <div class="app-body" id="app-body">
         @* Mobile overlay - tap to close sidebar *@
         @if (_sidebarOpen)
@@ -90,15 +149,10 @@
         }
 
         <aside class="main-sidebar @(_sidebarOpen ? "sidebar-open" : "sidebar-closed")">
-            @* #2441: connection status moved to the top bar as a dot; the sidebar row is gone. *@
-            @* Nav links -- rendered in the user's configured order (#2236). The whole nav is driven
-               by a single ordering model: every built-in item has a default order number and the
-               user can override any of them; overrides persist server-side and roam with the user. *@
+            @* Navigation moved to the toolbar under the banner; the sidebar is the conversation
+               list now. The hamburger toggles THIS, which is why its label says conversations. *@
             <nav class="sidebar-nav">
-                @foreach (var entry in OrderedNavEntries())
-                {
-                    @RenderNavEntry(entry)
-                }
+                @RenderConversationsRegion()
             </nav>
 
             @* Build info at bottom *@
@@ -183,8 +237,6 @@
 
     // #2441: Tools and My-Sections collapse state persist with the same localStorage key pattern
     // as the Scheduled group, and both default to collapsed so the nav starts tight.
-    private bool _toolsGroupCollapsed = true;
-    private const string ToolsCollapsedKey = "botnexus-tools-collapsed";
     private bool _sectionsGroupCollapsed = true;
     private const string SectionsCollapsedKey = "botnexus-sections-collapsed";
 
@@ -312,34 +364,6 @@
     }
 
     /// <summary>
-    /// #2973: THE single emission point for every top-level sidebar nav anchor.
-    ///
-    /// Why a helper rather than eight hand-written anchors: <c>data-testid</c> used to be typed
-    /// literally into four of the eight render fragments and forgotten in the other four, so being
-    /// addressable by a stable selector depended on author recall. The observable failure was not a
-    /// missing element but a SILENTLY WRONG one - testid-first automation that could not find
-    /// <c>nav-skills</c> retargeted onto the nearest anchor that did have a testid and asserted
-    /// against Cron Jobs while claiming to be on Skills. Deriving the attribute from the route means
-    /// a nav entry added tomorrow cannot ship without one.
-    /// </summary>
-    /// <param name="route">The anchor's href, relative to the base path. Empty string is Home's root route.</param>
-    /// <param name="label">The anchor's rendered content (glyph + text).</param>
-    /// <param name="testIdOverride">
-    /// Only for an anchor whose historical testid does not match its route. Cron Jobs is the sole
-    /// case: its id tracks the label (nav-cron-jobs) rather than the route (cron), and it has in-repo
-    /// and unknown external consumers, so it is preserved rather than renamed. Such an anchor
-    /// additionally carries <c>data-testid-alias</c> with the route-derived id, so both keys select it.
-    /// </param>
-    private RenderFragment NavAnchor(string route, RenderFragment label, string? testIdOverride = null) => __builder =>
-    {
-        <a href="@route"
-           class="sidebar-nav-item @NavClass(NavKeyForRoute(route))"
-           data-testid="@(testIdOverride ?? NavTestId(route))"
-           data-testid-alias="@(testIdOverride is null ? null : NavTestId(route))"
-           @onclick="OnNavClick">@label</a>
-    };
-
-    /// <summary>
     /// Maps a nav route to its canonical test id. Home's route is the empty string, which would
     /// otherwise produce the meaningless <c>nav-</c>, so it is mapped explicitly.
     /// </summary>
@@ -390,82 +414,255 @@
     private static string SubNavTestId(string route) =>
         "subnav-" + System.Text.RegularExpressions.Regex.Replace(route, "[^a-zA-Z0-9-]+", "-").Trim('-');
 
-    private RenderFragment RenderNavSection(string key) => key.ToLowerInvariant() switch
+    /// <summary>
+    /// One primary-navigation destination, resolved for the toolbar.
+    /// </summary>
+    /// <param name="Key">Nav-order key (built-ins) or the contribution id.</param>
+    /// <param name="Route">Base-relative route the item navigates to.</param>
+    /// <param name="Icon">Icon-set name.</param>
+    /// <param name="Label">Visible label.</param>
+    /// <param name="TestId">
+    /// The data-testid this item carried in the sidebar. Preserved deliberately: moving navigation
+    /// into a toolbar changes where the item is, not which item it is, so every existing nav test id
+    /// keeps pointing at the same destination.
+    /// </param>
+    /// <param name="Contribution">
+    /// Set for a plugin-contributed entry. Such an entry is NOT a plain href: a full-page
+    /// contribution needs a forceLoad navigation and an embedded one routes to
+    /// <c>extension/{id}</c>, so it keeps going through <see cref="NavigateToContribution"/>
+    /// rather than being flattened into a link.
+    /// </param>
+    private sealed record ToolbarNavItem(
+        string Key, string Route, string Icon, string Label, string? TestId = null,
+        NavContributionDto? Contribution = null);
+
+    /// <summary>
+    /// The toolbar's items, in the user's configured order, built-ins and plugin contributions
+    /// together. Feature gates are applied here exactly as the sidebar applied them, so a disabled
+    /// extension stays absent rather than moving to the overflow menu.
+    /// </summary>
+    private IReadOnlyList<ToolbarNavItem> ToolbarNavItems()
     {
-        NavOrderKeys.Home => RenderHomeNav(),
-        NavOrderKeys.Activity => RenderActivityNav(),
-        NavOrderKeys.Tools => RenderToolsNav(),
-        NavOrderKeys.Chat => RenderChatNav(),
-        NavOrderKeys.Configuration => RenderConfigurationNav(),
-        NavOrderKeys.Skills => RenderSkillsNav(),
-        NavOrderKeys.Agents => RenderAgentsNav(),
-        NavOrderKeys.Cron => RenderCronNav(),
-        NavOrderKeys.Plugins => RenderPluginsNav(),
-        NavOrderKeys.Guide => RenderGuideNav(),
-        _ => _ => { }
+        var items = new List<ToolbarNavItem>();
+        foreach (var entry in OrderedNavEntries())
+        {
+            if (entry.Contribution is { } contribution)
+            {
+                items.Add(new ToolbarNavItem(
+                    contribution.Id,
+                    $"extension/{contribution.Id}",
+                    ResolveContributedIcon(contribution.Icon),
+                    contribution.Label,
+                    Contribution: contribution));
+                continue;
+            }
+
+            var built = entry.Key.ToLowerInvariant() switch
+            {
+                NavOrderKeys.Home => new ToolbarNavItem(entry.Key, "", "home", "Home"),
+                NavOrderKeys.Activity => new ToolbarNavItem(entry.Key, NavOrderKeys.Activity, "activity", "Activity"),
+                NavOrderKeys.Tools => new ToolbarNavItem(entry.Key, NavOrderKeys.Tools, "tools", "Tools"),
+                NavOrderKeys.Chat => new ToolbarNavItem(entry.Key, NavOrderKeys.Chat, "chat", "Chat"),
+                NavOrderKeys.Configuration => new ToolbarNavItem(entry.Key, NavOrderKeys.Configuration, "configuration", "Configuration"),
+                NavOrderKeys.Skills when ExtensionFeatures.SkillsEnabled
+                    => new ToolbarNavItem(entry.Key, NavOrderKeys.Skills, "skills", "Skills"),
+                NavOrderKeys.Agents => new ToolbarNavItem(entry.Key, NavOrderKeys.Agents, "agents", "Agents"),
+                NavOrderKeys.Cron => new ToolbarNavItem(entry.Key, NavOrderKeys.Cron, "cron-jobs", "Cron Jobs", "nav-cron-jobs"),
+                NavOrderKeys.Plugins => new ToolbarNavItem(entry.Key, NavOrderKeys.Plugins, "plugins", "Plugins"),
+                NavOrderKeys.Guide => new ToolbarNavItem(entry.Key, NavOrderKeys.Guide, "guide", "Guide"),
+                _ => null,
+            };
+
+            if (built is not null)
+                items.Add(built);
+        }
+
+        return items;
+    }
+
+    /// <summary>Items rendered in the bar itself.</summary>
+    private IEnumerable<ToolbarNavItem> VisibleToolbarEntries() =>
+        _visibleNavCount is int n ? ToolbarNavItems().Take(n) : ToolbarNavItems();
+
+    /// <summary>Items pushed into the overflow menu because they do not fit.</summary>
+    private IEnumerable<ToolbarNavItem> OverflowToolbarEntries() =>
+        _visibleNavCount is int n ? ToolbarNavItems().Skip(n) : [];
+
+    /// <summary>
+    /// How many items currently fit in the bar. Null until the measurer has reported, so the first
+    /// paint shows every item rather than an arbitrary guess that would visibly reflow.
+    /// </summary>
+    private int? _visibleNavCount;
+
+    private bool _overflowOpen;
+    private ElementReference _toolbarRef;
+    private DotNetObjectReference<MainLayout>? _toolbarRef_dotNet;
+    private IJSObjectReference? _toolbarObserver;
+
+    private void ToggleOverflow() => _overflowOpen = !_overflowOpen;
+
+    private void CloseOverflow() => _overflowOpen = false;
+
+    /// <summary>
+    /// Called by the measurer with the number of items that fit. Invoked on every resize, so it
+    /// re-renders only when the number actually changed - otherwise a drag of the window edge would
+    /// queue a render per pixel.
+    /// </summary>
+    /// <param name="count">Items that fit in the bar.</param>
+    [JSInvokable]
+    public void SetVisibleNavCount(int count)
+    {
+        var clamped = Math.Clamp(count, 0, ToolbarNavItems().Count);
+        if (_visibleNavCount == clamped)
+            return;
+
+        _visibleNavCount = clamped;
+        // An item that just moved into the menu must not leave the menu open over a stale list.
+        if (clamped >= ToolbarNavItems().Count)
+            _overflowOpen = false;
+
+        StateHasChanged();
+    }
+
+    private async Task RegisterToolbarMeasurerAsync()
+    {
+        try
+        {
+            _toolbarRef_dotNet = DotNetObjectReference.Create(this);
+            _toolbarObserver = await JS.InvokeAsync<IJSObjectReference>(
+                "botnexusNavToolbar.observe", _toolbarRef, _toolbarRef_dotNet);
+        }
+        catch
+        {
+            // No script (test host, or a boot that failed before the file loaded). Every item stays
+            // in the bar - the CSS lets it wrap rather than clipping, so nothing becomes unreachable.
+            _toolbarRef_dotNet?.Dispose();
+            _toolbarRef_dotNet = null;
+        }
+    }
+
+    /// <summary>
+    /// A toolbar item. The ghost copy carries no href or test id: it exists only to be measured, and
+    /// a second element sharing a nav test id would make every existing nav assertion ambiguous.
+    /// </summary>
+    private RenderFragment RenderToolbarItem(ToolbarNavItem item, bool inOverflow = false, bool ghost = false) => __builder =>
+    {
+        if (ghost)
+        {
+            <span class="toolbar-item" data-nav-key="@item.Key">
+                <Icon Name="@item.Icon" Size="16" />
+                <span class="toolbar-item-label">@item.Label</span>
+            </span>
+        }
+        else if (item.Contribution is { } contribution)
+        {
+            @* Every attribute here is load-bearing and tested: the href is the real destination so
+               the row is a link rather than a scripted div, preventDefault + NavigateToContribution
+               keep full-page contributions on a forceLoad and embedded ones on the portal's own
+               extension/{id} route, and the two data-nav-* attributes are how a plugin's entry is
+               attributed and identified as embedded. *@
+            <a href="@ContributionHref(contribution)"
+               class="@(inOverflow ? "toolbar-overflow-item" : "toolbar-item") @NavClass(item.Key)"
+               data-testid="@("nav-" + contribution.Id)"
+               data-nav-contributed-by="@contribution.ExtensionId"
+               data-nav-embedded="@((!contribution.FullPage).ToString().ToLowerInvariant())"
+               data-nav-key="@item.Key"
+               @onclick:preventDefault="true"
+               @onclick="() => OnContributionClick(contribution)">
+                <Icon Name="@item.Icon" Size="16" />
+                <span class="toolbar-item-label">@item.Label</span>
+            </a>
+        }
+        else
+        {
+            <a href="@item.Route"
+               class="@(inOverflow ? "toolbar-overflow-item" : "toolbar-item") @NavClass(item.Key)"
+               data-testid="@(item.TestId ?? NavTestId(item.Route))"
+               data-testid-alias="@(item.TestId is null ? null : NavTestId(item.Route))"
+               data-nav-key="@item.Key"
+               @onclick="OnToolbarNavClick">
+                <Icon Name="@item.Icon" Size="16" />
+                <span class="toolbar-item-label">@item.Label</span>
+            </a>
+        }
     };
+
+    /// <summary>
+    /// True when the current page contributes a sub-navigation row.
+    /// </summary>
+    /// <remarks>
+    /// Kept as its own predicate so the row's container is not rendered empty: an empty bordered
+    /// strip under the toolbar reads as a broken layout rather than as "nothing here".
+    /// </remarks>
+    private bool HasActiveSubNav() =>
+        (IsOnPage(NavOrderKeys.Tools) && _tools.Count > 0)
+        || (IsOnPage("skills") && ExtensionFeatures.SkillsEnabled)
+        || IsOnPage("agents");
+
+    /// <summary>
+    /// The sub-navigation for the active section. Gates and destinations are the sidebar's, moved
+    /// rather than rewritten - Tools lists the user's configured tools, Skills offers Explorer, and
+    /// Agents lists the agents plus Add Agent.
+    /// </summary>
+    private RenderFragment RenderActiveSubNav() => __builder =>
+    {
+        @if (IsOnPage(NavOrderKeys.Tools) && _tools.Count > 0)
+        {
+            @foreach (var tool in _tools)
+            {
+                @SubNavAnchor(
+                    $"tools/{tool.Id}",
+                    @<text>
+                        @if (!string.IsNullOrWhiteSpace(tool.Icon))
+                        {
+                            <span class="tools-subnav-item-icon">@tool.Icon</span>
+                        }
+                        <span class="tools-subnav-item-label">@tool.Name</span>
+                    </text>,
+                    IsToolActive(tool.Id) ? "active" : null,
+                    "tools-subnav-item")
+            }
+        }
+        else if (IsOnPage("skills") && ExtensionFeatures.SkillsEnabled)
+        {
+            @SubNavAnchor("skills/explorer", @<text><Icon Name="workspace" Size="15" /><span>Explorer</span></text>)
+        }
+        else if (IsOnPage("agents"))
+        {
+            @foreach (var agent in _sidebarAgents)
+            {
+                @SubNavAnchor(
+                    $"agents/{agent.AgentId}",
+                    @<text>@agent.DisplayLabel</text>,
+                    IsAgentActive(agent.AgentId) ? "active" : null)
+            }
+            @SubNavAnchor("agents/new", @<text>+ Add Agent</text>, "sidebar-subnav-add")
+        }
+    };
+
+    private void OnToolbarNavClick()
+    {
+        _overflowOpen = false;
+        if (_isMobile)
+            _sidebarOpen = false;
+    }
+
+    private void OnContributionClick(NavContributionDto contribution)
+    {
+        _overflowOpen = false;
+        NavigateToContribution(contribution);
+    }
 
     // #2535: Home owns the root route (Landing.razor, page "/"). Before this it was reachable
     // only via the banner logo, which carries no active state and duplicates the Agents robot
     // glyph. The house glyph keeps it visually distinct from Agents.
-    private RenderFragment RenderHomeNav() => __builder =>
-    {
-        @NavAnchor("", @<text><Icon Name="home" /><span class="sidebar-nav-label">Home</span></text>)
-    };
 
-    private RenderFragment RenderActivityNav() => __builder =>
+    /// <summary>
+    /// The agent picker, conversation search, conversation groups and user sections - the whole
+    /// body of the sidebar now that navigation has moved to the toolbar.
+    /// </summary>
+    private RenderFragment RenderConversationsRegion() => __builder =>
     {
-        @NavAnchor(NavOrderKeys.Activity, @<text><Icon Name="activity" /><span class="sidebar-nav-label">Activity</span></text>)
-    };
-
-    private RenderFragment RenderToolsNav() => __builder =>
-    {
-        @* Tools section. Tools load from GET /api/tools and roam with the user server-side (#2233).
-           Sub-items link to /tools/{id}. Default order sits above Chat (#2236). *@
-        @* #2441: the Tools sub-list is collapsed by default (state persisted in localStorage the
-           same way the Scheduled group is) and the "No tools configured" placeholder row is not
-           rendered at all - an empty section should cost zero vertical space. *@
-        <div class="sidebar-nav-row">
-            @NavAnchor(NavOrderKeys.Tools, @<text><Icon Name="tools" /><span class="sidebar-nav-label">Tools</span></text>)
-            @if (_tools.Count > 0)
-            {
-                <button class="sidebar-nav-toggle" data-testid="tools-collapse-toggle"
-                        aria-expanded="@(!_toolsGroupCollapsed ? "true" : "false")"
-                        title="@(_toolsGroupCollapsed ? "Expand tools" : "Collapse tools")"
-                        @onclick="ToggleToolsGroup">
-                    <span class="group-chevron @(!_toolsGroupCollapsed ? "expanded" : "")">&#x25B6;</span>
-                </button>
-            }
-        </div>
-        @if (_tools.Count > 0 && !_toolsGroupCollapsed)
-        {
-            <div class="sidebar-subnav" data-testid="tools-subnav">
-                @foreach (var tool in _tools)
-                {
-                    @* #3051: "tools-subnav-item" is a GROUP selector (all tool rows), not a row
-                       identity, and has an in-repo consumer - so it is kept verbatim on data-testid
-                       and the unique route-derived subnav-tools-{id} rides alongside on the alias. *@
-                    @SubNavAnchor(
-                        $"tools/{tool.Id}",
-                        @<text>
-                            @if (!string.IsNullOrWhiteSpace(tool.Icon))
-                            {
-                                <span class="tools-subnav-item-icon">@tool.Icon</span>
-                            }
-                            <span class="tools-subnav-item-label">@tool.Name</span>
-                        </text>,
-                        IsToolActive(tool.Id) ? "active" : null,
-                        "tools-subnav-item")
-                }
-            </div>
-        }
-    };
-
-    private RenderFragment RenderChatNav() => __builder =>
-    {
-        @NavAnchor(NavOrderKeys.Chat, @<text><Icon Name="chat" /><span class="sidebar-nav-label">Chat</span></text>)
-
-        @* Scrollable agent/conversation section *@
         <div class="sidebar-scroll-region">
         @* Agent dropdown + session list nested under Chat *@
         @if (Store.Agents.Values.Any(a => !a.IsReadOnly))
@@ -730,71 +927,14 @@
         </div>@* end sidebar-scroll-region *@
     };
 
-    private RenderFragment RenderConfigurationNav() => __builder =>
-    {
-        @NavAnchor(NavOrderKeys.Configuration, @<text><Icon Name="configuration" /><span class="sidebar-nav-label">Configuration</span></text>)
-    };
-
-    private RenderFragment RenderSkillsNav() => __builder =>
-    {
-        @if (ExtensionFeatures.SkillsEnabled)
-        {
-            @NavAnchor(NavOrderKeys.Skills, @<text><Icon Name="skills" /><span class="sidebar-nav-label">Skills</span></text>)
-
-            @* Skills sub-nav -- shown when on the skills page *@
-            @if (IsOnPage("skills"))
-            {
-                <div class="sidebar-subnav">
-                    @SubNavAnchor("skills/explorer", @<text><Icon Name="workspace" /><span class="sidebar-nav-label">Explorer</span></text>)
-                </div>
-            }
-        }
-    };
-
-    private RenderFragment RenderAgentsNav() => __builder =>
-    {
-        @NavAnchor(NavOrderKeys.Agents, @<text><Icon Name="agents" /><span class="sidebar-nav-label">Agents</span></text>)
-
-        @* Agents sub-nav -- only shown when on the agents page *@
-        @if (IsOnPage("agents"))
-        {
-            <div class="sidebar-subnav">
-                @foreach (var agent in _sidebarAgents)
-                {
-                    @SubNavAnchor(
-                        $"agents/{agent.AgentId}",
-                        @<text>@agent.DisplayLabel</text>,
-                        IsAgentActive(agent.AgentId) ? "active" : null)
-                }
-                @SubNavAnchor("agents/new", @<text>+ Add Agent</text>, "sidebar-subnav-add")
-            </div>
-        }
-    };
-
-    private RenderFragment RenderCronNav() => __builder =>
-    {
-        @* #2973: the one documented override. "nav-cron-jobs" tracks the LABEL, not the route, and
-           predates the helper; renaming it would break live consumers for zero functional gain. The
-           route-derived "nav-cron" is emitted alongside it as data-testid-alias. *@
-        @NavAnchor(NavOrderKeys.Cron, @<text><Icon Name="cron-jobs" /><span class="sidebar-nav-label">Cron Jobs</span></text>, "nav-cron-jobs")
-    };
-
     // #3346: the Plugins page (#2687) shipped routed at /plugins but with no sidebar entry, so it
     // was reachable only by typing the URL. This is deliberately one more entry in the existing
     // list - it goes through the same NavAnchor helper (so it gets the route-derived nav-plugins
     // testid for free) and the same NavOrderKeys/NavOrderDefaults ordering model, with no
     // special-casing, so user order overrides apply to it exactly as to any other built-in.
-    private RenderFragment RenderPluginsNav() => __builder =>
-    {
-        @NavAnchor(NavOrderKeys.Plugins, @<text><Icon Name="plugins" /><span class="sidebar-nav-label">Plugins</span></text>)
-    };
 
     // The in-app guide. Goes through the same NavAnchor helper as every other entry, so it inherits
     // the route-derived testid, the active-state matching and any user ordering override.
-    private RenderFragment RenderGuideNav() => __builder =>
-    {
-        @NavAnchor(NavOrderKeys.Guide, @<text><Icon Name="guide" /><span class="sidebar-nav-label">Guide</span></text>)
-    };
 
     protected override void OnInitialized()
     {
@@ -891,8 +1031,7 @@
             _conversationsGroupCollapsed = conversationsStored == "true";
 
             await RegisterSwitcherShortcutAsync();
-            var toolsStored = await JS.InvokeAsync<string?>("localStorage.getItem", ToolsCollapsedKey);
-            _toolsGroupCollapsed = toolsStored != "false";
+            await RegisterToolbarMeasurerAsync();
             var sectionsStored = await JS.InvokeAsync<string?>("localStorage.getItem", SectionsCollapsedKey);
             _sectionsGroupCollapsed = sectionsStored != "false";
             var filterStored = await JS.InvokeAsync<string?>("localStorage.getItem", ActivityFilterKey);
@@ -1005,11 +1144,6 @@
             _sidebarOpen = false;
     }
 
-    private void OnNavClick()
-    {
-        if (_isMobile)
-            _sidebarOpen = false;
-    }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
@@ -1157,11 +1291,6 @@
         await JS.InvokeVoidAsync("localStorage.setItem", ConversationsCollapsedKey, _conversationsGroupCollapsed ? "true" : "false");
     }
 
-    private async Task ToggleToolsGroup()
-    {
-        _toolsGroupCollapsed = !_toolsGroupCollapsed;
-        await JS.InvokeVoidAsync("localStorage.setItem", ToolsCollapsedKey, _toolsGroupCollapsed ? "true" : "false");
-    }
 
     private async Task ToggleSectionsGroup()
     {
@@ -1675,28 +1804,6 @@
     /// <summary>One sidebar row: either a built-in section or a contributed entry.</summary>
     private sealed record NavRenderEntry(string Key, NavContributionDto? Contribution);
 
-    private RenderFragment RenderNavEntry(NavRenderEntry entry) =>
-        entry.Contribution is { } contribution
-            ? RenderContributedNav(contribution)
-            : RenderNavSection(entry.Key);
-
-    // A contributed path is served by an extension, not by the Blazor router, so an external entry
-    // forces a full navigation rather than letting the client router turn it into a 404. The icon
-    // is a NAME resolved against the portal's own set, never markup: an unknown name falls back
-    // instead of leaving a gap, and an extension can never inject SVG into the portal DOM.
-    private RenderFragment RenderContributedNav(NavContributionDto contribution) => __builder =>
-    {
-        <a href="@ContributionHref(contribution)"
-           class="sidebar-nav-item"
-           data-testid="@("nav-" + contribution.Id)"
-           data-nav-contributed-by="@contribution.ExtensionId"
-           data-nav-embedded="@((!contribution.FullPage).ToString().ToLowerInvariant())"
-           @onclick:preventDefault="true"
-           @onclick="() => NavigateToContribution(contribution)">
-            <Icon Name="@ResolveContributedIcon(contribution.Icon)" /><span class="sidebar-nav-label">@contribution.Label</span>
-        </a>
-    };
-
     // An embedded view is reached through a PORTAL route that frames it, so the sidebar, header
     // and theme stay put. Navigating straight at the extension's own path replaces the window and
     // reads as leaving the app; that is now opt-in via fullPage.
@@ -1848,5 +1955,17 @@
         }
 
         _shortcutRef?.Dispose();
+
+        // Same reasoning as the shortcut listener: the ResizeObserver outlives this component.
+        if (_toolbarObserver is not null)
+        {
+            try { await _toolbarObserver.InvokeVoidAsync("dispose"); }
+            catch { /* circuit already gone */ }
+
+            try { await _toolbarObserver.DisposeAsync(); }
+            catch { /* as above */ }
+        }
+
+        _toolbarRef_dotNet?.Dispose();
     }
 }

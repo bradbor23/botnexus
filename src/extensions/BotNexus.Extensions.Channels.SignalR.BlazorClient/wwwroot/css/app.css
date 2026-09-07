@@ -8470,3 +8470,162 @@ h3.conversation-title.editable:hover {
     font-family: inherit;
     font-size: var(--text-caption);
 }
+
+/* ==========================================================================
+   Primary navigation toolbar
+   Nav moved out of the sidebar and under the banner; the sidebar is the
+   conversation list. Items that do not fit move into an overflow menu, sized
+   by js/navToolbar.js against the off-layout ghost row below.
+   ========================================================================== */
+
+.app-toolbar {
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    align-items: stretch;
+    gap: 0.15rem;
+    padding: 0 var(--density-row-pad-x);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.toolbar-items {
+    display: flex;
+    align-items: stretch;
+    gap: 0.15rem;
+    /* min-width:0 lets the row shrink below its content instead of pushing the
+       overflow button off the end - the same trap the sidebar selects hit. */
+    min-width: 0;
+    /* Wrapping is the no-JS fallback: without the measurer every item stays in
+       the bar, and wrapping keeps them all reachable rather than clipped. */
+    flex-wrap: wrap;
+}
+
+.toolbar-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.7rem;
+    min-height: var(--density-control-h);
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-size: var(--density-font-sm);
+    line-height: 1.25;
+    white-space: nowrap;
+    text-decoration: none;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.toolbar-item:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+/* The active item is marked by an underline rather than a filled pill: in a
+   horizontal bar a fill reads as a button, and the row would look like a set of
+   buttons with one pressed. */
+.toolbar-item.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
+}
+
+.toolbar-overflow {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    margin-left: auto;
+}
+
+.toolbar-more-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.toolbar-more-btn.open {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+/* Same dismiss surface as the conversation switcher: one element, disposed with
+   the menu, reachable in a component test. */
+.toolbar-overflow-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+}
+
+.toolbar-overflow-menu {
+    position: absolute;
+    top: calc(100% + 2px);
+    right: 0;
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    padding: 0.25rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-raised);
+}
+
+.toolbar-overflow-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: var(--density-font-sm);
+    line-height: 1.25;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.toolbar-overflow-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.toolbar-overflow-item.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Laid out so widths are real, but never painted and never hit-testable. Not
+   display:none, which would measure zero, and not visibility:hidden alone,
+   which would still occupy a row in the flex line. */
+.toolbar-ghost {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    gap: 0.15rem;
+    visibility: hidden;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+/* Second toolbar row - the active section's sub-navigation. Horizontal now, so the sub-nav item
+   loses the sidebar's indent and gains the same underline-active treatment as the row above. */
+.app-subtoolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.25rem var(--density-row-pad-x);
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+}
+
+.app-subtoolbar .sidebar-subnav-item {
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius);
+    white-space: nowrap;
+}

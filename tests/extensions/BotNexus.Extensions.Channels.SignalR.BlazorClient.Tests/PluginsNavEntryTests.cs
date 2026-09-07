@@ -108,7 +108,7 @@ public sealed class PluginsNavEntryTests : IDisposable
     {
         var cut = RenderLayout();
 
-        var matches = cut.FindAll("a.sidebar-nav-item[data-testid='nav-plugins']");
+        var matches = cut.FindAll("a.toolbar-item[data-testid='nav-plugins']");
         Assert.Single(matches);
 
         var anchor = matches[0];
@@ -172,7 +172,7 @@ public sealed class PluginsNavEntryTests : IDisposable
     private List<string> NavTestIdsInRenderOrder()
     {
         var cut = RenderLayout();
-        var ids = cut.FindAll("a.sidebar-nav-item")
+        var ids = cut.FindAll("a.toolbar-item")
             .Select(a => a.GetAttribute("data-testid-alias") is { Length: > 0 } alias
                 ? alias
                 : a.GetAttribute("data-testid") ?? string.Empty)
