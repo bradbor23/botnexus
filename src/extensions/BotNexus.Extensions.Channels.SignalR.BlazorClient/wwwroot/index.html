@@ -19,7 +19,7 @@
          only after app.css parses would guarantee a visible swap. latin-ext is deliberately
          NOT preloaded - it is fetched on demand via unicode-range. -->
     <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="css/app.css?v=ds19" />
+    <link rel="stylesheet" href="css/app.css?v=ds20" />
     <script>
         // Applied BEFORE first paint and before Blazor boots. The WASM runtime takes seconds to
         // start; without this a light-theme user would stare at a fully dark portal until it did,
@@ -51,17 +51,17 @@
         <a href="." class="reload">Reload</a>
         <span class="dismiss">X</span>
     </div>
-    <script src="js/errorReporting.js?v=ds19"></script>
-    <script src="js/marked.min.js?v=ds19"></script>
-    <script src="js/purify.min.js?v=ds19"></script>
-    <script src="js/markdown.js?v=ds19"></script>
-    <script src="js/chat.js?v=ds19"></script>
-    <script src="js/audio.js?v=ds19"></script>
-    <script src="js/splitter.js?v=ds19"></script>
-    <script src="js/canvasBridge.js?v=ds19"></script>
-    <script src="js/toolFrame.js?v=ds19"></script>
-    <script src="js/desktopNotifications.js?v=ds19"></script>
-    <script src="js/conversationSwitcher.js?v=ds19"></script>
+    <script src="js/errorReporting.js?v=ds20"></script>
+    <script src="js/marked.min.js?v=ds20"></script>
+    <script src="js/purify.min.js?v=ds20"></script>
+    <script src="js/markdown.js?v=ds20"></script>
+    <script src="js/chat.js?v=ds20"></script>
+    <script src="js/audio.js?v=ds20"></script>
+    <script src="js/splitter.js?v=ds20"></script>
+    <script src="js/canvasBridge.js?v=ds20"></script>
+    <script src="js/toolFrame.js?v=ds20"></script>
+    <script src="js/desktopNotifications.js?v=ds20"></script>
+    <script src="js/conversationSwitcher.js?v=ds20"></script>
     <script>
         // Clipboard helper for copy-to-clipboard via JS interop
         window.BotNexus = window.BotNexus || {};
@@ -72,7 +72,7 @@
             return Promise.resolve(false);
         };
     </script>
-    <script src="js/bootDiagnostics.js?v=ds19"></script>
+    <script src="js/bootDiagnostics.js?v=ds20"></script>
     <script src="_framework/blazor.webassembly#[.{fingerprint}].js" autostart="false"></script>
     <script>
         // #2880: default autostart leaves a failed boot as an unhandled rejection, so the static
@@ -81,7 +81,7 @@
         // actionable panel, and distinguishes an auth-proxy login interstitial from a real fault.
         window.BotNexusBoot.startBlazor();
     </script>
-    <script src="js/swUpdate.js?v=ds19"></script>
+    <script src="js/swUpdate.js?v=ds20"></script>
     <script>
         // Register the PWA service worker so Edge/Chromium treats the portal as installable.
         // #2591: registration alone let a cached worker pin a stale bundle forever, so this goes

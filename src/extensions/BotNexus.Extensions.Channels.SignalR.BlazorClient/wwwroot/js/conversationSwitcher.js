@@ -24,10 +24,20 @@ window.botnexusConversationSwitcher = {
     registerShortcut: function (dotNetRef) {
         if (!dotNetRef) return null;
 
+        // Resolved once, not per keypress: the platform does not change mid-session.
+        const isMac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
+
         const handler = function (e) {
-            // metaKey for macOS, ctrlKey elsewhere. Not both: Ctrl-K on macOS is the readline
-            // "kill to end of line" binding that works in every text field.
-            const combo = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && !e.metaKey);
+            // Cmd-K on macOS, Ctrl-K everywhere else - and strictly one or the other.
+            //
+            // Accepting either modifier on every platform (which an earlier revision did, despite a
+            // comment claiming otherwise) hijacks Ctrl-K on macOS, where it is the readline
+            // "kill to end of line" binding that works in every text field. Because this handler
+            // also calls preventDefault, that did not merely add a shortcut - it silently broke a
+            // standard editing key in every input in the portal.
+            const combo = isMac
+                ? (e.metaKey && !e.ctrlKey)
+                : (e.ctrlKey && !e.metaKey);
             if (!combo || e.altKey || e.shiftKey) return;
             if ((e.key || '').toLowerCase() !== 'k') return;
 
