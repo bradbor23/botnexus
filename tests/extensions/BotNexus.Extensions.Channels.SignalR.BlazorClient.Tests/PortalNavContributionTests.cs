@@ -108,7 +108,7 @@ public sealed class PortalNavContributionTests : IDisposable
     private List<string> NavTestIdsInRenderOrder()
     {
         var cut = RenderLayout();
-        return cut.FindAll("a.sidebar-nav-item")
+        return cut.FindAll("a.toolbar-item")
             .Select(a => a.GetAttribute("data-testid-alias") is { Length: > 0 } alias
                 ? alias
                 : a.GetAttribute("data-testid") ?? string.Empty)
@@ -133,7 +133,7 @@ public sealed class PortalNavContributionTests : IDisposable
 
         var cut = RenderLayout();
 
-        var anchor = Assert.Single(cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']"));
+        var anchor = Assert.Single(cut.FindAll("a.toolbar-item[data-testid='nav-agent-builder']"));
         Assert.Contains("Agent Builder", anchor.TextContent);
         Assert.Equal("botnexus-agent-builder", anchor.GetAttribute("data-nav-contributed-by"));
 
@@ -156,7 +156,7 @@ public sealed class PortalNavContributionTests : IDisposable
 
         var cut = RenderLayout();
 
-        var anchor = Assert.Single(cut.FindAll("a.sidebar-nav-item[data-testid='nav-widget']"));
+        var anchor = Assert.Single(cut.FindAll("a.toolbar-item[data-testid='nav-widget']"));
         Assert.Equal("/widget", anchor.GetAttribute("href"));
         Assert.Equal("false", anchor.GetAttribute("data-nav-embedded"));
     }
@@ -195,7 +195,7 @@ public sealed class PortalNavContributionTests : IDisposable
 
         var cut = RenderLayout();
 
-        var anchor = Assert.Single(cut.FindAll("a.sidebar-nav-item[data-testid='nav-widget']"));
+        var anchor = Assert.Single(cut.FindAll("a.toolbar-item[data-testid='nav-widget']"));
         Assert.NotEmpty(anchor.QuerySelectorAll("svg"));
     }
 
@@ -290,7 +290,7 @@ public sealed class PortalNavContributionTests : IDisposable
     {
         _contributionsJson = AgentBuilderContribution;
         var cut = RenderLayout();
-        Assert.NotEmpty(cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']"));
+        Assert.NotEmpty(cut.FindAll("a.toolbar-item[data-testid='nav-agent-builder']"));
 
         // The real write path, so the event is raised by the code that ships rather than by a
         // test-only hook.
@@ -302,8 +302,8 @@ public sealed class PortalNavContributionTests : IDisposable
             """;
         await _pluginsApi.SetNavVisibilityAsync("botnexus-agent-builder", navHidden: true);
 
-        cut.WaitForState(() => cut.FindAll("a.sidebar-nav-item[data-testid='nav-agent-builder']").Count == 0);
-        Assert.NotEmpty(cut.FindAll("a.sidebar-nav-item[data-testid='nav-plugins']"));
+        cut.WaitForState(() => cut.FindAll("a.toolbar-item[data-testid='nav-agent-builder']").Count == 0);
+        Assert.NotEmpty(cut.FindAll("a.toolbar-item[data-testid='nav-plugins']"));
     }
 
     /// <summary>Answers the plugin list and the nav-visibility write distinctly.</summary>
