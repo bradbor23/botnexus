@@ -197,9 +197,51 @@
     /// </summary>
     private bool _cronIdsLoaded;
 
-    protected override void OnInitialized() => Store.OnChanged += HandleStoreChanged;
+    /// <summary>
+    /// The shared launcher, resolved optionally so the sixteen existing ChatPanel test fixtures
+    /// keep working - the same reason CronApiClient is resolved this way below. A null launcher
+    /// costs the sidebar box and the shortcut; the header caret is unaffected.
+    /// </summary>
+    private IConversationSwitcherLauncher? _launcher;
 
-    public void Dispose() => Store.OnChanged -= HandleStoreChanged;
+    protected override void OnInitialized()
+    {
+        Store.OnChanged += HandleStoreChanged;
+
+        _launcher = Services.GetService(typeof(IConversationSwitcherLauncher)) as IConversationSwitcherLauncher;
+        if (_launcher is not null)
+            _launcher.Requested += HandleLaunchRequested;
+    }
+
+    /// <summary>
+    /// Open in response to the sidebar search box or the keyboard shortcut.
+    /// </summary>
+    /// <remarks>
+    /// Every agent panel mounts one of these and they all hear the request, so the guard is what
+    /// makes exactly one respond: only the switcher belonging to the ACTIVE agent opens. Without it
+    /// sixteen hidden panels would each open a switcher the user cannot see, and the visible one
+    /// would be indistinguishable from the rest.
+    /// </remarks>
+    private void HandleLaunchRequested()
+    {
+        if (!string.Equals(AgentId, Store.ActiveAgentId, StringComparison.Ordinal))
+            return;
+
+        if (_open)
+            return;
+
+        _ = InvokeAsync(OpenAsync);
+    }
+
+    public void Dispose()
+    {
+        Store.OnChanged -= HandleStoreChanged;
+
+        // The launcher is scoped and outlives this component; a leaked subscription would raise
+        // into a disposed switcher on every later shortcut press.
+        if (_launcher is not null)
+            _launcher.Requested -= HandleLaunchRequested;
+    }
 
     private void HandleStoreChanged() => _ = InvokeAsync(StateHasChanged);
 
@@ -266,6 +308,11 @@
             return;
         }
 
+        await OpenAsync();
+    }
+
+    private async Task OpenAsync()
+    {
         _open = true;
         _query = "";
         // Open on the conversation the user is already in, so Enter is a no-op rather than a

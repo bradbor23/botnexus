@@ -8427,3 +8427,46 @@ h3.conversation-title.editable:hover {
     line-height: var(--text-body-lh);
     text-align: center;
 }
+
+/* Sidebar entry point for the conversation switcher. A button dressed as a search field: it looks
+   like where you type, and opens the switcher whose box you actually type in. */
+.conversation-search-launcher {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: calc(100% - 1.5rem);
+    margin: 0.4rem 0.75rem 0.1rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    cursor: text;
+    text-align: left;
+}
+
+.conversation-search-launcher:hover {
+    border-color: var(--border-focus);
+    color: var(--text-primary);
+}
+
+.conversation-search-launcher-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.conversation-search-launcher-kbd {
+    flex: 0 0 auto;
+    padding: 0.05rem 0.3rem;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: var(--text-caption);
+}
