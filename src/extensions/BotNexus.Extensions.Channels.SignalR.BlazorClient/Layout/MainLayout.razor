@@ -490,6 +490,25 @@
                  Store.Agents.TryGetValue(Store.ActiveAgentId, out var activeAgent))
             {
                 <div class="agent-conversation-list">
+                    @* The findable entry point. The switcher itself lives in the chat header, anchored
+                       to the title it switches away from, where a bare caret is easy to miss - which is
+                       how a shipped search feature can read as absent. This puts a labelled box where
+                       someone looking for conversations already is: above the conversation list. It is
+                       a BUTTON styled as a search field, not an input: typing happens in the switcher's
+                       own box, and two fields that both look like search would be a worse lie than one
+                       that opens the other. *@
+                    @if (SwitcherLauncher is not null)
+                    {
+                    <button class="conversation-search-launcher"
+                            data-testid="sidebar-conversation-search"
+                            @onclick="() => SwitcherLauncher.Request()"
+                            title="Search conversations across all agents (@ShortcutHint)">
+                        <Icon Name="search" Size="13" Class="bn-icon-inherit" />
+                        <span class="conversation-search-launcher-label">Search conversations</span>
+                        <kbd class="conversation-search-launcher-kbd">@ShortcutHint</kbd>
+                    </button>
+                    }
+
                     <div class="agent-conversation-list-header">
                         <span class="agent-conversation-list-title">Conversations</span>
                         @if (!activeAgent.IsReadOnly)
@@ -870,6 +889,8 @@
             _pinnedGroupCollapsed = pinnedStored == "true";
             var conversationsStored = await JS.InvokeAsync<string?>("localStorage.getItem", ConversationsCollapsedKey);
             _conversationsGroupCollapsed = conversationsStored == "true";
+
+            await RegisterSwitcherShortcutAsync();
             var toolsStored = await JS.InvokeAsync<string?>("localStorage.getItem", ToolsCollapsedKey);
             _toolsGroupCollapsed = toolsStored != "false";
             var sectionsStored = await JS.InvokeAsync<string?>("localStorage.getItem", SectionsCollapsedKey);
@@ -1746,5 +1767,86 @@
         return Task.CompletedTask;
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    /// <summary>
+    /// The platform's spelling of the shortcut, for the sidebar hint. Read once from the browser so
+    /// a Mac user is not told to press Ctrl and a Windows user is not told to press Cmd.
+    /// </summary>
+    private string ShortcutHint => _isMacPlatform ? "\u2318K" : "Ctrl K";
+
+    /// <summary>
+    /// The shared switcher launcher, resolved optionally.
+    /// </summary>
+    /// <remarks>
+    /// <c>GetService</c> rather than <c>@inject</c>, for the same reason <c>ConversationSwitcher</c>
+    /// resolves <c>CronApiClient</c> that way: fifteen existing component-test fixtures render this
+    /// layout and register only the services it needed before, and only ten of them share a common
+    /// setup helper - so a constructor-level dependency would turn the other five into DI
+    /// resolution failures with no single place to fix them. <c>Program.cs</c> registers the
+    /// launcher, so the real portal always has it; a null here means a test host, and costs only
+    /// the sidebar box and the shortcut, never the header caret.
+    /// </remarks>
+    private IConversationSwitcherLauncher? SwitcherLauncher =>
+        _switcherLauncher ??= Services.GetService(typeof(IConversationSwitcherLauncher)) as IConversationSwitcherLauncher;
+
+    private IConversationSwitcherLauncher? _switcherLauncher;
+
+    private bool _isMacPlatform;
+    private DotNetObjectReference<MainLayout>? _shortcutRef;
+    private IJSObjectReference? _shortcutRegistration;
+
+    /// <summary>
+    /// Opens the conversation switcher from the Cmd/Ctrl-K shortcut. Invoked from
+    /// <c>js/conversationSwitcher.js</c>.
+    /// </summary>
+    /// <remarks>
+    /// This raises a request rather than opening anything itself: the switcher is rendered by
+    /// <c>ChatPanel</c>, which this layout does not own. See <see cref="IConversationSwitcherLauncher"/>.
+    /// </remarks>
+    [JSInvokable]
+    public void OpenFromShortcut() => SwitcherLauncher?.Request();
+
+    private async Task RegisterSwitcherShortcutAsync()
+    {
+        // Nothing to open without a launcher, so do not attach a document listener either.
+        if (SwitcherLauncher is null)
+            return;
+
+        try
+        {
+            _isMacPlatform = await JS.InvokeAsync<bool>(
+                "eval",
+                "/mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent)");
+        }
+        catch { _isMacPlatform = false; }
+
+        try
+        {
+            _shortcutRef = DotNetObjectReference.Create(this);
+            _shortcutRegistration = await JS.InvokeAsync<IJSObjectReference>(
+                "botnexusConversationSwitcher.registerShortcut", _shortcutRef);
+        }
+        catch
+        {
+            // No script (a test host, or a boot that failed before the file loaded). The sidebar box
+            // and the header caret still open the switcher; only the shortcut is missing.
+            _shortcutRef?.Dispose();
+            _shortcutRef = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        // The listener is on `document` and outlives this component, so it must be removed or every
+        // re-created layout stacks another handler holding a disposed .NET reference.
+        if (_shortcutRegistration is not null)
+        {
+            try { await _shortcutRegistration.InvokeVoidAsync("dispose"); }
+            catch { /* circuit already gone - the listener dies with the page */ }
+
+            try { await _shortcutRegistration.DisposeAsync(); }
+            catch { /* as above */ }
+        }
+
+        _shortcutRef?.Dispose();
+    }
 }

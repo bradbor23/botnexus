@@ -19,6 +19,8 @@ builder.Services.AddScoped<IAgentInteractionService, AgentInteractionService>();
 // circuit, so a singleton would share one user's navigation history with every connected user and
 // redirect them into each other's conversations.
 builder.Services.AddScoped<IConversationMruService, ConversationMruService>();
+// Lets the sidebar search box and the Cmd/Ctrl-K shortcut open the switcher that ChatPanel owns.
+builder.Services.AddScoped<IConversationSwitcherLauncher, ConversationSwitcherLauncher>();
 // #2036: start-conversation orchestration (create -> persist model override -> send first message).
 builder.Services.AddScoped<IStartConversationService, StartConversationService>();
 builder.Services.AddScoped<BotNexus.Extensions.Channels.SignalR.BlazorClient.Services.SlashCommands.ISlashCommandDispatcher, BotNexus.Extensions.Channels.SignalR.BlazorClient.Services.SlashCommands.SlashCommandDispatcher>();

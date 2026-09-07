@@ -11,6 +11,38 @@
 // block (no transform, filter or will-change). The trade is that fixed offsets are viewport-relative,
 // so the panel has to be told where its trigger is - which is all this file does.
 window.botnexusConversationSwitcher = {
+
+    // Cmd/Ctrl-K opens the switcher from anywhere in the portal.
+    //
+    // The control itself is a caret beside the conversation title - discoverable once you know it is
+    // there, invisible if you do not, which is how a search feature ended up feeling absent. This is
+    // the shortcut people already try first.
+    //
+    // Returns a disposer so the caller can unregister on dispose: the listener is on `document` and
+    // outlives any single component, so leaving it attached would stack a new handler on every
+    // re-render of the owner and keep a disposed .NET reference alive.
+    registerShortcut: function (dotNetRef) {
+        if (!dotNetRef) return null;
+
+        const handler = function (e) {
+            // metaKey for macOS, ctrlKey elsewhere. Not both: Ctrl-K on macOS is the readline
+            // "kill to end of line" binding that works in every text field.
+            const combo = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && !e.metaKey);
+            if (!combo || e.altKey || e.shiftKey) return;
+            if ((e.key || '').toLowerCase() !== 'k') return;
+
+            // preventDefault BEFORE the interop call: the browser's own Cmd-K (search-bar focus in
+            // some browsers) fires synchronously, and awaiting .NET first would let it win.
+            e.preventDefault();
+            dotNetRef.invokeMethodAsync('OpenFromShortcut');
+        };
+
+        document.addEventListener('keydown', handler);
+        return {
+            dispose: function () { document.removeEventListener('keydown', handler); }
+        };
+    },
+
     // Places `panel` under `trigger`, flipping above it when there is not enough room below and
     // clamping horizontally so a switcher near the right edge stays on screen.
     anchor: function (trigger, panel) {
