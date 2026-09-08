@@ -33,8 +33,6 @@ builder.Services.AddScoped<ExtensionFeatureService>();
 builder.Services.AddScoped<IUpdateStatusService, UpdateStatusService>();
 builder.Services.AddScoped<LocationsApiClient>();
 builder.Services.AddScoped<CronApiClient>();
-builder.Services.AddScoped<SectionsApiClient>();
-builder.Services.AddScoped<ConversationSectionsState>();
 builder.Services.AddScoped<ToolsApiClient>();
 // Sibling of the API clients around it and registered the same way. Its absence was not a design
 // choice: Pages/Plugins.razor injects it, so navigating to /plugins threw
