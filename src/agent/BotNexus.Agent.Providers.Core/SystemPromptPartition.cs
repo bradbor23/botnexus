@@ -201,7 +201,14 @@ public static class SystemPromptPartition
         return null;
     }
 
-    /// <summary>Wraps relocated content so it reads as supplied context rather than user speech.</summary>
-    public static string Wrap(string volatileText) =>
+    /// <summary>
+    /// Wraps relocated content so it reads as supplied context rather than user speech.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately private. It is an implementation detail of the two append methods, and a
+    /// public static string-to-string helper would owe the tree a <c>this string</c> extension
+    /// (#2925) that nothing outside this type would ever want to call.
+    /// </remarks>
+    private static string Wrap(string volatileText) =>
         $"{OpenTag}\n{volatileText}\n{CloseTag}";
 }
