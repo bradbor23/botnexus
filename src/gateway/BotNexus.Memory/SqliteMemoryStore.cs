@@ -19,6 +19,46 @@ public sealed class SqliteMemoryStore(
     ILogger<SqliteMemoryStore>? logger = null) : IMemoryStore
 {
     private const double DefaultHalfLifeDays = 30d;
+
+    /// <summary>
+    /// SQL predicate (over the <c>m</c> alias) selecting rows that are currently retrievable:
+    /// not archived, and not past their <c>expires_at</c> instant.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why the two conditions are one constant.</b> <c>expires_at</c> was persisted, round-tripped
+    /// and rendered from the day the column was added, but appeared in no <c>WHERE</c> clause, so a
+    /// row written with a TTL stayed searchable forever - the column advertised a retention
+    /// guarantee the store did not keep. Archival and expiry are the same kind of fact (this row is
+    /// no longer live), and the way the first one stayed enforced while the second silently did not
+    /// is by living in separate places. Binding them into a single named predicate makes a search
+    /// path that filters one but not the other unwritable rather than merely unlikely.
+    /// </para>
+    /// <para>
+    /// <b>Why <c>julianday</c> and not a string comparison.</b> Timestamps are stored in round-trip
+    /// ("O") format, which carries an offset; comparing two such strings orders them by wall-clock
+    /// text rather than by instant, so <c>+02:00</c> would sort against <c>+00:00</c> incorrectly.
+    /// <c>julianday</c> normalises both sides to an absolute instant, and is already the idiom this
+    /// file uses for the <c>age_days</c> decay input.
+    /// </para>
+    /// <para>
+    /// <b>An unparseable expiry hides the row.</b> <c>julianday</c> returns NULL on a malformed
+    /// value, and <c>NULL &gt; x</c> is NULL, so the row fails the predicate and is not returned.
+    /// That is the fail-closed direction: a row whose expiry cannot be evaluated is withheld rather
+    /// than served. It is deliberately not symmetric with archival - see the note on the absence of
+    /// a purge sweep in <see cref="InitializeAsync"/>.
+    /// </para>
+    /// <para>
+    /// Direct addressing (<see cref="GetByIdAsync"/>, <see cref="GetBySessionAsync"/>) deliberately
+    /// does <b>not</b> apply this predicate, exactly as it has never applied the archived filter:
+    /// an entry named by id must stay inspectable and deletable after it expires, and the indexer's
+    /// session reconciliation must see every row it previously wrote or it will re-insert duplicates
+    /// of expired ones.
+    /// </para>
+    /// </remarks>
+    private const string LiveRowPredicate =
+        "m.is_archived = 0 AND (m.expires_at IS NULL OR julianday(m.expires_at) > julianday('now'))";
+
     private readonly string _dbPath = dbPath;
     private readonly SqliteWalMaintenance _walMaintenance = new(fileSystem);
     private readonly string _connectionString = $"Data Source={dbPath};Mode=ReadWriteCreate";
@@ -176,11 +216,17 @@ public sealed class SqliteMemoryStore(
         }
     }
 
-    /// <summary>Live (non-archived) rows carrying an embedding vector.</summary>
+    /// <summary>Live (neither archived nor expired) rows carrying an embedding vector.</summary>
+    /// <remarks>
+    /// This count exists to predict vector-scan cost, so it has to apply the same liveness
+    /// predicate the scan itself applies. Counting expired rows here would over-report the corpus
+    /// the scan will actually walk and could raise the ceiling warning for rows no search can reach.
+    /// </remarks>
     private static async Task<int> CountEmbeddedRowsAsync(SqliteConnection connection, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM memories WHERE is_archived = 0 AND embedding IS NOT NULL";
+        command.CommandText =
+            $"SELECT COUNT(*) FROM memories m WHERE {LiveRowPredicate} AND m.embedding IS NOT NULL";
         var scalar = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return scalar is null or DBNull ? 0 : Convert.ToInt32(scalar, CultureInfo.InvariantCulture);
     }
@@ -550,7 +596,7 @@ public sealed class SqliteMemoryStore(
 
         await using var command = connection.CreateCommand();
         var sql = new StringBuilder(
-            """
+            $"""
             SELECT m.id, m.agent_id, m.session_id, m.turn_index, m.source_type, m.content, m.metadata_json,
                    m.embedding, m.created_at, m.updated_at, m.expires_at, m.is_archived,
                    m.provenance, m.origin_conversation_id, m.origin_session_id,
@@ -559,7 +605,7 @@ public sealed class SqliteMemoryStore(
             FROM memories_fts
             INNER JOIN memories m ON m.rowid = memories_fts.rowid
             WHERE memories_fts MATCH $query
-              AND m.is_archived = 0
+              AND {LiveRowPredicate}
             """);
 
         command.Parameters.AddWithValue("$query", matchExpression);
@@ -670,10 +716,10 @@ public sealed class SqliteMemoryStore(
     {
         await using var command = connection.CreateCommand();
         var sql = new StringBuilder(
-            """
+            $"""
             SELECT COUNT(*)
             FROM memories m
-            WHERE m.is_archived = 0
+            WHERE {LiveRowPredicate}
             """);
         sql.AppendLine();
         AppendFilters(sql, command, filter);
@@ -690,12 +736,12 @@ public sealed class SqliteMemoryStore(
 
         await using var command = connection.CreateCommand();
         var sql = new StringBuilder(
-            """
+            $"""
             SELECT COUNT(*)
             FROM memories_fts
             INNER JOIN memories m ON m.rowid = memories_fts.rowid
             WHERE memories_fts MATCH $query
-              AND m.is_archived = 0
+              AND {LiveRowPredicate}
             """);
         sql.AppendLine();
         command.Parameters.AddWithValue("$query", matchExpression);
@@ -801,13 +847,13 @@ public sealed class SqliteMemoryStore(
         await connection.OpenAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         var sql = new StringBuilder(
-            """
+            $"""
             SELECT m.id, m.agent_id, m.session_id, m.turn_index, m.source_type, m.content, m.metadata_json,
                    m.embedding, m.created_at, m.updated_at, m.expires_at, m.is_archived,
                    m.provenance, m.origin_conversation_id, m.origin_session_id,
                    (julianday('now') - julianday(m.created_at)) AS age_days
             FROM memories m
-            WHERE m.is_archived = 0
+            WHERE {LiveRowPredicate}
             """);
 
         // See the note on the FTS path: the raw string literal has no trailing newline.
@@ -970,13 +1016,13 @@ public sealed class SqliteMemoryStore(
     {
         await using var command = connection.CreateCommand();
         var sql = new StringBuilder(
-            """
+            $"""
             SELECT m.id, m.agent_id, m.session_id, m.turn_index, m.source_type, m.content, m.metadata_json,
                    m.embedding, m.created_at, m.updated_at, m.expires_at, m.is_archived,
                    m.provenance, m.origin_conversation_id, m.origin_session_id,
                    (julianday('now') - julianday(m.created_at)) AS age_days
             FROM memories m
-            WHERE m.is_archived = 0
+            WHERE {LiveRowPredicate}
               AND m.embedding IS NOT NULL
             """);
 
