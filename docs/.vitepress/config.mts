@@ -15,7 +15,6 @@ export default defineConfig({
     // srcExclude'd content directories: referenced as related reading but not
     // part of the deployed docs build (kept in repo, see srcExclude below)
     /\/internals\//,
-    /\/api\//,
     // Repo-root and nested AGENTS.md convention files referenced from dev/architecture
     // docs but outside the docs source tree
     /AGENTS(\.md)?$/,
@@ -128,6 +127,7 @@ export default defineConfig({
           { text: 'QMD (Knowledge Base)', link: '/extensions/qmd' },
           { text: 'Debug Tool', link: '/extensions/debug-tool' },
           { text: 'GitHub', link: '/extensions/github' },
+          { text: 'TaskNexus', link: '/extensions/tasknexus' },
           { text: 'Media Handlers', link: '/extensions/media-handlers' },
           { text: 'Agent 365 Channel', link: '/extensions/agent365' },
           { text: 'Matrix Channel', link: '/extensions/matrix' },
@@ -188,6 +188,7 @@ export default defineConfig({
           { text: 'Stale-Base Merges', link: '/development/stale-base-merges' },
           { text: 'Documentation Grooming', link: '/development/documentation-grooming' },
           { text: 'Azure Build and Test Runner', link: '/development/azure-build-test-runner' },
+          { text: 'Exact-Source Remote Snapshots', link: '/development/remote-source-snapshots' },
           { text: 'Maintenance Orchestration', link: '/development/autonomous-maintenance-orchestration' },
           { text: 'Validation Receipts', link: '/development/validation-receipts' },
           { text: 'Spike: Workflow Conversations', link: '/development/spike-workflow-conversations' },
