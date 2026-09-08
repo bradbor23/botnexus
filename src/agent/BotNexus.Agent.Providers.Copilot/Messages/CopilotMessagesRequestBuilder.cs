@@ -80,7 +80,7 @@ internal static class CopilotMessagesRequestBuilder
         // After the breakpoint, never before it: the volatile half is rebuilt per request, so
         // inside a cached prefix it would guarantee a miss on the following one.
         Dictionary<string, object?>? volatileSystemBlock = null;
-        if (!SystemPromptPartition.TryAppendToConversation(messages, volatileContext) &&
+        if (!SystemPromptPartition.TryAppendToBlockConversation(messages, volatileContext) &&
             !string.IsNullOrWhiteSpace(volatileContext))
         {
             volatileSystemBlock = new Dictionary<string, object?>

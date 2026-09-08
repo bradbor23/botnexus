@@ -113,7 +113,7 @@ internal static class AnthropicRequestBuilder
         // rebuilt per request and never persisted, so anything that lands INSIDE a cached prefix
         // guarantees the next request cannot match it. Appended here it sits behind the last
         // breakpoint, where it costs its own tokens and nothing else.
-        if (!SystemPromptPartition.TryAppendToConversation(messages, volatileContext) &&
+        if (!SystemPromptPartition.TryAppendToBlockConversation(messages, volatileContext) &&
             !string.IsNullOrWhiteSpace(volatileContext))
         {
             // Nowhere safe to put it -- no messages, or the conversation ends on an assistant

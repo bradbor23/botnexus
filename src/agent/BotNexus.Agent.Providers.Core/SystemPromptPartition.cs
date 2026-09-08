@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace BotNexus.Agent.Providers.Core;
 
 /// <summary>
@@ -85,7 +87,7 @@ public static class SystemPromptPartition
     /// words in the model's own mouth, and appending to nothing at all would lose the context, so
     /// both cases decline and let the caller fall back.
     /// </remarks>
-    public static bool TryAppendToConversation(
+    public static bool TryAppendToBlockConversation(
         List<Dictionary<string, object?>> messages, string? volatileText)
     {
         ArgumentNullException.ThrowIfNull(messages);
@@ -125,6 +127,78 @@ public static class SystemPromptPartition
                 // the message's real content.
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Appends relocated context to the last message of an OpenAI-shaped conversation.
+    /// </summary>
+    /// <param name="messages">The built message array.</param>
+    /// <param name="volatileText">The text to relocate.</param>
+    /// <returns><c>true</c> when appended; <c>false</c> means the caller must keep it in the system prompt.</returns>
+    /// <remarks>
+    /// <para>
+    /// These providers have no explicit breakpoints -- they match the longest identical prefix --
+    /// which is exactly why appending at the very end is safe. Dropping a suffix leaves a valid
+    /// prefix, so next turn's request, carrying different relocated text, still matches everything
+    /// up to where this turn's text began.
+    /// </para>
+    /// <para>
+    /// String content stays a string rather than being promoted to a parts array: strict
+    /// OpenAI-compatible servers reject the array form, and a size optimisation must not change
+    /// the wire shape under them. Array content clones the part type already in use, because the
+    /// Responses API spells it <c>input_text</c> where Chat Completions spells it <c>text</c>;
+    /// guessing wrong would be rejected, so an array with no text part to copy declines instead.
+    /// </para>
+    /// </remarks>
+    public static bool TryAppendToTextConversation(JsonArray messages, string? volatileText)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+
+        if (string.IsNullOrWhiteSpace(volatileText) || messages.Count == 0)
+            return false;
+
+        if (messages[^1] is not JsonObject last)
+            return false;
+
+        if (last["role"]?.GetValue<string>() is not "user")
+            return false;
+
+        var wrapped = Wrap(volatileText);
+
+        switch (last["content"])
+        {
+            case JsonArray parts:
+                if (ResolveTextPartType(parts) is not { } partType)
+                    return false;
+
+                parts.Add(new JsonObject { ["type"] = partType, ["text"] = wrapped });
+                return true;
+
+            case JsonValue value when value.TryGetValue<string>(out var existing):
+                last["content"] = existing + "\n\n" + wrapped;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// The spelling this API uses for a text content part, taken from a part already present.
+    /// </summary>
+    private static string? ResolveTextPartType(JsonArray parts)
+    {
+        for (var i = parts.Count - 1; i >= 0; i--)
+        {
+            if (parts[i] is JsonObject part &&
+                part["type"]?.GetValue<string>() is { } type &&
+                type.EndsWith("text", StringComparison.Ordinal))
+            {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Wraps relocated content so it reads as supplied context rather than user speech.</summary>

@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using BotNexus.Agent.Providers.Core;
 
 namespace BotNexus.Agent.Providers.Core.Tests;
@@ -63,7 +64,7 @@ public class SystemPromptPartitionTests
             UserMessage(WithBreakpoint(TextBlock("hello")))
         };
 
-        SystemPromptPartition.TryAppendToConversation(messages, "runtime state").ShouldBeTrue();
+        SystemPromptPartition.TryAppendToBlockConversation(messages, "runtime state").ShouldBeTrue();
 
         var blocks = (List<object>)messages[^1]["content"]!;
         blocks.Count.ShouldBe(2);
@@ -79,7 +80,7 @@ public class SystemPromptPartitionTests
             new() { ["role"] = "user", ["content"] = "hello" }
         };
 
-        SystemPromptPartition.TryAppendToConversation(messages, "runtime state").ShouldBeTrue();
+        SystemPromptPartition.TryAppendToBlockConversation(messages, "runtime state").ShouldBeTrue();
 
         var blocks = (List<object>)messages[^1]["content"]!;
         ((Dictionary<string, object?>)blocks[0])["text"].ShouldBe("hello");
@@ -95,14 +96,14 @@ public class SystemPromptPartitionTests
             new() { ["role"] = "assistant", ["content"] = new List<object> { TextBlock("sure") } }
         };
 
-        SystemPromptPartition.TryAppendToConversation(messages, "runtime state").ShouldBeFalse();
+        SystemPromptPartition.TryAppendToBlockConversation(messages, "runtime state").ShouldBeFalse();
         ((List<object>)messages[^1]["content"]!).Count.ShouldBe(1);
     }
 
     [Fact]
     public void Append_RefusesWhenThereIsNoConversation()
     {
-        SystemPromptPartition.TryAppendToConversation([], "runtime state").ShouldBeFalse();
+        SystemPromptPartition.TryAppendToBlockConversation([], "runtime state").ShouldBeFalse();
     }
 
     [Theory]
@@ -116,7 +117,7 @@ public class SystemPromptPartitionTests
             UserMessage(TextBlock("hello"))
         };
 
-        SystemPromptPartition.TryAppendToConversation(messages, volatileText).ShouldBeFalse();
+        SystemPromptPartition.TryAppendToBlockConversation(messages, volatileText).ShouldBeFalse();
         ((List<object>)messages[^1]["content"]!).Count.ShouldBe(1);
     }
 
@@ -129,7 +130,82 @@ public class SystemPromptPartitionTests
             new() { ["role"] = "user", ["content"] = null }
         };
 
-        SystemPromptPartition.TryAppendToConversation(messages, "runtime state").ShouldBeFalse();
+        SystemPromptPartition.TryAppendToBlockConversation(messages, "runtime state").ShouldBeFalse();
+    }
+
+    // ---------- OpenAI-shaped conversations ----------
+
+    [Fact]
+    public void AppendText_KeepsStringContentAString()
+    {
+        // Strict OpenAI-compatible servers reject the parts-array form. A size optimisation must
+        // not change the wire shape under them.
+        var messages = new JsonArray
+        {
+            new JsonObject { ["role"] = "user", ["content"] = "hello" }
+        };
+
+        SystemPromptPartition.TryAppendToTextConversation(messages, "runtime state").ShouldBeTrue();
+
+        var content = messages[0]!["content"]!.GetValue<string>();
+        content.ShouldStartWith("hello");
+        content.ShouldContain("runtime state");
+    }
+
+    [Theory]
+    [InlineData("text")]        // Chat Completions
+    [InlineData("input_text")]  // Responses
+    public void AppendText_ClonesThePartTypeAlreadyInUse(string partType)
+    {
+        // The two APIs spell a text part differently and reject the other spelling.
+        var messages = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray { new JsonObject { ["type"] = partType, ["text"] = "hello" } }
+            }
+        };
+
+        SystemPromptPartition.TryAppendToTextConversation(messages, "runtime state").ShouldBeTrue();
+
+        var parts = messages[0]!["content"]!.AsArray();
+        parts.Count.ShouldBe(2);
+        parts[1]!["type"]!.GetValue<string>().ShouldBe(partType);
+    }
+
+    [Fact]
+    public void AppendText_DeclinesWhenNoTextPartRevealsTheSpelling()
+    {
+        // Guessing would be rejected by the API. Falling back to the system prompt costs a cache
+        // prefix and nothing else.
+        var messages = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray { new JsonObject { ["type"] = "input_image" } }
+            }
+        };
+
+        SystemPromptPartition.TryAppendToTextConversation(messages, "runtime state").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AppendText_RefusesAnAssistantTurn()
+    {
+        var messages = new JsonArray
+        {
+            new JsonObject { ["role"] = "assistant", ["content"] = "sure" }
+        };
+
+        SystemPromptPartition.TryAppendToTextConversation(messages, "runtime state").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AppendText_RefusesWhenThereIsNoConversation()
+    {
+        SystemPromptPartition.TryAppendToTextConversation([], "runtime state").ShouldBeFalse();
     }
 
     private static Dictionary<string, object?> TextBlock(string text)

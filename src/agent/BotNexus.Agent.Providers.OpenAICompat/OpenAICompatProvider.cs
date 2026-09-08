@@ -221,11 +221,28 @@ public sealed class OpenAICompatProvider(HttpClient httpClient) : IApiProvider
     private static JsonObject BuildRequestBody(
         LlmModel model, Context context, StreamOptions? options, OpenAICompletionsCompat compat)
     {
-        var messages = BuildMessages(context, compat, model);
+        // Relocate the volatile half of the system prompt to the end of the conversation: in the
+        // system prompt it invalidates every message behind it whenever it changes, at the end it
+        // invalidates only itself. Falls back to the prompt intact when there is nowhere to put it.
+        var (stableSystemPrompt, volatileContext) =
+            SystemPromptPartition.Split(context.SystemPrompt ?? string.Empty);
+
+        var messageContext = volatileContext is null
+            ? context
+            : context with { SystemPrompt = stableSystemPrompt };
+
+        var messageArray = ToNode(BuildMessages(messageContext, compat, model))!.AsArray();
+
+        if (volatileContext is not null &&
+            !SystemPromptPartition.TryAppendToTextConversation(messageArray, volatileContext))
+        {
+            messageArray = ToNode(BuildMessages(context, compat, model))!.AsArray();
+        }
+
         var body = new JsonObject
         {
             ["model"] = model.Id,
-            ["messages"] = ToNode(messages),
+            ["messages"] = messageArray,
             ["stream"] = true,
         };
 
