@@ -84,8 +84,6 @@ public sealed class PortalNavContributionTests : IDisposable
         _ctx.Services.AddSingleton(http);
         _ctx.Services.AddSingleton(_features);
         _ctx.Services.AddSingleton(new CronApiClient(http));
-        _ctx.Services.AddSingleton(new SectionsApiClient(http));
-        _ctx.Services.AddSingleton(sp => new ConversationSectionsState(sp.GetRequiredService<SectionsApiClient>()));
         _ctx.Services.AddSingleton(new ToolsApiClient(new HttpClient(new FixedJsonHandler(() => "[]")) { BaseAddress = new Uri("http://localhost/") }));
         _pluginsApi = new PluginsApiClient(
             new HttpClient(new PluginsHandler(() => _pluginsJson)) { BaseAddress = new Uri("http://localhost/") });

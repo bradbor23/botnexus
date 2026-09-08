@@ -11,8 +11,6 @@
 @inject IJSRuntime JS
 @inject IPortalPreferencesService Prefs
 @inject CronApiClient CronApi
-@inject SectionsApiClient SectionsApi
-@inject ConversationSectionsState SectionsState
 @inject ToolsApiClient ToolsApi
 @inject NavOrderApiClient NavOrderApi
 @inject IServiceProvider Services
@@ -228,17 +226,13 @@
 }
 
 @code {
-    // Conversation id whose "move to section" menu is currently open (#2324); null when closed.
-    private string? _sectionMenuConversationId;
 
     private bool _cronGroupCollapsed = true;
     private HashSet<string> _cronConversationIds = new(StringComparer.OrdinalIgnoreCase);
     private const string CronCollapsedKey = "botnexus-cron-collapsed";
 
-    // #2441: Tools and My-Sections collapse state persist with the same localStorage key pattern
+    // #2441: collapse state persists with the same localStorage key pattern
     // as the Scheduled group, and both default to collapsed so the nav starts tight.
-    private bool _sectionsGroupCollapsed = true;
-    private const string SectionsCollapsedKey = "botnexus-sections-collapsed";
 
     // #2122: Webhooks is its own section, and Pinned / Conversations became collapsible. All three
     // reuse the exact Scheduled-group persistence pattern (a "true"/"false" string under a
@@ -747,18 +741,8 @@
                             var webhookConversations = allUserConversations
                                 .Where(c => !IsPinnedConversation(c) && !IsCronConversation(c) && IsWebhookConversation(c))
                                 .ToList();
-                            @* #2325: a conversation assigned to a user-defined section is rendered by
-                               the sections panel, so subtract it here or it renders twice. Subtraction
-                               composes exactly like pinning/cron: it is applied AFTER pinned, cron and
-                               webhook are hoisted out, so a pinned or scheduled conversation keeps its
-                               existing home and only plain default-list rows can move into a section.
-                               Collapsing a section hides its body but never unmounts an assignment, and
-                               an assignment only exists while the owning section exists (deleting a
-                               section returns its conversations to the default list), so this cannot
-                               strand a conversation with no reachable row. *@
                             var normalConversations = allUserConversations
                                 .Where(c => !IsPinnedConversation(c) && !IsCronConversation(c) && !IsWebhookConversation(c))
-                                .Where(c => !IsRenderedInSection(activeAgent, c))
                                 .Where(MatchesActivityFilter)
                                 .ToList();
 
@@ -896,34 +880,6 @@
             }
         }
 
-        @* #2441: "My sections" is a child of the agent chat section, not a sibling floating at the
-           bottom of the sidebar. It is nested inside the chat region and collapsible so an unused
-           sections feature costs one thin header row instead of a whole block. *@
-        @if (Store.ActiveAgentId is not null &&
-             Store.Agents.TryGetValue(Store.ActiveAgentId, out var sectionsAgent) &&
-             !sectionsAgent.IsReadOnly)
-        {
-            <div class="chat-nav-child" data-testid="chat-sections-child">
-                <button class="conversation-group-header conversation-group-header-toggle chat-nav-child-header"
-                        data-testid="sections-group-toggle"
-                        aria-expanded="@(!_sectionsGroupCollapsed ? "true" : "false")"
-                        @onclick="ToggleSectionsGroup">
-                    <span class="group-chevron @(!_sectionsGroupCollapsed ? "expanded" : "")">&#x25B6;</span>
-                    <span class="conversation-group-label">&#x1F4C1; My sections</span>
-                </button>
-                @* Collapse hides the body via a class rather than unmounting, so the panel keeps its
-                   transient UI state (in-progress create / rename). Section data itself now lives in
-                   the scoped ConversationSectionsState service (#2325), not in this component. *@
-                <div class="chat-nav-child-body @(_sectionsGroupCollapsed ? "collapsed" : "")"
-                     data-testid="chat-sections-body">
-                    <ConversationSectionsPanel AgentId="@sectionsAgent.AgentId"
-                                               TitleResolver="@(id => ResolveConversationTitle(sectionsAgent, id))"
-                                               OnConversationSelected="@(id => SelectConversationAsync(sectionsAgent.AgentId, id))"
-                                               ItemActions="@(id => RenderSectionMemberActions(sectionsAgent, id))"
-                                               OnChanged="HandleSectionsChanged" />
-                </div>
-            </div>
-        }
         </div>@* end sidebar-scroll-region *@
     };
 
@@ -955,11 +911,9 @@
         ExtensionFeatures.OnChanged += HandleStateChanged;
         Hub.OnAgentsChanged += HandleSidebarAgentsChanged;
         Prefs.OnChanged += HandleStateChanged;
-        // #2325: the assign menu now resolves sections from the lifted ConversationSectionsState
         // rather than a panel @ref, so the layout must re-render on its changes itself. Without
         // this the menu renders whatever was loaded at first paint and silently goes stale - the
         // component ref it replaced got re-render coupling for free by being in the render tree.
-        SectionsState.Changed += HandleStateChanged;
     }
 
     // Tools and nav order load independently of the JS-driven first-render pipeline so the nav
@@ -1032,8 +986,6 @@
 
             await RegisterSwitcherShortcutAsync();
             await RegisterToolbarMeasurerAsync();
-            var sectionsStored = await JS.InvokeAsync<string?>("localStorage.getItem", SectionsCollapsedKey);
-            _sectionsGroupCollapsed = sectionsStored != "false";
             var filterStored = await JS.InvokeAsync<string?>("localStorage.getItem", ActivityFilterKey);
             if (Enum.TryParse<ConversationActivityFilter>(filterStored, out var storedFilter))
                 _activityFilter = storedFilter;
@@ -1292,11 +1244,6 @@
     }
 
 
-    private async Task ToggleSectionsGroup()
-    {
-        _sectionsGroupCollapsed = !_sectionsGroupCollapsed;
-        await JS.InvokeVoidAsync("localStorage.setItem", SectionsCollapsedKey, _sectionsGroupCollapsed ? "true" : "false");
-    }
 
     /// <summary>
     /// Recent-activity filter applied to the normal (non-pinned, non-scheduled) conversation list.
@@ -1330,37 +1277,7 @@
         await JS.InvokeVoidAsync("localStorage.setItem", ActivityFilterKey, filter.ToString());
     }
 
-    // #2325: the "move to section" menu is a row affordance. An assigned conversation no longer has
-    // a default-list row, so the menu is projected onto its section member row instead - the
-    // affordance moves with the conversation rather than disappearing when it is assigned.
-    private RenderFragment RenderSectionMemberActions(AgentState agent, string conversationId) => __builder =>
-    {
-        @if (!agent.IsReadOnly && agent.Conversations.TryGetValue(conversationId, out var conversation) && !conversation.IsDefault)
-        {
-            @RenderSectionButton(conversation)
-            @RenderSectionMenu(agent, conversation)
-        }
-    };
 
-    // #2325: true only when this conversation is assigned to a section that WILL actually render a
-    // row for it. Subtracting from the default list is a visibility change, so it is gated on the
-    // section being reachable rather than on the assignment alone:
-    //   * the sections panel is only mounted for a non-read-only agent, so a read-only agent keeps
-    //     every conversation in the default list;
-    //   * an assignment whose section id is not in SectionsState.Sections (deleted server-side, or a
-    //     load that has not landed yet) is ignored, so a stale map can never strand a conversation.
-    // Collapse is deliberately NOT considered: a collapsed section still renders its header and is
-    // one click from its members, exactly as the Pinned group behaves. Assignment composes with the
-    // existing groups rather than overriding them - it is applied only after pinned, cron and
-    // webhook have been hoisted out, so those conversations keep their existing home.
-    private bool IsRenderedInSection(AgentState agent, ConversationState conversation)
-    {
-        if (agent.IsReadOnly)
-            return false;
-        var sectionId = SectionsState.GetAssignedSectionId(conversation.ConversationId);
-        return sectionId is not null
-            && SectionsState.Sections.Any(s => string.Equals(s.SectionId, sectionId, StringComparison.Ordinal));
-    }
 
     private RenderFragment RenderConversationItem(AgentState agent, ConversationState conversation) => __builder =>
     {
@@ -1402,7 +1319,6 @@
                    and all three sat on the title. Flex + gap cannot drift out of step. The
                    section menu stays outside the strip: it positions against the row. *@
                 <div class="conversation-row-actions">
-                    @RenderSectionButton(conversation)
                     <button class="conversation-pin-btn @(conversation.IsPinned ? "pinned" : "")" data-testid="conversation-pin-btn"
                             title="@(conversation.IsPinned ? "Unpin conversation" : "Pin conversation to top")"
                             aria-label="@(conversation.IsPinned ? "Unpin conversation" : "Pin conversation to top")"
@@ -1421,86 +1337,18 @@
                               Size="16" Class="bn-icon-inherit" />
                     </button>
                 </div>
-                @RenderSectionMenu(agent, conversation)
             }
         </div>
     };
 
-    // #2324: the sections feature (#2124) shipped with no way to put a conversation *into* a section -
-    // SectionsApiClient.AssignAsync had zero UI call sites. This is the interim inline affordance the
-    // issue sanctions: a per-row folder button opening a small "move to section" menu. The richer
-    // right-click context menu (#2326) and inline section rendering (#2325) are separate work; when
-    // #2326 lands, this menu's Assign/Unassign handlers are the reusable seam it can call.
-    private RenderFragment RenderSectionButton(ConversationState conversation) => __builder =>
-    {
-        var isOpen = string.Equals(_sectionMenuConversationId, conversation.ConversationId, StringComparison.Ordinal);
-        <button class="conversation-section-btn" data-testid="conversation-section-btn"
-                title="Move to section"
-                aria-label="Move to section"
-                aria-haspopup="menu"
-                aria-expanded="@(isOpen ? "true" : "false")"
-                @onclick:stopPropagation="true"
-                @onclick="() => ToggleSectionMenu(conversation.ConversationId)">
-            <Icon Name="move" Size="16" />
-        </button>
-    };
 
     // The menu is a sibling of the actions strip, not a child of it: it positions against
     // .conversation-list-item, and nesting it inside an absolutely positioned strip would
     // re-anchor it to the strip instead.
-    private RenderFragment RenderSectionMenu(AgentState agent, ConversationState conversation) => __builder =>
-    {
-        var isOpen = string.Equals(_sectionMenuConversationId, conversation.ConversationId, StringComparison.Ordinal);
-        @if (isOpen)
-        {
-            var sections = SectionsState.Sections;
-            var currentSectionId = GetAssignedSectionId(conversation.ConversationId);
-            <div class="conversation-section-menu" data-testid="conversation-section-menu" role="menu">
-                <button class="conversation-section-menu-item @(currentSectionId is null ? "active" : "")"
-                        role="menuitem"
-                        data-testid="conversation-section-menu-none"
-                        @onclick:stopPropagation="true"
-                        @onclick="() => UnassignConversationSectionAsync(agent.AgentId, conversation.ConversationId)">None</button>
-                @foreach (var section in sections)
-                {
-                    <button class="conversation-section-menu-item @(string.Equals(currentSectionId, section.SectionId, StringComparison.Ordinal) ? "active" : "")"
-                            role="menuitem"
-                            data-testid="conversation-section-menu-item"
-                            data-section-id="@(section.SectionId)"
-                            @onclick:stopPropagation="true"
-                            @onclick="() => AssignConversationSectionAsync(agent.AgentId, conversation.ConversationId, section.SectionId)">@(section.Name)</button>
-                }
-                @if (sections.Count == 0)
-                {
-                    <div class="conversation-section-menu-empty" data-testid="conversation-section-menu-empty">No sections yet.</div>
-                }
-            </div>
-        }
-    };
 
-    private void ToggleSectionMenu(string conversationId) =>
-        _sectionMenuConversationId = string.Equals(_sectionMenuConversationId, conversationId, StringComparison.Ordinal)
-            ? null
-            : conversationId;
 
-    private string? GetAssignedSectionId(string conversationId) =>
-        SectionsState.GetAssignedSectionId(conversationId);
 
-    private async Task AssignConversationSectionAsync(string agentId, string conversationId, string sectionId)
-    {
-        _sectionMenuConversationId = null;
-        if (await SectionsApi.AssignAsync(agentId, sectionId, conversationId))
-            await SectionsState.ReloadAsync();
-        StateHasChanged();
-    }
 
-    private async Task UnassignConversationSectionAsync(string agentId, string conversationId)
-    {
-        _sectionMenuConversationId = null;
-        if (await SectionsApi.UnassignAsync(agentId, conversationId))
-            await SectionsState.ReloadAsync();
-        StateHasChanged();
-    }
 
     // #2441: agent display names and emoji come from user-editable config and may contain embedded
     // control characters; normalise to a single line so the dropdown row cannot grow.
@@ -1660,7 +1508,6 @@
         ExtensionFeatures.OnChanged -= HandleStateChanged;
         Hub.OnAgentsChanged -= HandleSidebarAgentsChanged;
         Prefs.OnChanged -= HandleStateChanged;
-        SectionsState.Changed -= HandleStateChanged;
     }
 
     private bool IsAgentActive(string agentId)
@@ -1866,13 +1713,6 @@
     private static string? ResolveConversationTitle(AgentState agent, string conversationId)
         => agent.Conversations.TryGetValue(conversationId, out var conv) ? conv.Title : conversationId;
 
-    // Sections changed (create/rename/reorder/delete/assign/remove): re-render so the sidebar reflects
-    // the new custom grouping. The panel owns its own server-persisted state; the layout just repaints.
-    private Task HandleSectionsChanged()
-    {
-        StateHasChanged();
-        return Task.CompletedTask;
-    }
 
     /// <summary>
     /// The platform's spelling of the shortcut, for the sidebar hint. Read once from the browser so

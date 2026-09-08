@@ -80,8 +80,6 @@ public sealed class MainLayoutSubNavTestIdTests : IDisposable
         _ctx.Services.AddSingleton(http);
         _ctx.Services.AddSingleton(_features);
         _ctx.Services.AddSingleton(new CronApiClient(http));
-        _ctx.Services.AddSingleton(new SectionsApiClient(http));
-        _ctx.Services.AddSingleton(sp => new ConversationSectionsState(sp.GetRequiredService<SectionsApiClient>()));
 
         // Two tools, so the tools rows likewise have a sibling to be distinguished from.
         _ctx.Services.AddSingleton(new ToolsApiClient(

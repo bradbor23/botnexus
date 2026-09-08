@@ -81,8 +81,6 @@ public sealed class PluginsNavEntryTests : IDisposable
         _ctx.Services.AddSingleton(http);
         _ctx.Services.AddSingleton(_features);
         _ctx.Services.AddSingleton(new CronApiClient(http));
-        _ctx.Services.AddSingleton(new SectionsApiClient(http));
-        _ctx.Services.AddSingleton(sp => new ConversationSectionsState(sp.GetRequiredService<SectionsApiClient>()));
         _ctx.Services.AddSingleton(new ToolsApiClient(new HttpClient(new FixedJsonHandler(() => "[]")) { BaseAddress = new Uri("http://localhost/") }));
         _ctx.Services.AddSingleton(new NavOrderApiClient(
             new HttpClient(new FixedJsonHandler(() => _navOrderJson)) { BaseAddress = new Uri("http://localhost/") }));
