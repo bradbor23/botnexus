@@ -56,6 +56,9 @@ public sealed class AgentAvatarTests
 
     // ---- monogram -------------------------------------------------------------------------
 
+    // Monogram is reached through For(): a public static string -> string that is not an extension
+    // method trips the repository's string-transformation fence, and For() is the type's one entry
+    // point anyway.
     [Theory]
     [InlineData("Gantry Manager", "GM")]
     [InlineData("Harbor Relay Service", "HR")]
@@ -64,61 +67,61 @@ public sealed class AgentAvatarTests
     [InlineData("juniper.planner", "JP")]
     public void Multi_word_names_take_one_initial_from_each_of_the_first_two_words(string name, string expected)
     {
-        Assert.Equal(expected, AgentAvatarModel.Monogram(name, "id"));
+        Assert.Equal(expected, AgentAvatarModel.For("id", name, null).Monogram);
     }
 
     [Fact]
     public void A_single_word_name_takes_two_letters_from_it()
     {
         // One character collides far too readily across a large roster.
-        Assert.Equal("AS", AgentAvatarModel.Monogram("assistant", "id"));
+        Assert.Equal("AS", AgentAvatarModel.For("id", "assistant", null).Monogram);
     }
 
     [Fact]
     public void A_single_letter_name_yields_that_letter()
     {
-        Assert.Equal("Q", AgentAvatarModel.Monogram("Q", "id"));
+        Assert.Equal("Q", AgentAvatarModel.For("id", "Q", null).Monogram);
     }
 
     [Fact]
     public void Leading_emoji_and_punctuation_are_skipped()
     {
         // Taking the first char blindly would grab half a surrogate pair and render as a broken glyph.
-        Assert.Equal("JP", AgentAvatarModel.Monogram("🧭 Juniper Planner", "id"));
-        Assert.Equal("GM", AgentAvatarModel.Monogram("  Gantry   Manager ", "id"));
+        Assert.Equal("JP", AgentAvatarModel.For("id", "🧭 Juniper Planner", null).Monogram);
+        Assert.Equal("GM", AgentAvatarModel.For("id", "  Gantry   Manager ", null).Monogram);
     }
 
     [Fact]
     public void Digits_count_as_initials()
     {
-        Assert.Equal("A3", AgentAvatarModel.Monogram("agent 3", "id"));
+        Assert.Equal("A3", AgentAvatarModel.For("id", "agent 3", null).Monogram);
     }
 
     [Fact]
     public void The_agent_id_is_used_when_the_name_is_empty()
     {
-        Assert.Equal("HR", AgentAvatarModel.Monogram("", "harbor-relay"));
-        Assert.Equal("HR", AgentAvatarModel.Monogram(null, "harbor-relay"));
-        Assert.Equal("HR", AgentAvatarModel.Monogram("   ", "harbor-relay"));
+        Assert.Equal("HR", AgentAvatarModel.For("harbor-relay", "", null).Monogram);
+        Assert.Equal("HR", AgentAvatarModel.For("harbor-relay", null, null).Monogram);
+        Assert.Equal("HR", AgentAvatarModel.For("harbor-relay", "   ", null).Monogram);
     }
 
     [Fact]
     public void A_name_with_no_letters_or_digits_falls_back_to_the_id()
     {
-        Assert.Equal("ID", AgentAvatarModel.Monogram("🤖", "identity"));
+        Assert.Equal("ID", AgentAvatarModel.For("identity", "🤖", null).Monogram);
     }
 
     [Fact]
     public void Everything_unusable_yields_a_placeholder_rather_than_an_empty_chip()
     {
-        Assert.Equal("?", AgentAvatarModel.Monogram("🤖", "———"));
-        Assert.Equal("?", AgentAvatarModel.Monogram(null, null));
+        Assert.Equal("?", AgentAvatarModel.For("———", "🤖", null).Monogram);
+        Assert.Equal("?", AgentAvatarModel.For(null, null, null).Monogram);
     }
 
     [Fact]
     public void Monograms_are_uppercased_invariantly()
     {
-        Assert.Equal("DT", AgentAvatarModel.Monogram("day-trader", "id"));
+        Assert.Equal("DT", AgentAvatarModel.For("id", "day-trader", null).Monogram);
     }
 
     // ---- resolution -----------------------------------------------------------------------

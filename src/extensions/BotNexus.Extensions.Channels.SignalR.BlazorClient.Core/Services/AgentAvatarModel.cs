@@ -94,11 +94,16 @@ public static class AgentAvatarModel
     /// (<c>-</c>, <c>_</c>, <c>.</c>, <c>:</c>), so <c>day-trader</c> reads as DT rather than DA.
     /// Only letters and digits are considered: an agent named with a leading emoji would otherwise
     /// take that emoji's surrogate pair as its "initial" and render as a broken glyph.
+    /// <para>
+    /// Private, and reached through <see cref="For"/>. A public static <c>string -&gt; string</c>
+    /// that is not an extension method trips the repository's string-transformation fence, and the
+    /// fence is right: this is one step of resolving an avatar, not a general text utility.
+    /// </para>
     /// </remarks>
     /// <param name="displayName">Preferred source.</param>
     /// <param name="agentId">Used when the display name yields nothing.</param>
     /// <returns>A one- or two-character monogram, uppercased.</returns>
-    public static string Monogram(string? displayName, string? agentId)
+    private static string Monogram(string? displayName, string? agentId)
     {
         return FromWords(displayName) ?? FromWords(agentId) ?? Fallback;
 
