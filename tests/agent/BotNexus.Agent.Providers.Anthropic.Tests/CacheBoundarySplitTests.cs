@@ -1,201 +1,173 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using BotNexus.Agent.Providers.Core;
 using BotNexus.Agent.Providers.Core.Models;
 
 namespace BotNexus.Agent.Providers.Anthropic.Tests;
 
 /// <summary>
-/// Tests for BOTNEXUS_CACHE_BOUNDARY system prompt splitting (Issue #806).
-/// When the marker is present, the system prompt is split into two blocks:
-/// - Stable prefix: gets cache_control breakpoint
-/// - Dynamic tail: does NOT get cache_control (prevents cache invalidation)
+/// Where the volatile half of the system prompt ends up (BOTNEXUS_CACHE_BOUNDARY, issue #806).
+///
+/// <para>
+/// It used to become a second, unstamped system block. That protected the stable half of the
+/// prompt and nothing else: every provider builds its prefix as tools, then system, then messages,
+/// so a volatile block inside <c>system</c> sits in front of the entire conversation and
+/// invalidates all of it the moment a watched file changes.
+/// </para>
+///
+/// <para>
+/// It now moves out of the system prompt and onto the end of the conversation, behind the last
+/// cache breakpoint. That ordering is the whole trick and is easy to get backwards: the volatile
+/// text is rebuilt per request and never persisted, so placed anywhere inside a cached prefix it
+/// would guarantee the NEXT request cannot match -- turning the fix into a miss on every turn.
+/// </para>
 /// </summary>
 public class CacheBoundarySplitTests
 {
     private const string Marker = "<!-- BOTNEXUS_CACHE_BOUNDARY -->";
 
     [Fact]
-    public void SystemPrompt_WithBoundary_SplitsIntoTwoBlocks()
+    public void VolatileTail_LeavesTheSystemPromptEntirely()
     {
         var stable = "You are helpful.\nFollow instructions.";
-        var dynamic = "## Memory\nToday is Monday.";
-        var systemPrompt = $"{stable}\n{Marker}\n{dynamic}";
+        var volatileTail = "## Memory\nToday is Monday.";
 
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.Short };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
+        var body = Build($"{stable}\n{Marker}\n{volatileTail}");
 
         var system = body["system"]!.AsArray();
-        system.Count.ShouldBe(2);
-
-        // First block = stable prefix WITH cache_control
-        var stableBlock = system[0]!.AsObject();
-        stableBlock["type"]!.GetValue<string>().ShouldBe("text");
-        stableBlock["text"]!.GetValue<string>().ShouldBe(stable);
-        stableBlock.ContainsKey("cache_control").ShouldBeTrue();
-
-        // Second block = dynamic tail WITHOUT cache_control
-        var dynamicBlock = system[1]!.AsObject();
-        dynamicBlock["type"]!.GetValue<string>().ShouldBe("text");
-        dynamicBlock["text"]!.GetValue<string>().ShouldBe(dynamic);
-        dynamicBlock.ContainsKey("cache_control").ShouldBeFalse();
+        system.Count.ShouldBe(1);
+        system[0]!["text"]!.GetValue<string>().ShouldBe(stable);
+        system[0]!.AsObject().ContainsKey("cache_control").ShouldBeTrue();
     }
 
     [Fact]
-    public void SystemPrompt_WithoutBoundary_SingleBlockWithCacheControl()
+    public void VolatileTail_ArrivesOnTheLastMessage_BehindTheBreakpoint()
+    {
+        var volatileTail = "## Memory\nToday is Monday.";
+
+        var body = Build($"You are helpful.\n{Marker}\n{volatileTail}");
+
+        var blocks = body["messages"]!.AsArray()[^1]!["content"]!.AsArray();
+        blocks.Count.ShouldBe(2);
+
+        // The user's own words keep the breakpoint: that is the entry the next request reads.
+        blocks[0]!.AsObject().ContainsKey("cache_control").ShouldBeTrue();
+
+        // The relocated context follows it, outside every cached prefix.
+        var relocated = blocks[1]!.AsObject();
+        relocated["text"]!.GetValue<string>().ShouldContain(volatileTail);
+        relocated.ContainsKey("cache_control").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void RelocatedContext_SaysWhereItCameFrom()
+    {
+        // It is being moved into a user turn, and it can carry watched file contents. The model
+        // must not read those as something the user just typed.
+        var body = Build($"You are helpful.\n{Marker}\nHEARTBEAT.md contents");
+
+        var blocks = body["messages"]!.AsArray()[^1]!["content"]!.AsArray();
+        blocks[^1]!["text"]!.GetValue<string>()
+            .ShouldContain("not written by the user", Case.Insensitive);
+    }
+
+    [Fact]
+    public void WithoutBoundary_TheWholePromptStaysStableAndCached()
     {
         var systemPrompt = "You are a helpful assistant.";
 
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.Short };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
+        var body = Build(systemPrompt);
 
         var system = body["system"]!.AsArray();
         system.Count.ShouldBe(1);
+        system[0]!["text"]!.GetValue<string>().ShouldBe(systemPrompt);
+        system[0]!.AsObject().ContainsKey("cache_control").ShouldBeTrue();
 
-        var block = system[0]!.AsObject();
-        block["type"]!.GetValue<string>().ShouldBe("text");
-        block["text"]!.GetValue<string>().ShouldBe(systemPrompt);
-        block.ContainsKey("cache_control").ShouldBeTrue();
+        // Nothing was relocated, so the message keeps only its own content.
+        body["messages"]!.AsArray()[^1]!["content"]!.AsArray().Count.ShouldBe(1);
     }
 
     [Fact]
-    public void SystemPrompt_WithBoundary_CacheRetentionNone_NoBlocks()
+    public void CacheRetentionNone_StillRelocates()
     {
-        var systemPrompt = $"Stable\n{Marker}\nDynamic";
+        // Relocation is about where volatile text sits in the prefix, which matters to providers
+        // that cache implicitly too. It must not be tied to whether we place breakpoints.
+        var body = Build($"Stable\n{Marker}\nVolatile", CacheRetention.None);
 
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.None };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
-
-        // With CacheRetention.None, system still appears but no cache_control on either block
-        var system = body["system"]!.AsArray();
-        system.Count.ShouldBe(2);
-
-        var stableBlock = system[0]!.AsObject();
-        stableBlock.ContainsKey("cache_control").ShouldBeFalse();
-
-        var dynamicBlock = system[1]!.AsObject();
-        dynamicBlock.ContainsKey("cache_control").ShouldBeFalse();
+        body["system"]!.AsArray().Count.ShouldBe(1);
+        var blocks = body["messages"]!.AsArray()[^1]!["content"]!.AsArray();
+        blocks[^1]!["text"]!.GetValue<string>().ShouldContain("Volatile");
+        blocks[^1]!.AsObject().ContainsKey("cache_control").ShouldBeFalse();
     }
 
     [Fact]
-    public void SystemPrompt_WithBoundary_LongRetention_HasTtl()
+    public void LongRetention_TtlStaysOnTheStableBlock()
     {
-        var stable = "Stable prefix";
-        var dynamic = "Dynamic tail";
-        var systemPrompt = $"{stable}\n{Marker}\n{dynamic}";
+        var body = Build($"Stable prefix\n{Marker}\nVolatile tail", CacheRetention.Long);
 
-        var model = TestHelpers.MakeModel(); // Uses api.anthropic.com base URL
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.Long };
+        var stableBlock = body["system"]!.AsArray()[0]!.AsObject();
+        stableBlock["cache_control"]!["ttl"]!.GetValue<string>().ShouldBe("1h");
+    }
 
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
+    [Fact]
+    public void OAuth_KeepsItsPreambleAndStillRelocates()
+    {
+        var body = Build($"Stable prefix\n{Marker}\nVolatile tail", isOAuthToken: true);
 
         var system = body["system"]!.AsArray();
         system.Count.ShouldBe(2);
+        system[0]!["text"]!.GetValue<string>().ShouldContain("Claude Code");
+        system[1]!["text"]!.GetValue<string>().ShouldBe("Stable prefix");
 
-        var stableBlock = system[0]!.AsObject();
-        stableBlock.ContainsKey("cache_control").ShouldBeTrue();
-        var cc = stableBlock["cache_control"]!.AsObject();
-        cc["ttl"]!.GetValue<string>().ShouldBe("1h");
-
-        var dynamicBlock = system[1]!.AsObject();
-        dynamicBlock.ContainsKey("cache_control").ShouldBeFalse();
+        body["messages"]!.AsArray()[^1]!["content"]!.AsArray()[^1]!["text"]!.GetValue<string>()
+            .ShouldContain("Volatile tail");
     }
 
     [Fact]
-    public void SystemPrompt_WithBoundary_OAuth_SplitsIntoThreeBlocks()
+    public void EmptyVolatileTail_ChangesNothing()
     {
-        // OAuth adds a Claude Code system block first, then splits user system prompt
-        var stable = "Stable prefix";
-        var dynamic = "Dynamic tail";
-        var systemPrompt = $"{stable}\n{Marker}\n{dynamic}";
+        var body = Build($"Stable prefix\n{Marker}\n");
 
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-oat01-test", CacheRetention = CacheRetention.Short };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: true, _ => false);
-
-        var system = body["system"]!.AsArray();
-        // OAuth: Claude Code block + stable prefix (cached) + dynamic tail (not cached)
-        system.Count.ShouldBe(3);
-
-        // First block = Claude Code preamble, deliberately NOT stamped. It sits immediately in
-        // front of the stable prefix and is equally stable, so the single marker on that prefix
-        // already caches it. Stamping both spent one of the four breakpoints for nothing and put
-        // the OAuth path one over the API's ceiling once the conversation grew.
-        var ccBlock = system[0]!.AsObject();
-        ccBlock["text"]!.GetValue<string>().ShouldContain("Claude Code");
-        ccBlock.ContainsKey("cache_control").ShouldBeFalse();
-
-        // Second block = stable prefix WITH cache_control
-        var stableBlock = system[1]!.AsObject();
-        stableBlock["text"]!.GetValue<string>().ShouldBe(stable);
-        stableBlock.ContainsKey("cache_control").ShouldBeTrue();
-
-        // Third block = dynamic tail WITHOUT cache_control
-        var dynamicBlock = system[2]!.AsObject();
-        dynamicBlock["text"]!.GetValue<string>().ShouldBe(dynamic);
-        dynamicBlock.ContainsKey("cache_control").ShouldBeFalse();
+        body["system"]!.AsArray().Count.ShouldBe(1);
+        body["system"]!.AsArray()[0]!["text"]!.GetValue<string>().ShouldBe("Stable prefix");
+        body["messages"]!.AsArray()[^1]!["content"]!.AsArray().Count.ShouldBe(1);
     }
 
     [Fact]
-    public void SystemPrompt_WithBoundary_EmptyDynamic_SingleBlock()
+    public void EmptyStableHalf_SendsNoSystemBlockAtAll()
     {
-        // If boundary is at the end with no dynamic content, treat as single block
-        var stable = "Stable prefix";
-        var systemPrompt = $"{stable}\n{Marker}\n";
+        // A prompt that is entirely volatile leaves nothing stable to send. Emitting the block
+        // anyway would put an empty text block on the wire, which the API rejects.
+        var body = Build($"\n{Marker}\nVolatile content only");
 
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.Short };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
-
-        var system = body["system"]!.AsArray();
-        // Empty dynamic tail means we only emit the stable block
-        system.Count.ShouldBe(1);
-        var block = system[0]!.AsObject();
-        block["text"]!.GetValue<string>().ShouldBe(stable);
-        block.ContainsKey("cache_control").ShouldBeTrue();
+        body["system"].ShouldBeNull();
+        body["messages"]!.AsArray()[^1]!["content"]!.AsArray()[^1]!["text"]!.GetValue<string>()
+            .ShouldContain("Volatile content only");
     }
 
     [Fact]
-    public void SystemPrompt_WithBoundary_EmptyStable_SingleDynamicBlock()
+    public void NoConversationToAppendTo_KeepsTheContextInTheSystemPrompt()
     {
-        // If boundary is at the start with no stable prefix, emit dynamic only without cache
-        var dynamic = "Dynamic content only";
-        var systemPrompt = $"\n{Marker}\n{dynamic}";
-
-        var model = TestHelpers.MakeModel();
-        var context = new Context(SystemPrompt: systemPrompt, Messages: [MakeUserMessage()]);
-        var options = new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = CacheRetention.Short };
-
-        var body = AnthropicRequestBuilder.BuildRequestBody(
-            model, context, options, null, isOAuthToken: false, _ => false);
+        // Losing context is far worse than losing a cache prefix, so with nowhere safe to put it
+        // the old placement stands.
+        var body = Build($"Stable prefix\n{Marker}\nVolatile tail", messages: []);
 
         var system = body["system"]!.AsArray();
-        // Empty stable prefix means we only emit the dynamic block (no cache since it's dynamic)
-        system.Count.ShouldBe(1);
-        var block = system[0]!.AsObject();
-        block["text"]!.GetValue<string>().ShouldBe(dynamic);
-        block.ContainsKey("cache_control").ShouldBeFalse();
+        system.Count.ShouldBe(2);
+        system[1]!["text"]!.GetValue<string>().ShouldBe("Volatile tail");
+        system[1]!.AsObject().ContainsKey("cache_control").ShouldBeFalse();
     }
+
+    private static System.Text.Json.Nodes.JsonObject Build(
+        string systemPrompt,
+        CacheRetention retention = CacheRetention.Short,
+        bool isOAuthToken = false,
+        IReadOnlyList<Message>? messages = null)
+        => AnthropicRequestBuilder.BuildRequestBody(
+            TestHelpers.MakeModel(),
+            new Context(SystemPrompt: systemPrompt, Messages: messages ?? [MakeUserMessage()]),
+            new StreamOptions { ApiKey = "sk-ant-test", CacheRetention = retention },
+            null,
+            isOAuthToken,
+            _ => false);
 
     private static UserMessage MakeUserMessage() =>
         new(new UserMessageContent("hello"), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
