@@ -335,6 +335,16 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
             descriptor.AgentId,
             cancellationToken).ConfigureAwait(false);
 
+        // The catalogue is final here, and its ORDER is a documented cache invalidator on both
+        // Anthropic and OpenAI: a catalogue that reshuffles between runs re-bills the whole cached
+        // prefix behind it, silently. Logged rather than sorted, because several sources (notably
+        // MCP servers) own their own ordering and the honest first step is evidence, not a guess.
+        _logger.LogInformation(
+            "Tool catalogue for '{AgentId}': count={ToolCount} fingerprint={ToolFingerprint}",
+            descriptor.AgentId,
+            tools.Count,
+            ToolCatalogFingerprint.Compute(tools));
+
         var hookDispatcher = _serviceProvider.GetService<IHookDispatcher>();
         BeforeToolCallDelegate? beforeToolCall = null;
         AfterToolCallDelegate? afterToolCall = null;

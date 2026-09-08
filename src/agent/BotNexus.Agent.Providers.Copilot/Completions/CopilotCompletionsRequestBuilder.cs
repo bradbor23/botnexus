@@ -48,6 +48,11 @@ internal static class CopilotCompletionsRequestBuilder
         if (compat.SupportsUsageInStreaming != false)
             payload["stream_options"] = new JsonObject { ["include_usage"] = true };
 
+        // Keeps a conversation routed to the machine holding its cached prefix. Gated to
+        // endpoints known to accept the field -- see PromptCacheRouting.
+        if (PromptCacheRouting.ResolveCacheKey(model, options) is { } promptCacheKey)
+            payload["prompt_cache_key"] = promptCacheKey;
+
         // Reasoning / thinking support
         if (options is CopilotCompletionsOptions { ReasoningEffort: not null } compOptions && model.Reasoning)
         {
@@ -87,7 +92,21 @@ internal static class CopilotCompletionsRequestBuilder
         if (options is CopilotCompletionsOptions { ToolChoice: not null } tcOptions)
             payload["tool_choice"] = tcOptions.ToolChoice;
 
-        payload["messages"] = convertMessages(systemPrompt, model, messages, compat);
+        // Relocate the volatile half of the system prompt to the end of the conversation. In the
+        // system prompt it sits in front of every message and invalidates all of them whenever it
+        // changes; at the end it invalidates only itself. Falls back to sending the prompt intact
+        // when there is nowhere safe to put it -- losing context beats losing a cache prefix.
+        var (stableSystemPrompt, volatileContext) = SystemPromptPartition.Split(systemPrompt ?? string.Empty);
+        var converted = convertMessages(
+            volatileContext is null ? systemPrompt : stableSystemPrompt, model, messages, compat);
+
+        if (volatileContext is not null &&
+            !SystemPromptPartition.TryAppendToTextConversation(converted, volatileContext))
+        {
+            converted = convertMessages(systemPrompt, model, messages, compat);
+        }
+
+        payload["messages"] = converted;
 
         if (tools is { Count: > 0 } && compat.SupportsTools != false)
         {

@@ -20,11 +20,111 @@ internal static class AnthropicRequestBuilder
         bool isOAuthToken,
         Func<string, bool> isAdaptiveThinkingModel)
     {
+        var retention = options?.CacheRetention ?? CacheRetention.Short;
+        var cacheControl = AnthropicMessageConverter.BuildCacheControl(retention, model.BaseUrl);
+
+        // Anthropic rejects a request carrying more than MaxCacheBreakpoints cache_control
+        // markers, so tools, system and messages draw from one shared budget instead of each
+        // stamping independently. Before this was centralised the OAuth path stamped two system
+        // blocks and up to three messages -- five markers, one over the limit, on any OAuth
+        // conversation longer than two messages. Spend the budget in prefix order (tools, then
+        // system, then the newest messages): an earlier segment is both more stable and cheaper
+        // to keep cached than a later one.
+        var remainingBreakpoints = cacheControl is null ? 0 : MaxCacheBreakpoints;
+
+        List<Dictionary<string, object?>>? toolBlocks = null;
+        if (context.Tools is { Count: > 0 } tools)
+        {
+            toolBlocks = tools.Select(t => new Dictionary<string, object?>
+            {
+                ["name"] = isOAuthToken ? AnthropicMessageConverter.ToClaudeCodeName(t.Name) : t.Name,
+                ["description"] = t.Description,
+                ["input_schema"] = AnthropicMessageConverter.NormalizeToolSchema(t.Parameters)
+            }).ToList();
+
+            // The tools array is the first segment of the cache prefix and the most stable thing
+            // in the request. Its own breakpoint means a system-prompt edit re-bills the system
+            // prompt alone rather than the tool schemas with it.
+            if (remainingBreakpoints > 0)
+            {
+                toolBlocks[^1]["cache_control"] = cacheControl;
+                remainingBreakpoints--;
+            }
+        }
+
+        var systemBlocks = new List<Dictionary<string, object?>>();
+
+        if (isOAuthToken)
+        {
+            systemBlocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = "You are Claude Code, Anthropic's official CLI for Claude."
+            });
+        }
+
+        // Index of the last system block that is stable across requests -- the only one worth a
+        // marker. Defaults to the OAuth preamble so an OAuth request with no system prompt still
+        // caches it.
+        var stableSystemIndex = systemBlocks.Count > 0 ? 0 : -1;
+
+        var includeSystemPrompt = isOAuthToken
+            ? !string.IsNullOrWhiteSpace(context.SystemPrompt)
+            : context.SystemPrompt is not null;
+
+        string? volatileContext = null;
+
+        if (includeSystemPrompt)
+        {
+            var (stableText, volatileText) =
+                SystemPromptPartition.Split(context.SystemPrompt!.SanitizeSurrogates());
+            volatileContext = volatileText;
+
+            // A prompt that is entirely volatile leaves nothing stable to send. Emitting the block
+            // anyway would put an empty text block on the wire, which the API rejects outright.
+            if (!string.IsNullOrWhiteSpace(stableText))
+            {
+                systemBlocks.Add(new Dictionary<string, object?>
+                {
+                    ["type"] = "text",
+                    ["text"] = stableText
+                });
+                stableSystemIndex = systemBlocks.Count - 1;
+            }
+        }
+
+        // One marker on the last stable system block, never one per block: the OAuth preamble and
+        // the stable prompt are adjacent and equally stable, so stamping both spent a slot for
+        // nothing.
+        if (stableSystemIndex >= 0 && remainingBreakpoints > 0)
+        {
+            systemBlocks[stableSystemIndex]["cache_control"] = cacheControl;
+            remainingBreakpoints--;
+        }
+
         var messages = AnthropicMessageConverter.ConvertMessages(context.Messages, model, isOAuthToken);
         AnthropicMessageConverter.ApplyMultiBreakpointCacheControl(
             messages,
-            options?.CacheRetention ?? CacheRetention.Short,
-            model.BaseUrl);
+            retention,
+            model.BaseUrl,
+            remainingBreakpoints);
+
+        // Strictly after the breakpoints are placed. The volatile half of the system prompt is
+        // rebuilt per request and never persisted, so anything that lands INSIDE a cached prefix
+        // guarantees the next request cannot match it. Appended here it sits behind the last
+        // breakpoint, where it costs its own tokens and nothing else.
+        if (!SystemPromptPartition.TryAppendToBlockConversation(messages, volatileContext) &&
+            !string.IsNullOrWhiteSpace(volatileContext))
+        {
+            // Nowhere safe to put it -- no messages, or the conversation ends on an assistant
+            // turn. Keep it in the system prompt, unstamped, exactly as before. Losing context
+            // would be far worse than losing a cache prefix.
+            systemBlocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = volatileContext
+            });
+        }
 
         var body = new JsonObject
         {
@@ -34,49 +134,11 @@ internal static class AnthropicRequestBuilder
             ["stream"] = true
         };
 
-        if (isOAuthToken)
-        {
-            var cacheControl = AnthropicMessageConverter.BuildCacheControl(
-                options?.CacheRetention ?? CacheRetention.Short,
-                model.BaseUrl);
-
-            var systemBlocks = new List<Dictionary<string, object?>>
-            {
-                new()
-                {
-                    ["type"] = "text",
-                    ["text"] = "You are Claude Code, Anthropic's official CLI for Claude.",
-                    ["cache_control"] = cacheControl
-                }
-            };
-
-            if (!string.IsNullOrWhiteSpace(context.SystemPrompt))
-            {
-                AppendSystemPromptBlocks(systemBlocks, context.SystemPrompt, cacheControl);
-            }
-
+        if (systemBlocks.Count > 0)
             body["system"] = ToNode(systemBlocks);
-        }
-        else if (context.SystemPrompt is { } systemPrompt)
-        {
-            var cacheControl = AnthropicMessageConverter.BuildCacheControl(
-                options?.CacheRetention ?? CacheRetention.Short,
-                model.BaseUrl);
 
-            var systemBlocks = new List<Dictionary<string, object?>>();
-            AppendSystemPromptBlocks(systemBlocks, systemPrompt, cacheControl);
-            body["system"] = ToNode(systemBlocks);
-        }
-
-        if (context.Tools is { Count: > 0 } tools)
-        {
-            body["tools"] = ToNode(tools.Select(t => new Dictionary<string, object?>
-            {
-                ["name"] = isOAuthToken ? AnthropicMessageConverter.ToClaudeCodeName(t.Name) : t.Name,
-                ["description"] = t.Description,
-                ["input_schema"] = AnthropicMessageConverter.NormalizeToolSchema(t.Parameters)
-            }).ToList());
-        }
+        if (toolBlocks is not null)
+            body["tools"] = ToNode(toolBlocks);
 
         if (options?.Metadata is { } metadata &&
             metadata.TryGetValue("user_id", out var rawUserId) &&
@@ -142,73 +204,12 @@ internal static class AnthropicRequestBuilder
         return body;
     }
 
-    private const string CacheBoundaryMarker = "\n<!-- BOTNEXUS_CACHE_BOUNDARY -->\n";
-
     /// <summary>
-    /// Splits the system prompt at the BOTNEXUS_CACHE_BOUNDARY marker (if present) into
-    /// a stable prefix block (with cache_control) and a dynamic tail block (without).
-    /// When the marker is absent, the entire prompt is treated as stable.
-    /// Empty segments are omitted.
+    /// Maximum number of <c>cache_control</c> markers the Anthropic Messages API accepts in one
+    /// request. Exceeding it fails the whole request, so every marker this builder places is drawn
+    /// from a single budget rather than decided independently per section.
     /// </summary>
-    private static void AppendSystemPromptBlocks(
-        List<Dictionary<string, object?>> blocks,
-        string systemPrompt,
-        Dictionary<string, object?>? cacheControl)
-    {
-        var sanitized = systemPrompt.SanitizeSurrogates();
-        var markerIndex = sanitized.IndexOf(CacheBoundaryMarker, StringComparison.Ordinal);
-
-        if (markerIndex < 0)
-        {
-            // No boundary marker -- entire prompt is stable (gets cache_control)
-            var block = new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = sanitized
-            };
-            if (cacheControl is not null)
-                block["cache_control"] = cacheControl;
-            blocks.Add(block);
-            return;
-        }
-
-        var stableText = sanitized[..markerIndex].TrimEnd();
-        var dynamicText = sanitized[(markerIndex + CacheBoundaryMarker.Length)..].TrimStart();
-
-        if (!string.IsNullOrWhiteSpace(stableText))
-        {
-            var stableBlock = new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = stableText
-            };
-            if (cacheControl is not null)
-                stableBlock["cache_control"] = cacheControl;
-            blocks.Add(stableBlock);
-        }
-
-        if (!string.IsNullOrWhiteSpace(dynamicText))
-        {
-            // Dynamic tail intentionally has NO cache_control
-            blocks.Add(new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = dynamicText
-            });
-        }
-
-        // If both segments are empty after trimming, fall back to single block
-        if (string.IsNullOrWhiteSpace(stableText) && string.IsNullOrWhiteSpace(dynamicText))
-        {
-            blocks.Add(new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = sanitized
-            });
-            if (cacheControl is not null)
-                blocks[^1]["cache_control"] = cacheControl;
-        }
-    }
+    internal const int MaxCacheBreakpoints = CacheBreakpoints.Max;
 
     private static JsonNode? ToNode<T>(T value)
     {

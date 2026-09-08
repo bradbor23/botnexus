@@ -24,12 +24,23 @@ internal static class OpenAIResponsesRequestBuilder
         Func<IReadOnlyList<Tool>, JsonArray> convertTools)
     {
         var input = convertMessages(messages, model);
+
         if (!string.IsNullOrWhiteSpace(systemPrompt))
         {
+            // The volatile half of the system prompt moves to the end of the conversation, where a
+            // change to it invalidates only itself instead of every message behind it. Appended
+            // before the system turn is inserted, so it lands at the very end of the input.
+            var (stableSystemPrompt, volatileContext) =
+                SystemPromptPartition.Split(systemPrompt.SanitizeSurrogates());
+
+            var relocated = SystemPromptPartition.TryAppendToTextConversation(input, volatileContext);
+
             input.Insert(0, new JsonObject
             {
                 ["role"] = model.Reasoning ? "developer" : "system",
-                ["content"] = systemPrompt.SanitizeSurrogates()
+                ["content"] = relocated || volatileContext is null
+                    ? stableSystemPrompt
+                    : systemPrompt.SanitizeSurrogates()
             });
         }
 

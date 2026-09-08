@@ -169,6 +169,15 @@ public sealed class OpenAICompatProvider(HttpClient httpClient) : IApiProvider
                 request.Headers.TryAddWithoutValidation(key, value);
         }
 
+        // xAI caches prefixes automatically but routes by conversation, so this header is the only
+        // lever on that path. Applied after the caller's own headers so an explicit override wins.
+        if (!request.Headers.Contains(PromptCacheRouting.GrokConversationHeader) &&
+            PromptCacheRouting.ResolveGrokConversationId(model, options) is { } grokConversationId)
+        {
+            request.Headers.TryAddWithoutValidation(
+                PromptCacheRouting.GrokConversationHeader, grokConversationId);
+        }
+
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
         using var response = await _httpClient.SendAsync(
@@ -212,11 +221,28 @@ public sealed class OpenAICompatProvider(HttpClient httpClient) : IApiProvider
     private static JsonObject BuildRequestBody(
         LlmModel model, Context context, StreamOptions? options, OpenAICompletionsCompat compat)
     {
-        var messages = BuildMessages(context, compat, model);
+        // Relocate the volatile half of the system prompt to the end of the conversation: in the
+        // system prompt it invalidates every message behind it whenever it changes, at the end it
+        // invalidates only itself. Falls back to the prompt intact when there is nowhere to put it.
+        var (stableSystemPrompt, volatileContext) =
+            SystemPromptPartition.Split(context.SystemPrompt ?? string.Empty);
+
+        var messageContext = volatileContext is null
+            ? context
+            : context with { SystemPrompt = stableSystemPrompt };
+
+        var messageArray = ToNode(BuildMessages(messageContext, compat, model))!.AsArray();
+
+        if (volatileContext is not null &&
+            !SystemPromptPartition.TryAppendToTextConversation(messageArray, volatileContext))
+        {
+            messageArray = ToNode(BuildMessages(context, compat, model))!.AsArray();
+        }
+
         var body = new JsonObject
         {
             ["model"] = model.Id,
-            ["messages"] = ToNode(messages),
+            ["messages"] = messageArray,
             ["stream"] = true,
         };
 
