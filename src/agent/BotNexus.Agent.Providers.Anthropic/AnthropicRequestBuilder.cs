@@ -180,7 +180,7 @@ internal static class AnthropicRequestBuilder
     /// request. Exceeding it fails the whole request, so every marker this builder places is drawn
     /// from a single budget rather than decided independently per section.
     /// </summary>
-    internal const int MaxCacheBreakpoints = 4;
+    internal const int MaxCacheBreakpoints = CacheBreakpoints.Max;
 
     /// <summary>
     /// Splits the system prompt at the BOTNEXUS_CACHE_BOUNDARY marker (if present) into a stable
