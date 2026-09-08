@@ -8480,3 +8480,58 @@ h3.conversation-title.editable:hover {
     border-radius: var(--radius);
     white-space: nowrap;
 }
+
+/* ==========================================================================
+   Agent avatars
+   Every agent gets a distinguishable mark without configuring one. The hue
+   arrives as --agent-hue from AgentAvatarModel; only lightness and saturation
+   are decided here, because they differ per theme.
+   ========================================================================== */
+
+.agent-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.65rem;
+    height: 1.65rem;
+    border-radius: 7px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    user-select: none;
+}
+
+/* An emoji is the agent's own mark; it gets a neutral plate so two emoji agents
+   sit on the same ground and the emoji itself carries the colour. */
+.agent-avatar.is-emoji {
+    background: var(--bg-tertiary);
+    font-size: 0.95rem;
+}
+
+/* Light theme: a pale tint with saturated ink. Both are derived from the one hue,
+   so every agent lands at the same contrast rather than at the mercy of its colour. */
+.agent-avatar.is-monogram {
+    background: hsl(var(--agent-hue) 58% 91%);
+    color: hsl(var(--agent-hue) 62% 27%);
+    box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 40% 78%);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .agent-avatar.is-monogram {
+        background: hsl(var(--agent-hue) 38% 20%);
+        color: hsl(var(--agent-hue) 72% 76%);
+        box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+    }
+}
+
+[data-theme="dark"] .agent-avatar.is-monogram {
+    background: hsl(var(--agent-hue) 38% 20%);
+    color: hsl(var(--agent-hue) 72% 76%);
+    box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+}
+
+/* Size modifiers for the surfaces that show an agent larger than a chip. */
+.agent-avatar.avatar-lg { width: 2.1rem; height: 2.1rem; border-radius: 9px; font-size: 0.85rem; }
+.agent-avatar.avatar-lg.is-emoji { font-size: 1.2rem; }
