@@ -161,6 +161,52 @@ public sealed class AgentAvatarTests
         Assert.Equal("🧭", AgentAvatarModel.For("a", "A", " 🧭 ").Emoji);
     }
 
+    // ---- operator-chosen hue -----------------------------------------------------------------
+
+    [Fact]
+    public void A_chosen_hue_overrides_the_generated_one()
+    {
+        var generated = AgentAvatarModel.For("gantry-manager", "Gantry Manager", null);
+        var chosen = AgentAvatarModel.For("gantry-manager", "Gantry Manager", null, 210);
+
+        Assert.Equal(210, chosen.Hue);
+        Assert.NotEqual(generated.Hue, chosen.Hue);
+    }
+
+    [Fact]
+    public void No_chosen_hue_keeps_the_generated_one()
+    {
+        // Null is the default for every agent nobody configures, so this is the common path.
+        Assert.Equal(
+            AgentAvatarModel.HueFor("gantry-manager"),
+            AgentAvatarModel.For("gantry-manager", "Gantry Manager", null, null).Hue);
+    }
+
+    [Fact]
+    public void A_chosen_hue_still_applies_when_the_agent_has_an_emoji()
+    {
+        // The emoji wins the glyph, not the colour. Anything reading the hue - a future state ring,
+        // a tinted row - should still get the operator's choice.
+        var avatar = AgentAvatarModel.For("juniper-planner", "Juniper Planner", "🧭", 120);
+
+        Assert.True(avatar.UsesEmoji);
+        Assert.Equal(120, avatar.Hue);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(359, 359)]
+    [InlineData(360, 0)]
+    [InlineData(380, 20)]
+    [InlineData(-30, 330)]
+    [InlineData(-360, 0)]
+    public void An_out_of_range_hue_wraps_onto_the_wheel(int given, int expected)
+    {
+        // A hue is an angle. Refusing to draw an avatar over an arithmetic detail would be the
+        // wrong trade, and clamping would silently turn 380 into 359 rather than into 20.
+        Assert.Equal(expected, AgentAvatarModel.For("a", "A", null, given).Hue);
+    }
+
     [Fact]
     public void A_monogram_is_always_one_or_two_characters()
     {

@@ -45,15 +45,25 @@ public static class AgentAvatarModel
     /// <param name="agentId">The agent's stable id. Seeds the hue.</param>
     /// <param name="displayName">The agent's display name. Seeds the monogram.</param>
     /// <param name="emoji">The agent's configured emoji, if any. Wins outright when present.</param>
+    /// <param name="hueOverride">
+    /// An operator-chosen hue. Null - the default - generates one from the agent id. An out-of-range
+    /// value is wrapped rather than rejected, because a hue is an angle: 380 is 20, and refusing to
+    /// draw an avatar over an arithmetic detail would be the wrong trade.
+    /// </param>
     /// <returns>The avatar to draw.</returns>
-    public static AgentAvatarSpec For(string? agentId, string? displayName, string? emoji)
+    public static AgentAvatarSpec For(string? agentId, string? displayName, string? emoji, int? hueOverride = null)
     {
         var id = agentId ?? string.Empty;
         return new AgentAvatarSpec(
             string.IsNullOrWhiteSpace(emoji) ? null : emoji.Trim(),
             Monogram(displayName, id),
-            HueFor(id));
+            hueOverride is int chosen ? Wrap(chosen) : HueFor(id));
     }
+
+    /// <summary>Normalises any integer onto the colour wheel, negatives included.</summary>
+    /// <param name="degrees">A hue in degrees, possibly out of range.</param>
+    /// <returns>The equivalent hue in [0, 360).</returns>
+    private static int Wrap(int degrees) => ((degrees % 360) + 360) % 360;
 
     /// <summary>
     /// A stable hue in [0, 360) for an agent id.

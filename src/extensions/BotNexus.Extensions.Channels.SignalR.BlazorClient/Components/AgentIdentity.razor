@@ -11,7 +11,7 @@
     characters cannot grow the top bar or defeat ellipsis truncation.
 *@
 <div class="agent-identity banner-agent-identity" data-testid="agent-identity">
-    <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Class="agent-panel-avatar" />
+    <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Class="agent-panel-avatar" />
     <div class="agent-panel-meta" title="@AgentId">
         <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
         @if (!string.IsNullOrWhiteSpace(Description))

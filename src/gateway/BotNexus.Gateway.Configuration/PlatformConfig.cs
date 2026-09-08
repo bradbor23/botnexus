@@ -1683,13 +1683,37 @@ public sealed class AgentDefinitionConfig
         Order = 7)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 7)]
     public string? Emoji { get; set; }
+    /// <summary>Operator-chosen avatar hue in degrees (0-359); empty generates one from the agent id.</summary>
+    [Display(
+        Name = "Avatar hue",
+        Description = "Avatar colour in degrees (0-359). Leave empty to generate one from the agent id.",
+        GroupName = "Agent",
+        Order = 8)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "agent", Order = 8)]
+    public int? AvatarHue { get; set; }
+    /// <summary>One short line naming what this agent owns.</summary>
+    [Display(
+        Name = "Responsibility",
+        Description = "One short line naming what this agent owns.",
+        GroupName = "Agent",
+        Order = 9)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 9)]
+    public string? Responsibility { get; set; }
+    /// <summary>What this agent must not do.</summary>
+    [Display(
+        Name = "Boundaries",
+        Description = "What this agent must not do.",
+        GroupName = "Agent",
+        Order = 10)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 10)]
+    public string? Boundaries { get; set; }
     /// <summary>Description of the agent's purpose.</summary>
     [Display(
         Name = "Description",
         Description = "Description of the agent's purpose.",
         GroupName = "Agent",
         Order = 8)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 8)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "agent", Order = 8)]
     public string? Description { get; set; }
 
     /// <summary>Agent-maintained summary of what the agent is currently doing (#3596).</summary>

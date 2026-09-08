@@ -60,8 +60,43 @@ public sealed record AgentDescriptor : ICitizen
     /// <summary>Optional emoji that visually identifies this agent in user interfaces.</summary>
     public string? Emoji { get; init; }
 
+    /// <summary>
+    /// Optional avatar hue in degrees (0-359), chosen by the operator.
+    /// </summary>
+    /// <remarks>
+    /// A HUE, not a colour: saturation and lightness are the client stylesheet's business because
+    /// they differ between light and dark, and fixing them is what keeps every agent's avatar at the
+    /// same contrast. Null means "generate one from the agent id", which is the default and is what
+    /// every agent that nobody configures will keep using.
+    /// </remarks>
+    public int? AvatarHue { get; init; }
+
     /// <summary>Optional description of the agent's purpose.</summary>
+    /// <remarks>
+    /// Until #P1 this was display-only - it appeared on cards and changed nothing about behaviour.
+    /// It now reaches the system prompt as part of the agent's persona, so what an operator writes
+    /// here is what the agent is told it does.
+    /// </remarks>
     public string? Description { get; init; }
+
+    /// <summary>
+    /// One short line naming what this agent owns, e.g. "keeps the Plex library healthy".
+    /// </summary>
+    /// <remarks>
+    /// Deliberately separate from <see cref="Description"/>: this is the line a roster shows under
+    /// an agent's name, so it has to stay short enough to scan. Description is the prose behind it.
+    /// </remarks>
+    public string? Responsibility { get; init; }
+
+    /// <summary>
+    /// What this agent must NOT do - the limits of its remit.
+    /// </summary>
+    /// <remarks>
+    /// Its own field rather than a paragraph inside <see cref="Description"/>, because "what it does"
+    /// and "what it must not do" are read at different moments and one should never be buried in the
+    /// other. Rendered as its own block in the prompt for the same reason.
+    /// </remarks>
+    public string? Boundaries { get; init; }
 
     /// <summary>
     /// Optional agent-maintained account of what this agent is currently doing (#3596).

@@ -26,6 +26,10 @@
     [Parameter]
     public string? Emoji { get; set; }
 
+    /// <summary>Operator-chosen hue, or null to generate one from the agent id.</summary>
+    [Parameter]
+    public int? Hue { get; set; }
+
     /// <summary>Extra classes, e.g. a size modifier.</summary>
     [Parameter]
     public string? Class { get; set; }
@@ -37,5 +41,5 @@
     [Parameter]
     public string? Title { get; set; }
 
-    private AgentAvatarSpec Avatar => AgentAvatarModel.For(AgentId, DisplayName, Emoji);
+    private AgentAvatarSpec Avatar => AgentAvatarModel.For(AgentId, DisplayName, Emoji, Hue);
 }

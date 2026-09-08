@@ -19,7 +19,7 @@
                      data-agent-id="@agentId"
                      @onclick="() => NavigateToAgent(agent)">
                     <div class="agent-card-header">
-                        <AgentAvatar AgentId="@agent.AgentId" DisplayName="@agent.DisplayName" Emoji="@agent.Emoji" Class="agent-card-emoji avatar-lg" />
+                        <AgentAvatar AgentId="@agent.AgentId" DisplayName="@agent.DisplayName" Emoji="@agent.Emoji" Hue="@agent.AvatarHue" Class="agent-card-emoji avatar-lg" />
                         <div class="agent-card-identity">
                             <span class="agent-card-name">@agent.DisplayName</span>
                             <span class="agent-card-status @(agent.IsStreaming ? "status-active" : "status-idle")">

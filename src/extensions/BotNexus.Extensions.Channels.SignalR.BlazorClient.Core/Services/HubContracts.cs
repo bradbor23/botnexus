@@ -29,7 +29,15 @@ public sealed record AgentSummary(
     [property: JsonPropertyName("summary")] string? Summary = null,
     // Additive and optional, like summary above: a payload from a server that predates the field
     // still binds, and false is the safe reading - an unknown capability is not advertised.
-    [property: JsonPropertyName("canDelegate")] bool CanDelegate = false);
+    [property: JsonPropertyName("canDelegate")] bool CanDelegate = false,
+    // Additive and optional for the same reason as the two fields above. Null is the meaningful
+    // default here, not merely the safe one: it means "generate a hue from the agent id", which is
+    // exactly what a server that does not send the field is doing.
+    [property: JsonPropertyName("avatarHue")] int? AvatarHue = null,
+    // Persona, additive and optional like everything above it. A server that predates these sends
+    // nothing and the portal renders an agent with no stated role, exactly as before.
+    [property: JsonPropertyName("responsibility")] string? Responsibility = null,
+    [property: JsonPropertyName("boundaries")] string? Boundaries = null);
 
 /// <summary>Hub capabilities advertised on connect.</summary>
 public sealed record HubCapabilities(

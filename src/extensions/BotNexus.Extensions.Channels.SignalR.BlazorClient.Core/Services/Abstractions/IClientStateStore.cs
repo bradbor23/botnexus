@@ -221,6 +221,15 @@ public sealed class AgentState
     /// <summary>Optional emoji that visually identifies this agent.</summary>
     public string? Emoji { get; set; }
 
+    /// <summary>Operator-chosen avatar hue (0-359), or null to generate one from the agent id.</summary>
+    public int? AvatarHue { get; set; }
+
+    /// <summary>One short line naming what this agent owns.</summary>
+    public string? Responsibility { get; set; }
+
+    /// <summary>What this agent must not do.</summary>
+    public string? Boundaries { get; set; }
+
     /// <summary>Short description of this agent's purpose.</summary>
     public string? Description { get; set; }
 
