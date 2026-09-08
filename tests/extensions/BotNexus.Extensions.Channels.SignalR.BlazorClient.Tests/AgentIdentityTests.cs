@@ -98,13 +98,36 @@ public sealed class AgentIdentityTests : IDisposable
     }
 
     [Fact]
-    public void Identity_avatar_falls_back_to_robot_when_emoji_missing()
+    public void Identity_avatar_falls_back_to_a_generated_monogram_when_emoji_missing()
     {
+        // Was the shared robot glyph. Every agent without an emoji drew the same mark, so on a
+        // roster of sixteen the avatar carried no identity at all; it now falls back to initials
+        // tinted by a hue derived from the agent id.
         Seed("no-emoji-agent", "No Emoji Agent", emoji: null);
 
         var cut = RenderFor("no-emoji-agent");
+        var avatar = cut.Find(".agent-panel-avatar");
 
-        Assert.Equal("\U0001F916", cut.Find(".agent-panel-avatar").TextContent.Trim());
+        Assert.Equal("NE", avatar.TextContent.Trim());
+        Assert.Contains("is-monogram", avatar.ClassName);
+        Assert.Equal(
+            AgentAvatarModel.HueFor("no-emoji-agent").ToString(),
+            avatar.GetAttribute("data-agent-hue"));
+    }
+
+    [Fact]
+    public void Two_agents_without_emoji_do_not_share_an_avatar()
+    {
+        // The property that makes a generated mark worth having. Before this change both rendered
+        // an identical robot and the assertion below could not have been written.
+        Seed("gantry-manager", "Gantry Manager", emoji: null);
+        Seed("harbor-relay", "Harbor Relay Service", emoji: null);
+
+        var first = RenderFor("gantry-manager").Find(".agent-panel-avatar");
+        var second = RenderFor("harbor-relay").Find(".agent-panel-avatar");
+
+        Assert.NotEqual(first.TextContent.Trim(), second.TextContent.Trim());
+        Assert.NotEqual(first.GetAttribute("data-agent-hue"), second.GetAttribute("data-agent-hue"));
     }
 
     // ---------------------------------------------------------------- #2441 adversarial input

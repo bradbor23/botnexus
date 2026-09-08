@@ -11,7 +11,7 @@
     characters cannot grow the top bar or defeat ellipsis truncation.
 *@
 <div class="agent-identity banner-agent-identity" data-testid="agent-identity">
-    <div class="agent-panel-avatar" aria-hidden="true">@AvatarGlyph</div>
+    <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Class="agent-panel-avatar" />
     <div class="agent-panel-meta" title="@AgentId">
         <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
         @if (!string.IsNullOrWhiteSpace(Description))
@@ -30,10 +30,6 @@
 
     private string DisplayName =>
         PortalText.SingleLine(Agent?.DisplayName) is { Length: > 0 } name ? name : PortalText.SingleLine(AgentId);
-
-    // Prefer the agent's configured emoji; fall back to the default robot glyph when none is set.
-    private string AvatarGlyph =>
-        string.IsNullOrWhiteSpace(Agent?.Emoji) ? "\U0001F916" : PortalText.SingleLine(Agent!.Emoji);
 
     private string Description => PortalText.SingleLine(Agent?.Description);
 
