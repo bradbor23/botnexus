@@ -56,6 +56,20 @@ using BotNexus.Gateway.Abstractions.Models;
 /// default so an existing consumer of this DTO keeps binding unchanged, and omitted from the JSON
 /// when null so an agent that has never written one costs the list payload nothing.
 /// </param>
+/// <param name="AvatarHue">
+/// Operator-chosen avatar hue in degrees, or null to generate one from the agent id. Named
+/// consumer: <c>AgentAvatar.razor</c>, which draws every agent in the roster, the banner chip and
+/// the switcher. Omitted when null - which is most agents - so the generated-hue default costs the
+/// boot payload nothing.
+/// </param>
+/// <param name="Responsibility">
+/// One short line naming what the agent owns. Named consumer: <c>AgentDetailPanel.razor</c>, and
+/// the roster line under an agent's name.
+/// </param>
+/// <param name="Boundaries">
+/// What the agent must not do. Named consumer: <c>AgentDetailPanel.razor</c>. Part of the persona
+/// the operator edits, so the panel cannot round-trip it without this field.
+/// </param>
 public sealed record AgentListItem(
     string AgentId,
     string DisplayName,
@@ -76,7 +90,18 @@ public sealed record AgentListItem(
     // typical install is most of them.
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
-    bool CanDelegate = false)
+    bool CanDelegate = false,
+    // The persona trio. Each omitted when null so an agent nobody has personalised costs the boot
+    // payload nothing, exactly as Summary and CanDelegate do above.
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? AvatarHue = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Responsibility = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Boundaries = null)
 {
     /// <summary>
     /// Projects a full <see cref="AgentDescriptor"/> down to its list-view fields.
@@ -94,5 +119,8 @@ public sealed record AgentListItem(
         descriptor.ApiProvider,
         descriptor.ModelId,
         descriptor.Summary,
-        descriptor.CanDelegate);
+        descriptor.CanDelegate,
+        descriptor.AvatarHue,
+        descriptor.Responsibility,
+        descriptor.Boundaries);
 }

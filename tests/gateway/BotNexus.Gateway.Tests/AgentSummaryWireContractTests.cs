@@ -80,6 +80,13 @@ public sealed class AgentSummaryWireContractTests
             .Select(p => p.Name)
             .ToArray();
 
-        parameters.ShouldBe(["AgentId", "DisplayName", "Emoji", "Description", "Summary", "CanDelegate"]);
+        // avatarHue / responsibility / boundaries (2026-09-08) were appended the same way as
+        // canDelegate before them: last, optional, null-defaulted. An older client binding this
+        // payload is unaffected, and an older payload still deserialises with the persona unset,
+        // which is exactly what an agent nobody has personalised looks like.
+        parameters.ShouldBe([
+            "AgentId", "DisplayName", "Emoji", "Description", "Summary", "CanDelegate",
+            "AvatarHue", "Responsibility", "Boundaries",
+        ]);
     }
 }
