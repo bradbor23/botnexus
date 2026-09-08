@@ -250,4 +250,143 @@ public sealed class MemoryControllerTests
         result.ShouldBeOfType<OkObjectResult>();
         store.Verify(s => s.SearchWithReportAsync("test", 100, null, It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    private static MemoryEntry Entry(string id) => new()
+    {
+        Id = id,
+        AgentId = "test-agent",
+        SourceType = "conversation",
+        Content = "something the agent remembered",
+        CreatedAt = DateTimeOffset.UtcNow.AddHours(-1)
+    };
+
+    [Fact]
+    public async Task DeleteEntry_RemovesTheEntryAndReturnsNoContent()
+    {
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("test-agent"))).Returns(AgentWithMemory);
+
+        var store = new Mock<IMemoryStore>();
+        store.Setup(s => s.InitializeAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        store.Setup(s => s.GetByIdAsync("entry-1", It.IsAny<CancellationToken>())).ReturnsAsync(Entry("entry-1"));
+        store.Setup(s => s.DeleteAsync("entry-1", It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        factory.Setup(f => f.StoreLocationExists(AgentId.From("test-agent"))).Returns(true);
+        factory.Setup(f => f.Create(AgentId.From("test-agent"))).Returns(store.Object);
+
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("test-agent", "entry-1", CancellationToken.None);
+
+        result.ShouldBeOfType<NoContentResult>();
+        store.Verify(s => s.DeleteAsync("entry-1", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_MissingEntry_IsIdempotentAndDeletesNothing()
+    {
+        // 204 rather than 404 keeps DELETE retry-safe and avoids an existence oracle for entry
+        // ids - the same reasoning SessionsController.Delete documents. The important half of the
+        // assertion is the Verify: a miss must not fall through into a delete call.
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("test-agent"))).Returns(AgentWithMemory);
+
+        var store = new Mock<IMemoryStore>();
+        store.Setup(s => s.InitializeAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        store.Setup(s => s.GetByIdAsync("ghost", It.IsAny<CancellationToken>())).ReturnsAsync((MemoryEntry?)null);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        factory.Setup(f => f.StoreLocationExists(AgentId.From("test-agent"))).Returns(true);
+        factory.Setup(f => f.Create(AgentId.From("test-agent"))).Returns(store.Object);
+
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("test-agent", "ghost", CancellationToken.None);
+
+        result.ShouldBeOfType<NoContentResult>();
+        store.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_Returns404ForUnknownAgent()
+    {
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(It.IsAny<AgentId>())).Returns((AgentDescriptor?)null);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("unknown", "entry-1", CancellationToken.None);
+
+        result.ShouldBeOfType<NotFoundObjectResult>();
+        factory.Verify(f => f.Create(It.IsAny<AgentId>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_Returns404WhenMemoryDisabled()
+    {
+        // An agent with memory off has no store this route may touch. Returning 404 before
+        // resolving the factory is what stops a delete from being the call that creates one.
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("no-memory"))).Returns(AgentWithoutMemory);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("no-memory", "entry-1", CancellationToken.None);
+
+        result.ShouldBeOfType<NotFoundObjectResult>();
+        factory.Verify(f => f.Create(It.IsAny<AgentId>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_MissingStoreLocation_DoesNotOpenAStore()
+    {
+        // #2608: a reaped sub-agent workspace has no store, and opening one is permanently
+        // unrecoverable rather than transient. It must also not be *created* by a delete.
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("test-agent"))).Returns(AgentWithMemory);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        factory.Setup(f => f.StoreLocationExists(AgentId.From("test-agent"))).Returns(false);
+
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("test-agent", "entry-1", CancellationToken.None);
+
+        result.ShouldBeOfType<NoContentResult>();
+        factory.Verify(f => f.Create(It.IsAny<AgentId>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_BlankEntryId_IsRejected()
+    {
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("test-agent"))).Returns(AgentWithMemory);
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("test-agent", "   ", CancellationToken.None);
+
+        result.ShouldBeOfType<BadRequestObjectResult>();
+        factory.Verify(f => f.Create(It.IsAny<AgentId>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteEntry_StoreFailure_Returns500AndDoesNotThrow()
+    {
+        var registry = new Mock<IAgentRegistry>();
+        registry.Setup(r => r.Get(AgentId.From("test-agent"))).Returns(AgentWithMemory);
+
+        var store = new Mock<IMemoryStore>();
+        store.Setup(s => s.InitializeAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        store.Setup(s => s.GetByIdAsync("entry-1", It.IsAny<CancellationToken>())).ReturnsAsync(Entry("entry-1"));
+        store.Setup(s => s.DeleteAsync("entry-1", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("store is on fire"));
+
+        var factory = new Mock<IMemoryStoreFactory>();
+        factory.Setup(f => f.StoreLocationExists(AgentId.From("test-agent"))).Returns(true);
+        factory.Setup(f => f.Create(AgentId.From("test-agent"))).Returns(store.Object);
+
+        var controller = new MemoryController(registry.Object, factory.Object, NullLogger<MemoryController>.Instance);
+        var result = await controller.DeleteEntry("test-agent", "entry-1", CancellationToken.None);
+
+        result.ShouldBeOfType<ObjectResult>().StatusCode.ShouldBe(500);
+    }
 }

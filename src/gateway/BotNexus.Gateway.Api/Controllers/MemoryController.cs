@@ -3,12 +3,13 @@ using BotNexus.Domain.Text;
 using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Memory;
 using BotNexus.Memory.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BotNexus.Gateway.Api.Controllers;
 
 /// <summary>
-/// REST endpoints for inspecting per-agent memory store statistics.
+/// REST endpoints for inspecting per-agent memory stores and removing individual entries.
 /// </summary>
 [ApiController]
 [Route("api/memory")]
@@ -115,6 +116,94 @@ public sealed class MemoryController(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to search memory entries for agent '{AgentId}'.", agentId);
+            return StatusCode(500, new { error = "Failed to access memory store." });
+        }
+    }
+
+    /// <summary>
+    /// Deletes a single memory entry from an agent's own store.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The read side of this controller has always been able to show what an agent remembers; this
+    /// is the other half - being able to take one of those entries back out. Deletion is real, not
+    /// a hide: the <c>memories_ad</c> trigger mirrors the row out of the FTS index, so the content
+    /// stops being searchable rather than merely stopping being listed.
+    /// </para>
+    /// <para>
+    /// <b>Scope is the agent's own store.</b> The store is resolved per agent, so an entry id
+    /// belonging to another agent is simply not found here - cross-agent deletion is structurally
+    /// impossible rather than merely rejected. Entries promoted into a <i>shared</i> store are not
+    /// reachable through this route either: removing one affects every agent reading that store and
+    /// needs its own deliberate endpoint, not a side effect of an agent-scoped delete.
+    /// </para>
+    /// <para>
+    /// <b>Why a missing entry is 204 and not 404.</b> Same reasoning as session delete: surfacing
+    /// 404 would make the endpoint non-idempotent on retry - a client that retried after a dropped
+    /// response would see a failure for a delete that had in fact succeeded - and would turn the
+    /// route into an existence oracle for entry ids. The absent case is logged instead, so an
+    /// operator can still tell the two apart.
+    /// </para>
+    /// <para>
+    /// Per-agent caller authorization is applied upstream by <c>GatewayAuthMiddleware</c>, which
+    /// reads the <c>agentId</c> route value - the same protection the GET routes on this controller
+    /// already carry.
+    /// </para>
+    /// </remarks>
+    [HttpDelete("{agentId}/entries/{entryId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteEntry(string agentId, string entryId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(entryId))
+            return BadRequest(new { error = "Entry id is required." });
+
+        var descriptor = agentRegistry.Get(AgentId.From(agentId));
+        if (descriptor is null)
+            return NotFound(new { error = $"Agent '{agentId}' not found." });
+
+        if (descriptor.Memory is not { Enabled: true })
+            return NotFound(new { error = $"Agent '{agentId}' does not have memory enabled." });
+
+        try
+        {
+            // #2608: a reaped sub-agent workspace has no store, and opening one is unrecoverable
+            // rather than transient. Checking first also keeps a delete from being the thing that
+            // creates an empty store file for an agent that never had one.
+            if (!memoryStoreFactory.StoreLocationExists(AgentId.From(agentId)))
+                return NoContent();
+
+            var store = memoryStoreFactory.Create(AgentId.From(agentId));
+            await store.InitializeAsync(ct).ConfigureAwait(false);
+
+            // GetById is the existence probe because IMemoryStore.DeleteAsync returns no row count.
+            // It deliberately ignores the archived/expired liveness predicate, which is what makes
+            // an expired entry still deletable rather than stranded: invisible to search, and
+            // otherwise impossible to remove.
+            var existing = await store.GetByIdAsync(entryId, ct).ConfigureAwait(false);
+            if (existing is null)
+            {
+                logger.LogInformation(
+                    "Memory entry '{EntryId}' for agent '{AgentId}' was already absent; delete is a no-op.",
+                    entryId,
+                    agentId);
+                return NoContent();
+            }
+
+            await store.DeleteAsync(entryId, ct).ConfigureAwait(false);
+
+            logger.LogInformation(
+                "Deleted memory entry '{EntryId}' (source '{SourceType}', session '{SessionId}') for agent '{AgentId}'.",
+                entryId,
+                existing.SourceType,
+                existing.SessionId ?? "-",
+                agentId);
+
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to delete memory entry '{EntryId}' for agent '{AgentId}'.", entryId, agentId);
             return StatusCode(500, new { error = "Failed to access memory store." });
         }
     }

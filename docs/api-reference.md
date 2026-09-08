@@ -2376,6 +2376,38 @@ X-Api-Key: your-api-key
 
 **Response:** 200 OK — Returns matching memory entries.
 
+Entries past their `expiresAt` instant are excluded, as are archived entries.
+
+---
+
+### Memory Entry Delete (Per Agent)
+
+**Endpoint:** `DELETE /api/memory/{agentId}/entries/{entryId}`
+
+**Description:** Permanently removes one memory entry from that agent's own store. The row is
+deleted, not hidden — it leaves the FTS index with it, so the content stops being searchable.
+
+**Parameters:**
+- `agentId` (string, path) — Agent ID
+- `entryId` (string, path) — Memory entry ID, as returned by memory search
+
+**Request:**
+```http
+DELETE /api/memory/assistant/entries/3f2a9c1e-...
+X-Api-Key: your-api-key
+```
+
+**Response:** 204 No Content
+
+Returns 204 whether or not the entry existed, so a retried delete is not reported as a failure and
+the route cannot be used to probe which entry ids exist. Returns `404` if the agent is unknown or
+has memory disabled, and `400` if the entry id is blank.
+
+Scope is the agent's own store: an entry belonging to another agent is not reachable through this
+route, and neither are entries promoted into a shared memory store.
+
+Expired entries remain deletable — expiry hides a row from search, it does not put it out of reach.
+
 ---
 
 ### Satellites
