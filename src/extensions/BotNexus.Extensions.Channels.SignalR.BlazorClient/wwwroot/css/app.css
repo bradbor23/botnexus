@@ -8535,3 +8535,65 @@ h3.conversation-title.editable:hover {
 /* Size modifiers for the surfaces that show an agent larger than a chip. */
 .agent-avatar.avatar-lg { width: 2.1rem; height: 2.1rem; border-radius: 9px; font-size: 0.85rem; }
 .agent-avatar.avatar-lg.is-emoji { font-size: 1.2rem; }
+
+/* Agent colour picker. The swatches use the same hue -> colour derivation as the avatars they
+   set, so what you pick is literally what you get rather than an approximation of it. */
+.agent-hue-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-hue-swatch {
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    background: hsl(var(--agent-hue) 58% 91%);
+    box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 40% 78%);
+}
+
+.agent-hue-swatch.auto {
+    width: auto;
+    padding: 0 0.5rem;
+    background: var(--bg-tertiary);
+    box-shadow: none;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--text-caption);
+}
+
+/* Selection is a ring outside the swatch, not a change to its fill - the fill IS the value being
+   chosen, so altering it to show selection would misreport the choice. */
+.agent-hue-swatch.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), inset 0 0 0 1px hsl(var(--agent-hue) 40% 78%);
+}
+
+.agent-hue-swatch.auto.selected {
+    color: var(--text-primary);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .agent-hue-swatch {
+        background: hsl(var(--agent-hue) 38% 20%);
+        box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+    }
+
+    :root:not([data-theme="light"]) .agent-hue-swatch.selected {
+        box-shadow: 0 0 0 1px var(--accent), inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+    }
+}
+
+[data-theme="dark"] .agent-hue-swatch {
+    background: hsl(var(--agent-hue) 38% 20%);
+    box-shadow: inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+}
+
+[data-theme="dark"] .agent-hue-swatch.selected {
+    box-shadow: 0 0 0 1px var(--accent), inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
+}
