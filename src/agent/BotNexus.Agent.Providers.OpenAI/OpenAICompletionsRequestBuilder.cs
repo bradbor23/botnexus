@@ -91,21 +91,7 @@ internal static class OpenAICompletionsRequestBuilder
         if (options is OpenAICompletionsOptions { ToolChoice: not null } tcOptions)
             payload["tool_choice"] = tcOptions.ToolChoice;
 
-        // Relocate the volatile half of the system prompt to the end of the conversation. In the
-        // system prompt it sits in front of every message and invalidates all of them whenever it
-        // changes; at the end it invalidates only itself. Falls back to sending the prompt intact
-        // when there is nowhere safe to put it -- losing context beats losing a cache prefix.
-        var (stableSystemPrompt, volatileContext) = SystemPromptPartition.Split(systemPrompt ?? string.Empty);
-        var converted = convertMessages(
-            volatileContext is null ? systemPrompt : stableSystemPrompt, model, messages, compat);
-
-        if (volatileContext is not null &&
-            !SystemPromptPartition.TryAppendToTextConversation(converted, volatileContext))
-        {
-            converted = convertMessages(systemPrompt, model, messages, compat);
-        }
-
-        payload["messages"] = converted;
+        payload["messages"] = convertMessages(systemPrompt, model, messages, compat);
 
         if (tools is { Count: > 0 } && compat.SupportsTools != false)
         {

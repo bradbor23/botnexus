@@ -72,25 +72,11 @@ internal static class AnthropicRequestBuilder
             ? !string.IsNullOrWhiteSpace(context.SystemPrompt)
             : context.SystemPrompt is not null;
 
-        string? volatileContext = null;
-
         if (includeSystemPrompt)
         {
-            var (stableText, volatileText) =
-                SystemPromptPartition.Split(context.SystemPrompt!.SanitizeSurrogates());
-            volatileContext = volatileText;
-
-            // A prompt that is entirely volatile leaves nothing stable to send. Emitting the block
-            // anyway would put an empty text block on the wire, which the API rejects outright.
-            if (!string.IsNullOrWhiteSpace(stableText))
-            {
-                systemBlocks.Add(new Dictionary<string, object?>
-                {
-                    ["type"] = "text",
-                    ["text"] = stableText
-                });
-                stableSystemIndex = systemBlocks.Count - 1;
-            }
+            var appended = AppendSystemPromptBlocks(systemBlocks, context.SystemPrompt!);
+            if (appended >= 0)
+                stableSystemIndex = appended;
         }
 
         // One marker on the last stable system block, never one per block: the OAuth preamble and
@@ -108,23 +94,6 @@ internal static class AnthropicRequestBuilder
             retention,
             model.BaseUrl,
             remainingBreakpoints);
-
-        // Strictly after the breakpoints are placed. The volatile half of the system prompt is
-        // rebuilt per request and never persisted, so anything that lands INSIDE a cached prefix
-        // guarantees the next request cannot match it. Appended here it sits behind the last
-        // breakpoint, where it costs its own tokens and nothing else.
-        if (!SystemPromptPartition.TryAppendToBlockConversation(messages, volatileContext) &&
-            !string.IsNullOrWhiteSpace(volatileContext))
-        {
-            // Nowhere safe to put it -- no messages, or the conversation ends on an assistant
-            // turn. Keep it in the system prompt, unstamped, exactly as before. Losing context
-            // would be far worse than losing a cache prefix.
-            systemBlocks.Add(new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = volatileContext
-            });
-        }
 
         var body = new JsonObject
         {
@@ -204,12 +173,81 @@ internal static class AnthropicRequestBuilder
         return body;
     }
 
+    private const string CacheBoundaryMarker = "\n<!-- BOTNEXUS_CACHE_BOUNDARY -->\n";
+
     /// <summary>
     /// Maximum number of <c>cache_control</c> markers the Anthropic Messages API accepts in one
     /// request. Exceeding it fails the whole request, so every marker this builder places is drawn
     /// from a single budget rather than decided independently per section.
     /// </summary>
     internal const int MaxCacheBreakpoints = CacheBreakpoints.Max;
+
+    /// <summary>
+    /// Splits the system prompt at the BOTNEXUS_CACHE_BOUNDARY marker (if present) into a stable
+    /// prefix block and a dynamic tail block. When the marker is absent, the entire prompt is
+    /// treated as stable. Empty segments are omitted.
+    /// </summary>
+    /// <returns>
+    /// The index within <paramref name="blocks"/> of the last block that is stable across
+    /// requests, or -1 when no stable block was appended. The caller places the marker so the
+    /// <see cref="MaxCacheBreakpoints"/> budget stays in one place.
+    /// </returns>
+    private static int AppendSystemPromptBlocks(
+        List<Dictionary<string, object?>> blocks,
+        string systemPrompt)
+    {
+        var sanitized = systemPrompt.SanitizeSurrogates();
+        var markerIndex = sanitized.IndexOf(CacheBoundaryMarker, StringComparison.Ordinal);
+
+        if (markerIndex < 0)
+        {
+            // No boundary marker -- entire prompt is treated as stable.
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = sanitized
+            });
+            return blocks.Count - 1;
+        }
+
+        var stableText = sanitized[..markerIndex].TrimEnd();
+        var dynamicText = sanitized[(markerIndex + CacheBoundaryMarker.Length)..].TrimStart();
+
+        // Both segments empty after trimming -- fall back to a single block.
+        if (string.IsNullOrWhiteSpace(stableText) && string.IsNullOrWhiteSpace(dynamicText))
+        {
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = sanitized
+            });
+            return blocks.Count - 1;
+        }
+
+        var stableIndex = -1;
+
+        if (!string.IsNullOrWhiteSpace(stableText))
+        {
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = stableText
+            });
+            stableIndex = blocks.Count - 1;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dynamicText))
+        {
+            // Dynamic tail intentionally has NO cache_control.
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "text",
+                ["text"] = dynamicText
+            });
+        }
+
+        return stableIndex;
+    }
 
     private static JsonNode? ToNode<T>(T value)
     {
