@@ -8597,3 +8597,121 @@ h3.conversation-title.editable:hover {
 [data-theme="dark"] .agent-hue-swatch.selected {
     box-shadow: 0 0 0 1px var(--accent), inset 0 0 0 1px hsl(var(--agent-hue) 34% 32%);
 }
+
+/* ── Agent Persona Slide-out ───────────────────────────────────── */
+/* Pinned to the viewport's right edge, not anchored to the identity chip. Six ancestors of that
+   chip set overflow:hidden, so an absolutely positioned panel there is clipped to nothing - the
+   same defect that already forced the conversation switcher onto fixed positioning. An edge-pinned
+   drawer also needs no JS measuring, so it cannot inherit the switcher's stale-coordinates bug.
+   The global reduced-motion rule (app.css line ~453) disables the slide for anyone who asks. */
+.agent-identity-trigger {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+}
+.agent-identity-trigger:hover .agent-panel-title { text-decoration: underline; }
+
+.agent-persona-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--color-scrim);
+    z-index: 2000;
+    display: flex;
+    justify-content: flex-end;
+}
+.agent-persona-panel {
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    width: min(430px, 100vw);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: agent-persona-slide-in var(--motion-slow) var(--ease-enter);
+}
+@keyframes agent-persona-slide-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+.agent-persona-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+.agent-persona-heading { flex: 1 1 auto; min-width: 0; }
+.agent-persona-heading h3 { margin: 0; font-size: 1rem; }
+.agent-persona-id {
+    display: block;
+    color: var(--color-ink-faint);
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agent-persona-close {
+    flex: 0 0 auto;
+    background: none;
+    border: 0;
+    color: var(--color-ink-faint);
+    cursor: pointer;
+    padding: 0.25rem;
+}
+.agent-persona-close:hover { color: inherit; }
+.agent-persona-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 1rem;
+}
+.agent-persona-body label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 0.9rem 0 0.25rem;
+}
+.agent-persona-body label:first-child { margin-top: 0; }
+.agent-persona-hint {
+    margin: 0 0 0.35rem;
+    font-size: 0.75rem;
+    color: var(--color-ink-faint);
+}
+.agent-persona-input,
+.agent-persona-textarea {
+    width: 100%;
+    background: var(--input-bg, var(--panel-bg));
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.45rem 0.6rem;
+    font: inherit;
+    font-size: 0.85rem;
+}
+.agent-persona-textarea { resize: vertical; min-height: 3.5rem; }
+.agent-persona-emoji-input { width: 5rem; }
+.agent-persona-error {
+    margin: 0.9rem 0 0;
+    font-size: 0.8rem;
+    color: var(--color-danger, var(--accent));
+}
+.agent-persona-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+.agent-persona-footer-spacer { flex: 1 1 auto; }
+.agent-persona-deep-link {
+    font-size: 0.8rem;
+    color: var(--accent);
+}

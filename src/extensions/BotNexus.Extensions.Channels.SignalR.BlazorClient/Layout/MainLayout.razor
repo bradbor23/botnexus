@@ -39,7 +39,8 @@
                rather than owning a row inside the agent panel. *@
             @if (Store.ActiveAgentId is { Length: > 0 } bannerAgentId)
             {
-                <AgentIdentity AgentId="@bannerAgentId" />
+                <AgentIdentity AgentId="@bannerAgentId"
+                               OnPersonaRequested="@(() => OpenPersonaAsync(bannerAgentId))" />
             }
 
             <button class="banner-usage-btn"
@@ -220,6 +221,7 @@
 @* Modal overlays - rendered outside app-shell to avoid flex/overflow containment *@
 <PortalSettingsPanel @ref="_settingsPanel" />
 <ProviderUsagePanel @ref="_usagePanel" />
+<AgentPersonaPanel @ref="_personaPanel" />
 @if (_showDebugPanel)
 {
     <SessionDebugPanel SessionId="@GetActiveSessionId()" OnClose="CloseDebug" />
@@ -282,6 +284,7 @@
     private List<ToolDto> _tools = [];
     private PortalSettingsPanel? _settingsPanel;
     private ProviderUsagePanel? _usagePanel;
+    private AgentPersonaPanel? _personaPanel;
     private ElementReference _usageBtnRef;
     private bool _showDebugPanel = false;
     private bool _sidebarOpen = false;
@@ -1484,6 +1487,9 @@
 
     /// <summary>Opens the provider usage popover, which begins polling while it is visible.</summary>
     private Task OpenUsage() => _usagePanel?.OpenAsync(_usageBtnRef) ?? Task.CompletedTask;
+
+    private Task OpenPersonaAsync(string agentId) =>
+        _personaPanel?.OpenAsync(agentId) ?? Task.CompletedTask;
 
     private void ShowUpdateConfirm() => _showUpdateConfirm = true;
     private void CancelUpdate() => _showUpdateConfirm = false;

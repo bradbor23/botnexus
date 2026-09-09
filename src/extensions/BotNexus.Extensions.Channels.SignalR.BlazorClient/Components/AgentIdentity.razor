@@ -13,7 +13,18 @@
 <div class="agent-identity banner-agent-identity" data-testid="agent-identity">
     <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Class="agent-panel-avatar" />
     <div class="agent-panel-meta" title="@AgentId">
-        <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
+        @* A real <button>, not a div with @onclick: under window-controls-overlay the whole
+           .banner-header is the OS drag region and only button/select/a get app-region: no-drag
+           back (app.css:5865-5871), so a clickable div here is inert in the installed PWA.
+           The name span keeps its class and test-id - both are an asserted contract. *@
+        <button type="button"
+                class="agent-identity-trigger"
+                data-testid="agent-persona-trigger"
+                aria-haspopup="dialog"
+                title="Edit this agent's persona"
+                @onclick="() => OnPersonaRequested.InvokeAsync()">
+            <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
+        </button>
         @if (!string.IsNullOrWhiteSpace(Description))
         {
             <span class="agent-panel-description">@Description</span>
@@ -25,6 +36,15 @@
 @code {
     [Parameter, EditorRequired]
     public string AgentId { get; set; } = default!;
+
+    /// <summary>
+    /// Raised when the agent's name is clicked. Deliberately a callback rather than an injected
+    /// launcher service: the panel is mounted by <c>MainLayout</c> outside the app shell, and an
+    /// <c>@inject</c> here would make every existing fixture that renders this chip - or anything
+    /// containing it - fail DI resolution. Unset is a valid state and clicking is then a no-op.
+    /// </summary>
+    [Parameter]
+    public EventCallback OnPersonaRequested { get; set; }
 
     private AgentState? Agent => Store.GetAgent(AgentId);
 
