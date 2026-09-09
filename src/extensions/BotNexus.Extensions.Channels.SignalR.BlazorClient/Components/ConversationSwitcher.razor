@@ -111,6 +111,19 @@
                                 }
                                 <span class="conversation-switcher-row-title"
                                       title="@PortalText.SingleLine(conversation.Title)">@PortalText.SingleLine(conversation.Title)</span>
+                                @if (!string.IsNullOrWhiteSpace(row.Snippet))
+                                {
+                                    @* The evidence for a content match. Without it the row is an
+                                       unexplained title the user did not search for. *@
+                                    <span class="conversation-switcher-snippet"
+                                          data-testid="conversation-switcher-snippet"
+                                          title="@PortalText.SingleLine(row.Snippet)">@PortalText.SingleLine(row.Snippet)</span>
+                                    @if (row.MatchCount > 1)
+                                    {
+                                        <span class="conversation-switcher-badge"
+                                              data-testid="conversation-switcher-match-count">@row.MatchCount matches</span>
+                                    }
+                                }
                                 @if (conversation.IsDefault)
                                 {
                                     <span class="conversation-switcher-badge">Default</span>
@@ -147,8 +160,29 @@
     [Parameter]
     public string? ActiveConversationId { get; set; }
 
+    /// <summary>
+    /// How long typing must pause before a content search is sent. Short enough to feel immediate,
+    /// long enough that typing a word does not fire a request per letter.
+    /// </summary>
+    private static readonly TimeSpan SearchDebounce = TimeSpan.FromMilliseconds(220);
+
+    /// <summary>Maximum conversations the content search may add.</summary>
+    private const int SearchLimit = 12;
+
     private bool _open;
     private string _query = "";
+
+    /// <summary>
+    /// Conversations the backend found by their CONTENT for the current query. Empty until a search
+    /// returns, so the switcher renders its title matches immediately and never waits on the network.
+    /// </summary>
+    private IReadOnlyList<ConversationContentHitDto> _contentHits = [];
+
+    /// <summary>
+    /// Cancels the in-flight content search when a newer keystroke supersedes it, so a slow reply
+    /// for "dep" cannot land after a fast one for "deploy" and repopulate the list with stale rows.
+    /// </summary>
+    private CancellationTokenSource? _searchCts;
     private int _highlight;
     private ElementReference _inputRef;
     private ElementReference _triggerRef;
@@ -241,6 +275,9 @@
         // into a disposed switcher on every later shortcut press.
         if (_launcher is not null)
             _launcher.Requested -= HandleLaunchRequested;
+
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
     }
 
     private void HandleStoreChanged() => _ = InvokeAsync(StateHasChanged);
@@ -298,7 +335,8 @@
         Store.Agents.Values.ToArray(),
         Store.ActiveSelectionSource,
         _cronConversationIds,
-        _query);
+        _query,
+        _contentHits);
 
     private async Task ToggleAsync()
     {
@@ -315,6 +353,7 @@
     {
         _open = true;
         _query = "";
+        _contentHits = [];
         // Open on the conversation the user is already in, so Enter is a no-op rather than a
         // surprise jump, and arrowing starts from where they are.
         _highlight = IndexOfActive(BuildView());
@@ -363,6 +402,10 @@
     {
         _open = false;
         _query = "";
+        // Drop both the hits and any in-flight search: a reply landing into a closed panel would
+        // repopulate it for a query the user has already abandoned.
+        _contentHits = [];
+        _searchCts?.Cancel();
         _highlight = 0;
         _panelReady = false;
     }
@@ -390,6 +433,59 @@
         // conversation than the one under the highlight. Reset to the top - the best match after
         // typing is the first surviving row, not whatever sat at the old offset.
         _highlight = 0;
+        _ = SearchContentAsync(_query);
+    }
+
+    /// <summary>
+    /// Asks the backend which conversations SAID this, debounced, and re-renders when it answers.
+    /// </summary>
+    /// <remarks>
+    /// Fire-and-forget on purpose. Title filtering is local and instant; making the render await a
+    /// network round trip would put a stall between a keystroke and the rows the user can already
+    /// be shown. The content group simply appears a moment later.
+    /// <para>
+    /// Two guards keep it honest: the query is re-checked against <c>_query</c> after the delay and
+    /// again after the await, so a superseded search neither fires nor lands; and the whole thing
+    /// is cancelled by the next keystroke.
+    /// </para>
+    /// </remarks>
+    private async Task SearchContentAsync(string query)
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = null;
+        _contentHits = [];
+
+        // Resolved BEFORE anything is scheduled. With no REST client there is nothing to search,
+        // and starting a debounce timer that can only be thrown away leaves stray async work
+        // running behind a component that has no use for it.
+        var rest = Services.GetService<IGatewayRestClient>();
+        if (rest is null || string.IsNullOrWhiteSpace(query))
+            return;
+
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        try
+        {
+            await Task.Delay(SearchDebounce, cts.Token);
+
+            if (!string.Equals(query, _query, StringComparison.Ordinal))
+                return;
+
+            var hits = await rest.SearchConversationContentAsync(query, SearchLimit, cts.Token);
+
+            // The panel may have closed, or the user typed on, while this was in flight.
+            if (cts.IsCancellationRequested || !string.Equals(query, _query, StringComparison.Ordinal))
+                return;
+
+            _contentHits = hits;
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer keystroke. Nothing to report.
+        }
     }
 
     private async Task OnKeyDownAsync(KeyboardEventArgs e)

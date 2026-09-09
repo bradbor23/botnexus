@@ -20,7 +20,9 @@ public sealed record ConversationSwitcherRow(
     string AgentDisplayName,
     ConversationState Conversation,
     string GroupLabel,
-    bool IsOtherAgent);
+    bool IsOtherAgent,
+    string? Snippet = null,
+    int MatchCount = 0);
 
 /// <summary>A labelled group of switcher rows, in render order. Never empty.</summary>
 /// <param name="Label">The group heading.</param>
@@ -104,7 +106,8 @@ public static class ConversationSwitcherModel
         IEnumerable<AgentState> agents,
         SelectionSource selectionSource,
         IReadOnlySet<string>? cronConversationIds,
-        string? query)
+        string? query,
+        IReadOnlyList<ConversationContentHitDto>? contentHits = null)
     {
         ArgumentNullException.ThrowIfNull(agents);
 
@@ -120,10 +123,84 @@ public static class ConversationSwitcherModel
         if (otherAgents is not null)
             groups.Add(otherAgents);
 
+        var alreadyListed = groups
+            .SelectMany(g => g.Rows)
+            .Select(r => r.Conversation.ConversationId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var content = BuildContentGroup(roster, query, contentHits, alreadyListed);
+        if (content is not null)
+            groups.Add(content);
+
         if (groups.Count == 0)
             return ConversationSwitcherView.Empty;
 
         return new ConversationSwitcherView(groups, groups.SelectMany(g => g.Rows).ToList());
+    }
+
+    /// <summary>
+    /// Conversations that matched on what was SAID in them, which the title filter cannot reach.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Listed last and separately, never merged into the title groups. A title match is something
+    /// the user can verify at a glance; a content match needs its snippet to explain itself, and
+    /// mixing the two would put unexplained rows among explained ones.
+    /// </para>
+    /// <para>
+    /// <b>Rows already matched by title are dropped.</b> A conversation called "deploy notes" that
+    /// also says "deploy" inside would otherwise appear twice, and the second copy teaches the user
+    /// nothing.
+    /// </para>
+    /// <para>
+    /// <b>The same visibility rules apply as everywhere else in this model.</b> The search endpoint
+    /// walks all of session history and knows nothing about archived rows, runtime-internal threads
+    /// or read-only agents. Re-applying <see cref="Reachable"/> and the read-only exclusion here is
+    /// what stops search becoming a back door to conversations the switcher otherwise hides - and
+    /// it must be done on the results, because the server cannot do it.
+    /// </para>
+    /// <para>
+    /// Server order is preserved. Hits arrive ranked by relevance, and re-sorting them by title or
+    /// recency would discard the only signal that says which match is the good one.
+    /// </para>
+    /// </remarks>
+    private static ConversationSwitcherGroup? BuildContentGroup(
+        IEnumerable<AgentState> roster,
+        string? query,
+        IReadOnlyList<ConversationContentHitDto>? contentHits,
+        HashSet<string> alreadyListed)
+    {
+        if (string.IsNullOrWhiteSpace(query) || contentHits is not { Count: > 0 })
+            return null;
+
+        var reachable = roster
+            .Where(a => !a.IsReadOnly)
+            .SelectMany(a => Reachable(a).Select(c => (Agent: a, Conversation: c)))
+            .GroupBy(x => x.Conversation.ConversationId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+        var rows = new List<ConversationSwitcherRow>();
+        foreach (var hit in contentHits)
+        {
+            if (string.IsNullOrWhiteSpace(hit.ConversationId) || alreadyListed.Contains(hit.ConversationId))
+                continue;
+
+            if (!reachable.TryGetValue(hit.ConversationId, out var found))
+                continue;
+
+            rows.Add(new ConversationSwitcherRow(
+                found.Agent.AgentId,
+                found.Agent.DisplayName,
+                found.Conversation,
+                ContentMatchLabel,
+                IsOtherAgent: true,
+                Snippet: hit.Snippet,
+                MatchCount: hit.MatchCount));
+
+            alreadyListed.Add(hit.ConversationId);
+        }
+
+        return rows.Count == 0 ? null : new ConversationSwitcherGroup(ContentMatchLabel, rows);
     }
 
     /// <summary>
@@ -169,6 +246,9 @@ public static class ConversationSwitcherModel
     /// cannot otherwise select would offer a destination the rest of the portal hides.
     /// </para>
     /// </remarks>
+    /// <summary>Heading for conversations found by their content rather than their title.</summary>
+    internal const string ContentMatchLabel = "Found in messages";
+
     private static ConversationSwitcherGroup? BuildOtherAgentsGroup(
         string currentAgentId,
         IEnumerable<AgentState> roster,

@@ -118,6 +118,38 @@ public sealed class GatewayRestClient : IGatewayRestClient, IChannelErrorReporte
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<ConversationContentHitDto>> SearchConversationContentAsync(
+        string query,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        EnsureConfigured();
+
+        try
+        {
+            var result = await _http.GetFromJsonAsync<ConversationContentSearchResponseDto>(
+                $"{_apiBaseUrl}conversations/search?q={Uri.EscapeDataString(query)}&limit={limit}",
+                cancellationToken);
+            return result?.Results ?? [];
+        }
+        catch (OperationCanceledException)
+        {
+            // A superseded keystroke, not a failure. Let the caller's cancellation win.
+            throw;
+        }
+        catch
+        {
+            // Swallowed on purpose: content search is an assist layered on the title filter, which
+            // is computed locally and still works. Surfacing an error banner because the backend
+            // hiccuped would make the switcher feel broken when it is not.
+            return [];
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ConversationHistoryResponseDto?> GetHistoryAsync(
         string conversationId,
         int limit = 50,

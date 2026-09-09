@@ -35,6 +35,24 @@ public interface IGatewayRestClient
     Task<IReadOnlyList<ConversationSummaryDto>> GetAllConversationsAsync(
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// GET /api/conversations/search?q={query}&amp;limit={limit} - finds conversations by what was
+    /// SAID in them, not by title.
+    /// </summary>
+    /// <remarks>
+    /// Returns ids and snippets only; the caller joins them against the roster it already holds.
+    /// A failed or unreachable search returns an empty list rather than throwing: search is an
+    /// assist on top of the title filter, and a transient backend problem must not take down a
+    /// switcher that still works perfectly well for titles.
+    /// </remarks>
+    /// <param name="query">What the person typed.</param>
+    /// <param name="limit">Maximum conversations to return.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<ConversationContentHitDto>> SearchConversationContentAsync(
+        string query,
+        int limit = 20,
+        CancellationToken cancellationToken = default);
+
     /// <summary>GET /api/conversations/{conversationId}/history?limit={limit}&amp;offset={offset}</summary>
     Task<ConversationHistoryResponseDto?> GetHistoryAsync(
         string conversationId,

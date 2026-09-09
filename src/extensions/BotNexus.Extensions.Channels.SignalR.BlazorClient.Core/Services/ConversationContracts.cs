@@ -187,3 +187,32 @@ public sealed class SessionHistoryEntryDto
     [JsonPropertyName("messageKind")]
     public string? MessageKind { get; init; }
 }
+
+/// <summary>
+/// One conversation that matched a content search, with the line that proves why.
+/// </summary>
+/// <remarks>
+/// The endpoint deliberately returns ids and snippets rather than whole conversations: the portal
+/// already holds the roster with titles, so the client joins on <paramref name="ConversationId"/>
+/// instead of the server maintaining a second, divergent conversation projection.
+/// </remarks>
+/// <param name="ConversationId">The conversation the match was found in.</param>
+/// <param name="MatchCount">How many messages in it matched, for ranking and for "3 matches".</param>
+/// <param name="Snippet">The best-ranked matching line, already collapsed to one line by the server.</param>
+/// <param name="Role">Who said it, so the reader can tell their own words from the agent's.</param>
+/// <param name="Timestamp">When it was said.</param>
+public sealed record ConversationContentHitDto(
+    string ConversationId,
+    int MatchCount,
+    string? Snippet,
+    string? Role,
+    DateTimeOffset? Timestamp);
+
+/// <summary>The envelope GET /api/conversations/search returns.</summary>
+/// <param name="Query">Echoed back, so a late response can be matched to the query that asked for it.</param>
+/// <param name="Results">Matching conversations, best match first.</param>
+/// <param name="Count">Number of results.</param>
+public sealed record ConversationContentSearchResponseDto(
+    string? Query,
+    IReadOnlyList<ConversationContentHitDto>? Results,
+    int Count);

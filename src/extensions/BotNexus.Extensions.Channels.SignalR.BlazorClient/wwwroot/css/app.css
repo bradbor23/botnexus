@@ -8198,6 +8198,9 @@ h3.conversation-title.editable:hover {
 
 .conversation-switcher-row {
     display: flex;
+    /* Wraps so a content-match snippet can take its own line under the title. Every other child is
+       a nowrap badge or the flexing title, so a row without a snippet still renders on one line. */
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
     width: 100%;
@@ -8246,6 +8249,19 @@ h3.conversation-title.editable:hover {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+}
+
+/* The matched line for a conversation found by its CONTENT rather than its title. Sits on its own
+   row beneath the title: it is evidence, not a label, and reads as prose rather than as chrome. */
+.conversation-switcher-snippet {
+    flex: 1 0 100%;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--text-muted);
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
 }
 
 .conversation-switcher-badge {

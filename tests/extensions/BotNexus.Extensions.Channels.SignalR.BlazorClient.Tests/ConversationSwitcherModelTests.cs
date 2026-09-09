@@ -405,3 +405,147 @@ public sealed class ConversationSwitcherModelTests
         Assert.Equal(0, view.Count);
     }
 }
+
+/// <summary>
+/// The content-match group: conversations found by what was SAID in them rather than their title.
+///
+/// <para>
+/// The search endpoint walks all of session history and knows nothing about archived rows,
+/// runtime-internal threads or read-only agents. Every visibility rule the switcher enforces
+/// therefore has to be re-applied to its results here, on the client — which is exactly the kind of
+/// thing that is easy to leave out and impossible to see once it is wrong.
+/// </para>
+/// </summary>
+public sealed class ConversationSwitcherContentMatchTests
+{
+    private const string ContentLabel = "Found in messages";
+
+    [Fact]
+    public void ContentHit_AppearsWithItsSnippet()
+    {
+        var view = Build(
+            [Conv("c-1", "Unrelated title")],
+            query: "deploy",
+            hits: [Hit("c-1", snippet: "we should deploy on Friday", matchCount: 3)]);
+
+        var row = view.Groups.Single(g => g.Label == ContentLabel).Rows.Single();
+        row.Conversation.ConversationId.ShouldBe("c-1");
+        row.Snippet.ShouldBe("we should deploy on Friday");
+        row.MatchCount.ShouldBe(3);
+    }
+
+    [Fact]
+    public void ContentHit_AlreadyMatchedByTitle_IsNotListedTwice()
+    {
+        // The row is already explained by its title; a second copy teaches the reader nothing.
+        var view = Build(
+            [Conv("c-1", "deploy notes")],
+            query: "deploy",
+            hits: [Hit("c-1", "we should deploy on Friday")]);
+
+        view.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+        view.Flattened.Count(r => r.Conversation.ConversationId == "c-1").ShouldBe(1);
+    }
+
+    [Fact]
+    public void ContentHit_ForAnArchivedConversation_IsDropped()
+    {
+        // The server cannot know it is archived. If the client does not filter, search becomes a
+        // back door to conversations the switcher deliberately hides.
+        var view = Build(
+            [Conv("c-1", "Old thread", status: "Archived")],
+            query: "deploy",
+            hits: [Hit("c-1", "we should deploy on Friday")]);
+
+        view.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+    }
+
+    [Fact]
+    public void ContentHit_ForANonUserFacingConversation_IsDropped()
+    {
+        var view = Build(
+            [Conv("c-1", "Bookkeeping", visibility: ConversationVisibility.InternalHidden)],
+            query: "deploy",
+            hits: [Hit("c-1", "we should deploy on Friday")]);
+
+        view.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+    }
+
+    [Fact]
+    public void ContentHit_ForAConversationNotOnTheRoster_IsDropped()
+    {
+        // A hit the client cannot resolve to a real conversation would render a row that navigates
+        // nowhere. Dropping it is better than a dead destination.
+        var view = Build(
+            [Conv("c-1", "Present")],
+            query: "deploy",
+            hits: [Hit("c-missing", "we should deploy on Friday")]);
+
+        view.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+    }
+
+    [Fact]
+    public void ContentHits_KeepTheServersRelevanceOrder()
+    {
+        // bm25 rank is the only signal saying which match is the good one; re-sorting discards it.
+        var view = Build(
+            [Conv("c-1", "First"), Conv("c-2", "Second"), Conv("c-3", "Third")],
+            query: "deploy",
+            hits: [Hit("c-3", "best"), Hit("c-1", "middling"), Hit("c-2", "worst")]);
+
+        view.Groups.Single(g => g.Label == ContentLabel).Rows
+            .Select(r => r.Conversation.ConversationId)
+            .ShouldBe(["c-3", "c-1", "c-2"]);
+    }
+
+    [Fact]
+    public void NoHits_LeavesTheViewExactlyAsItWas()
+    {
+        var withHits = Build([Conv("c-1", "deploy notes")], "deploy", hits: []);
+        var without = Build([Conv("c-1", "deploy notes")], "deploy", hits: null);
+
+        withHits.Groups.Count.ShouldBe(without.Groups.Count);
+        withHits.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+    }
+
+    [Fact]
+    public void EmptyQuery_IgnoresHitsEntirely()
+    {
+        // An unfiltered switcher lists the current agent and nothing else. Stale hits from a
+        // previous query must not survive into it.
+        var view = Build([Conv("c-1", "Anything")], query: "", hits: [Hit("c-1", "deploy")]);
+
+        view.Groups.ShouldNotContain(g => g.Label == ContentLabel);
+    }
+
+    private static ConversationContentHitDto Hit(string conversationId, string snippet, int matchCount = 1)
+        => new(conversationId, matchCount, snippet, "user", null);
+
+    private static ConversationState Conv(
+        string id,
+        string title,
+        string status = "Active",
+        ConversationVisibility visibility = ConversationVisibility.UserFacing) =>
+        new()
+        {
+            ConversationId = id,
+            Title = title,
+            Status = status,
+            Source = ConversationSource.Channel,
+            Kind = ConversationKind.HumanAgent,
+            Visibility = visibility,
+        };
+
+    private static ConversationSwitcherView Build(
+        IEnumerable<ConversationState> conversations,
+        string? query,
+        IReadOnlyList<ConversationContentHitDto>? hits)
+    {
+        var agent = new AgentState { AgentId = "a-1", DisplayName = "Alpha" };
+        foreach (var c in conversations)
+            agent.Conversations[c.ConversationId] = c;
+
+        return ConversationSwitcherModel.Build(
+            "a-1", [agent], SelectionSource.UserClick, null, query, hits);
+    }
+}
