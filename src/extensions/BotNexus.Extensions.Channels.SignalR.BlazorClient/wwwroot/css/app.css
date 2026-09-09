@@ -8604,6 +8604,9 @@ h3.conversation-title.editable:hover {
    same defect that already forced the conversation switcher onto fixed positioning. An edge-pinned
    drawer also needs no JS measuring, so it cannot inherit the switcher's stale-coordinates bug.
    The global reduced-motion rule (app.css line ~453) disables the slide for anyone who asks. */
+/* The trigger is the WHOLE chip, so it takes over the chip's own flex row: avatar, meta and
+   chevron are its children. The chip keeps its box - padding and border stay on
+   .banner-agent-identity - so the top bar's measured geometry is unchanged. */
 .agent-identity-trigger {
     padding: 0;
     border: 0;
@@ -8612,11 +8615,30 @@ h3.conversation-title.editable:hover {
     color: inherit;
     text-align: left;
     cursor: pointer;
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: var(--density-gap);
     min-width: 0;
-    max-width: 100%;
+    flex: 1 1 auto;
+    overflow: hidden;
+    border-radius: var(--radius-lg);
 }
 .agent-identity-trigger:hover .agent-panel-title { text-decoration: underline; }
+.agent-identity-trigger:hover .agent-identity-chevron { color: inherit; }
+.agent-identity-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Always visible, never hover-only. An affordance that appears only once the pointer is already
+   on the control cannot tell anyone the control exists - which is how the first cut of this
+   shipped, and why nobody found it. */
+.agent-identity-chevron {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-ink-faint);
+}
 
 .agent-persona-overlay {
     position: fixed;
@@ -8629,7 +8651,11 @@ h3.conversation-title.editable:hover {
 .agent-persona-panel {
     background: var(--panel-bg);
     border-left: 1px solid var(--border);
-    width: min(430px, 100vw);
+    /* 430px left the twelve-swatch colour row 7px short of fitting, stranding one swatch on a
+       second line: the row needs 404px (Auto 44 + 12x24 + 12x6 gaps) and had 397. At 460 it fits
+       with room to spare, and the text fields get the width back too. The row keeps flex-wrap, so
+       a viewport narrower than the drawer still wraps rather than overflowing. */
+    width: min(460px, 100vw);
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -8714,4 +8740,31 @@ h3.conversation-title.editable:hover {
 .agent-persona-deep-link {
     font-size: 0.8rem;
     color: var(--accent);
+}
+
+/* The agent card's identity row is a button (persona panel), while the card itself stays clickable
+   for its primary action (open the agent). It must look exactly like the row it replaced - the
+   affordance is the chevron and the hover, not a button chrome. */
+.agent-card-persona-trigger {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.agent-card-persona-trigger:hover .agent-card-name { text-decoration: underline; }
+.agent-card-persona-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-lg);
+}
+.agent-card-persona-chevron {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-ink-faint);
+    margin-left: auto;
 }
