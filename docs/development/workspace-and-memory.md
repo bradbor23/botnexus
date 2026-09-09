@@ -808,6 +808,59 @@ Agent workspaces are configured via `AgentConfig` in the BotNexus configuration:
 > `autoLoadMemory`, `consolidationModel` or `memoryConsolidationIntervalHours` key; none of these bind
 > to anything.
 
+### Shared memory stores
+
+Every key above is per-agent, and an agent's memory is private to it. Stores that more than one
+agent can reach are configured at the **gateway** level instead, because they belong to no single
+agent:
+
+```json
+{
+  "gateway": {
+    "memory": {
+      "sharedStores": [
+        {
+          "name": "platform-knowledge",
+          "description": "Facts about this deployment that every agent should share.",
+          "readers": ["*"],
+          "writers": ["curator"],
+          "retentionDays": 365
+        }
+      ]
+    }
+  }
+}
+```
+
+Bound from `gateway:memory` to `GatewayMemoryConfig`, and rendered on the Configuration page from
+the same attributes — so that page is the editor; there is no separate shared-memory screen.
+
+| Property | Type | Default | Purpose |
+|----------|------|---------|---------|
+| `name` | string | — | Unique store name. An entry without one is dropped rather than half-created |
+| `description` | string | none | What the store is for. Shown wherever the store is listed |
+| `readers` | string[] | empty | Agent ids that may read it. `"*"` means every agent; **empty means nobody** |
+| `writers` | string[] | empty | Agent ids that may write to it. Same `"*"` rule, and normally much shorter than `readers` |
+| `retentionDays` | int | none | Days entries are kept. Absent keeps them indefinitely |
+
+**Absent or empty means every agent's memory stays private**, which is the default and does not
+change until a store is configured. An empty registry answers "no" to every read and write check,
+which is the behaviour that shipped before shared stores were wired up at all.
+
+**`readers` and `writers` are separate on purpose, and the asymmetry is the point.** Wide
+readership is ordinary — that is what a shared store is for. Wide *write* access is a different
+object: a store every agent can write is a channel through which one agent's note becomes a fact
+the others read. Prefer many readers and a single curating writer.
+
+Promotion into a shared store is an authority transfer rather than a copy, so `SharedMemoryPromoter`
+refuses to promote anything that is not first-party — see [Memory trust tiers](#memory-trust-tiers).
+
+To check the resulting access without reading `config.json`, use
+[`GET /api/memory/shared`](../api-reference.md#shared-memory-stores), or the Shared stores section
+of the portal's Memory page. Both resolve `"*"` against the live roster and report the number of
+agents that can actually reach each store, which is the form in which a too-wide access list is
+noticeable.
+
 ### Environment Variables
 
 ```bash
