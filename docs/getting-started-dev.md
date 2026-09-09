@@ -120,6 +120,39 @@ Use `dev-loop.ps1` for the edit → build → test → run cycle:
 | Agent workspace files (`SOUL.md`, `IDENTITY.md`, etc.) | No — takes effect on next message |
 | `gateway.listenUrl` (port binding) | Yes |
 | Extension DLL additions | Yes |
+| Portal (Blazor) markup, C# or CSS | Yes — **and a publish first**, see below |
+
+### Portal changes need a publish, not just a build
+
+The portal is not served from build output. `SignalREndpointContributor` serves it from a *deployed*
+copy at `~/.botnexus/extensions/botnexus-signalr/blazor/`, so building the Gateway does not refresh
+it — and neither does building `BlazorClient` on its own. Restarting without publishing re-serves
+the same old files, which looks exactly like the change having done nothing.
+
+Publish the client, replace the deployed copy, then restart:
+
+```bash
+dotnet publish src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient -c Release
+rm -rf ~/.botnexus/extensions/botnexus-signalr/blazor
+cp -r src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient/bin/Release/net10.0/publish/wwwroot \
+  ~/.botnexus/extensions/botnexus-signalr/blazor
+scripts/gateway-restart.sh
+```
+
+Substitute your own home for `~/.botnexus` if `BOTNEXUS_HOME` is set — see
+[Home directory](#home-directory). The unattended sync script — `scripts/botnexus-sync.sh`, which
+drives a host-specific two-instance setup — does the same publish-and-replace; the commands above
+are the manual equivalent for a local edit-and-check loop.
+
+Two things make a skipped or partial publish hard to spot:
+
+- **Copy the whole directory, never individual files.** The publish emits `app.css`, `app.css.br`
+  and `app.css.gz` side by side and the Gateway serves the compressed one to any browser. Copying
+  `app.css` alone changes the only copy a browser never reads: correct on disk, correct to `curl`,
+  and the page keeps rendering the old styles.
+- **Bump the `?v=` cache-buster in the client's `wwwroot/index.html` whenever `app.css` changes** —
+  in source, then publish. `CI: CSS Cache-Buster Guard` fails a PR that moves one without the other.
+  [Design system](design-system.md#changing-something) has the full rule.
 
 ### Running tests
 
@@ -349,6 +382,7 @@ All scripts live in `scripts/`.
 | `start-gateway.ps1` | Build and start the Gateway | `-Port`, `-SkipBuild` |
 | `export-openapi.ps1` | Export OpenAPI spec to `docs/api/openapi.json` | `-Port`, `-OutputPath`, `-SkipBuild` |
 | `repo/install-hooks.ps1` | Install versioned git hooks (run once) | - |
+| `gateway-restart.sh` | Restart a running Gateway, freeing the port first | `--status`, `--stop`, `--from`, `--port`, `--force` |
 
 ---
 
@@ -362,6 +396,7 @@ All scripts live in `scripts/`.
 | Config file not found | Run the Gateway once — it auto-creates `~/.botnexus/` |
 | OAuth code expired | Send another message to trigger a fresh device code |
 | WebUI shows "Disconnected" | Restart: `.\scripts\dev-loop.ps1` |
+| Portal change does not appear after a restart | The portal is served from a deployed copy. Publish `BlazorClient` and replace it — see [Portal changes need a publish](#portal-changes-need-a-publish-not-just-a-build). |
 | Config changes ignored | Most settings hot-reload. `listenUrl` changes require restart. |
 | Tests fail | `dotnet clean dirs.proj; dotnet build dirs.proj --nologo --tl:off; scripts/repo/Validate-PreCommit.ps1` |
 

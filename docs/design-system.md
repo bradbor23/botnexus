@@ -801,11 +801,16 @@ render its dark value on a white page.
 
 **Adding an icon.** See [Adding an icon](#adding-an-icon).
 
-**Deploying a CSS change.** Deploy the whole build output directory, never
-individual files:
+**Deploying a CSS change.** The portal is served from a *deployed* copy of the
+publish output, not from the build tree — building the gateway does not refresh
+it. Publish the client, then deploy the whole output directory, never individual
+files:
 
 ```
-rsync -a --delete <blazor publish output>/ <deploy target>/blazor/
+dotnet publish src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient -c Release
+rsync -a --delete \
+  src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient/bin/Release/net10.0/publish/wwwroot/ \
+  ~/.botnexus/extensions/botnexus-signalr/blazor/
 ```
 
 The reason is **pre-compressed variants**. The build emits `app.css`,
