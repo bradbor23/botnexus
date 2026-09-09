@@ -224,7 +224,49 @@ public sealed class AgentIdentityTests : IDisposable
         var trigger = cut.Find("[data-testid='agent-persona-trigger']");
         Assert.Equal("BUTTON", trigger.TagName);
         Assert.Equal("button", trigger.GetAttribute("type"));
-        Assert.Equal("Trigger Agent", trigger.TextContent.Trim());
+        // Migrated from an exact TextContent match: the trigger is now the whole chip, so its text
+        // also carries the monogram, description and id. The name being INSIDE it is the contract.
+        Assert.Contains("Trigger Agent", trigger.TextContent);
+    }
+
+    [Fact]
+    public void The_whole_identity_chip_is_the_trigger_not_just_the_name()
+    {
+        // The first cut wrapped only the name: a 67x20px target nobody found. The avatar is the
+        // part people instinctively click, so it has to be inside the button.
+        Seed("trigger-agent", "Trigger Agent");
+
+        var cut = RenderFor("trigger-agent");
+
+        var trigger = cut.Find("[data-testid='agent-persona-trigger']");
+        Assert.NotNull(trigger.QuerySelector(".agent-panel-avatar"));
+        Assert.NotNull(trigger.QuerySelector(".agent-panel-meta"));
+        Assert.NotNull(trigger.QuerySelector("[data-testid='agent-identity-name']"));
+    }
+
+    [Fact]
+    public void Identity_shows_a_persistent_affordance_that_the_chip_is_clickable()
+    {
+        // Always rendered, not hover-only - an affordance you only see once you are already
+        // hovering cannot tell you the control is there.
+        Seed("trigger-agent", "Trigger Agent");
+
+        var cut = RenderFor("trigger-agent");
+
+        Assert.NotNull(cut.Find("[data-testid='agent-persona-chevron']"));
+    }
+
+    [Fact]
+    public void The_trigger_contains_no_block_elements_so_the_button_markup_stays_valid()
+    {
+        // A button's content model is phrasing content. .agent-panel-meta was a <div>, which
+        // browsers tolerate inside a button but which is invalid and degrades accessibility.
+        Seed("trigger-agent", "Trigger Agent", "Handles widget triage");
+
+        var cut = RenderFor("trigger-agent");
+
+        var trigger = cut.Find("[data-testid='agent-persona-trigger']");
+        Assert.Empty(trigger.QuerySelectorAll("div, p, section, ul, ol, h1, h2, h3, h4, h5, h6"));
     }
 
     [Fact]

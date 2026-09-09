@@ -340,4 +340,81 @@ public sealed class AgentDashboardTests : IDisposable
         Assert.Equal(3, cut.FindAll(".agent-card").Count);
         Assert.Single(cut.FindAll("[data-testid=agent-card-delegate-chip]"));
     }
+
+    // ── Persona trigger on the card ───────────────────────────────────────
+    // The card's own click opens the agent (its primary action). The IDENTITY area opens the
+    // persona panel instead, matching the top-bar chip - so the two must not fire together.
+
+    [Fact]
+    public void Card_identity_is_a_button_that_requests_the_persona_panel()
+    {
+        var launcher = new RecordingPersonaLauncher();
+        _ctx.Services.AddSingleton<IAgentPersonaLauncher>(launcher);
+        _store.Agents.Returns(new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha" }
+        }.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+        var trigger = cut.Find("[data-testid='agent-card-persona-trigger']");
+        Assert.Equal("BUTTON", trigger.TagName);
+        trigger.Click();
+
+        Assert.Equal(["a1"], launcher.RequestedAgentIds);
+    }
+
+    [Fact]
+    public void Card_identity_click_does_not_also_navigate_to_the_agent()
+    {
+        // Without stopPropagation the card's own @onclick fires too, so the panel would open and
+        // the app would navigate away from it in the same gesture.
+        var launcher = new RecordingPersonaLauncher();
+        _ctx.Services.AddSingleton<IAgentPersonaLauncher>(launcher);
+        var nav = _ctx.Services.GetRequiredService<BunitNavigationManager>();
+        var before = nav.Uri;
+        _store.Agents.Returns(new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha" }
+        }.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+        cut.Find("[data-testid='agent-card-persona-trigger']").Click();
+
+        Assert.Equal(before, nav.Uri);
+        Assert.Single(launcher.RequestedAgentIds);
+    }
+
+    [Fact]
+    public void Card_without_a_registered_launcher_is_inert_rather_than_a_DI_failure()
+    {
+        // The launcher is resolved, not injected, so existing fixtures that never registered it
+        // keep rendering. Clicking is simply a no-op.
+        _store.Agents.Returns(new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha" }
+        }.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        cut.Find("[data-testid='agent-card-persona-trigger']").Click();
+        Assert.NotNull(cut.Find("[data-testid='agent-card']"));
+    }
+
+    /// <summary>
+    /// Records what the dashboard asked for. The real launcher just raises its event; here the
+    /// event is left unsubscribed because no panel is rendered in these fixtures - what is under
+    /// test is that the CARD asks, not that the panel answers.
+    /// </summary>
+    private sealed class RecordingPersonaLauncher : IAgentPersonaLauncher
+    {
+        public List<string> RequestedAgentIds { get; } = [];
+
+        public event Action<string>? Requested;
+
+        public void Request(string agentId)
+        {
+            RequestedAgentIds.Add(agentId);
+            Requested?.Invoke(agentId);
+        }
+    }
 }

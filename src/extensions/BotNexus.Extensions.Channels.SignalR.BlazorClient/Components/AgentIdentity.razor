@@ -11,26 +11,42 @@
     characters cannot grow the top bar or defeat ellipsis truncation.
 *@
 <div class="agent-identity banner-agent-identity" data-testid="agent-identity">
-    <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Class="agent-panel-avatar" />
-    <div class="agent-panel-meta" title="@AgentId">
-        @* A real <button>, not a div with @onclick: under window-controls-overlay the whole
-           .banner-header is the OS drag region and only button/select/a get app-region: no-drag
-           back (app.css:5865-5871), so a clickable div here is inert in the installed PWA.
-           The name span keeps its class and test-id - both are an asserted contract. *@
-        <button type="button"
-                class="agent-identity-trigger"
-                data-testid="agent-persona-trigger"
-                aria-haspopup="dialog"
-                title="Edit this agent's persona"
-                @onclick="() => OnPersonaRequested.InvokeAsync()">
+    @* THE WHOLE CHIP is the trigger, not just the name. Wrapping only the name gave a 67x20px
+       target with no persistent affordance - findable only if you already knew it was there, which
+       is the "builds the capability then under-signals it" pattern the interface review named.
+
+       A real <button>, not a div with @onclick: under window-controls-overlay the whole
+       .banner-header is the OS drag region and only button/select/a get app-region: no-drag back
+       (app.css:5865-5871), so a clickable div here is inert in the installed PWA.
+
+       .agent-panel-meta is a <span> rather than a <div> because a button's content model is
+       phrasing content; a <div> inside it is invalid HTML that browsers merely tolerate. Its class
+       and its title attribute are unchanged - both are the asserted hover-reveal contract. *@
+    <button type="button"
+            class="agent-identity-trigger"
+            data-testid="agent-persona-trigger"
+            aria-haspopup="dialog"
+            aria-label="@($"Edit {DisplayName}'s persona")"
+            title="Edit this agent's persona"
+            @onclick="() => OnPersonaRequested.InvokeAsync()">
+        <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Class="agent-panel-avatar" />
+        <span class="agent-panel-meta" title="@AgentId">
             <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
-        </button>
-        @if (!string.IsNullOrWhiteSpace(Description))
-        {
-            <span class="agent-panel-description">@Description</span>
-        }
-        <span class="agent-panel-id">@AgentId</span>
-    </div>
+            @if (!string.IsNullOrWhiteSpace(Description))
+            {
+                <span class="agent-panel-description">@Description</span>
+            }
+            <span class="agent-panel-id">@AgentId</span>
+        </span>
+        @* Always visible, not hover-only: an affordance that appears only once you are already
+           hovering cannot tell you the control is there. *@
+        <span class="agent-identity-chevron" data-testid="agent-persona-chevron" aria-hidden="true">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        </span>
+    </button>
 </div>
 
 @code {

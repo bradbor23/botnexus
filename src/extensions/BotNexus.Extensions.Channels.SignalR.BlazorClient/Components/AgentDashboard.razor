@@ -1,5 +1,6 @@
 @inject IClientStateStore Store
 @inject NavigationManager Nav
+@inject IServiceProvider Services
 @implements IDisposable
 
 <div class="agent-dashboard">
@@ -18,19 +19,38 @@
                      data-testid="agent-card"
                      data-agent-id="@agentId"
                      @onclick="() => NavigateToAgent(agent)">
-                    <div class="agent-card-header">
+                    @* The card's own click opens the agent, which is its primary action and stays
+                       that way. The IDENTITY - avatar and name - opens the persona panel instead,
+                       matching the top-bar chip exactly, so "click an agent's identity to edit who
+                       it is" is one rule rather than two places that behave differently.
+                       stopPropagation is what keeps the two from firing together. *@
+                    <button type="button"
+                            class="agent-card-header agent-card-persona-trigger"
+                            data-testid="agent-card-persona-trigger"
+                            data-agent-id="@agentId"
+                            aria-haspopup="dialog"
+                            aria-label="@($"Edit {agent.DisplayName}'s persona")"
+                            title="Edit this agent's persona"
+                            @onclick="() => OpenPersona(agent.AgentId)"
+                            @onclick:stopPropagation="true">
                         <AgentAvatar AgentId="@agent.AgentId" DisplayName="@agent.DisplayName" Emoji="@agent.Emoji" Hue="@agent.AvatarHue" Class="agent-card-emoji avatar-lg" />
-                        <div class="agent-card-identity">
+                        <span class="agent-card-identity">
                             <span class="agent-card-name">@agent.DisplayName</span>
                             <span class="agent-card-status @(agent.IsStreaming ? "status-active" : "status-idle")">
                                 @(agent.IsStreaming ? "● Active" : "○ Idle")
                             </span>
-                        </div>
-                        @if (agent.UnreadCount > 0)
-                        {
-                            <span class="agent-card-unread-badge">@agent.UnreadCount</span>
-                        }
-                    </div>
+                        </span>
+                        <span class="agent-card-persona-chevron" aria-hidden="true">
+                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                <path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.4"
+                                      stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </span>
+                    </button>
+                    @if (agent.UnreadCount > 0)
+                    {
+                        <span class="agent-card-unread-badge">@agent.UnreadCount</span>
+                    }
                     @if (!string.IsNullOrEmpty(agent.Description))
                     {
                         <p class="agent-card-description">@agent.Description</p>
@@ -97,6 +117,18 @@
 
     private static string AgentLabel(AgentState agent) =>
         string.IsNullOrWhiteSpace(agent.DisplayName) ? agent.AgentId : agent.DisplayName;
+
+
+    private IAgentPersonaLauncher? _personaLauncher;
+
+    /// <summary>
+    /// Asks the persona panel to open. Resolved rather than injected so an existing fixture that
+    /// renders this dashboard without registering the launcher keeps working - clicking the
+    /// identity is then simply inert rather than a DI failure.
+    /// </summary>
+    private void OpenPersona(string agentId) =>
+        (_personaLauncher ??= Services.GetService(typeof(IAgentPersonaLauncher)) as IAgentPersonaLauncher)
+            ?.Request(agentId);
 
     private void NavigateToAgent(AgentState agent)
     {

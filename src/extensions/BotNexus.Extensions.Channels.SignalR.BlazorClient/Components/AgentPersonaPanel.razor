@@ -2,6 +2,7 @@
 @inject IClientStateStore Store
 @inject NavigationManager Nav
 @inject IServiceProvider Services
+@implements IDisposable
 
 @*
     The agent persona slide-out. Opened by clicking the agent's name in the top bar; slides in from
@@ -170,6 +171,7 @@
     private PersonaEdit? _model;
     private ElementReference _overlay;
     private HttpClient? _http;
+    private IAgentPersonaLauncher? _launcher;
 
     /// <summary>
     /// Resolved rather than injected. This panel is rendered by <c>MainLayout</c>, so a hard
@@ -177,8 +179,25 @@
     /// register one into a DI resolution failure. Absent, the panel still opens and reads; only
     /// saving is unavailable.
     /// </summary>
-    protected override void OnInitialized() =>
+    protected override void OnInitialized()
+    {
         _http = Services.GetService(typeof(HttpClient)) as HttpClient;
+
+        // Resolved, not injected, for the same reason as the HttpClient above: this panel is
+        // rendered by MainLayout, so a hard @inject would break every existing MainLayout fixture
+        // that does not register the service.
+        _launcher = Services.GetService(typeof(IAgentPersonaLauncher)) as IAgentPersonaLauncher;
+        if (_launcher is not null)
+            _launcher.Requested += HandleRequested;
+    }
+
+    private void HandleRequested(string agentId) => InvokeAsync(() => OpenAsync(agentId));
+
+    public void Dispose()
+    {
+        if (_launcher is not null)
+            _launcher.Requested -= HandleRequested;
+    }
 
     private bool CanSave =>
         !_saving && _http is not null && !string.IsNullOrWhiteSpace(_model?.DisplayName);
