@@ -8925,8 +8925,15 @@ h3.conversation-title.editable:hover {
 
 .linklike:hover { text-decoration: underline; }
 
+/* Wide content scrolls inside its own container so the page body never does. */
+.memory-store-scroller {
+    overflow-x: auto;
+}
+
 .memory-store-table {
     width: 100%;
+    /* Below this the columns collapse into unreadable slivers; the scroller takes over instead. */
+    min-width: 26rem;
     border-collapse: collapse;
 }
 
