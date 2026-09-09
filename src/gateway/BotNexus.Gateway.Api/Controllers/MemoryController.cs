@@ -1,5 +1,6 @@
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.Text;
+using BotNexus.Gateway.Api.Models;
 using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Memory;
 using BotNexus.Memory.Models;
@@ -117,6 +118,218 @@ public sealed class MemoryController(
             logger.LogWarning(ex, "Failed to search memory entries for agent '{AgentId}'.", agentId);
             return StatusCode(500, new { error = "Failed to access memory store." });
         }
+    }
+
+    /// <summary>
+    /// Lists an agent's most recent memory entries, newest first.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a separate route rather than relaxing <see cref="SearchEntries"/> to list when
+    /// its query is blank: that endpoint's "query is required" 400 is pinned by a test, and search
+    /// answers a different question anyway. A query returns what matches; this returns what is
+    /// there, which is what an operator managing memory by hand needs to see.
+    /// </remarks>
+    [HttpGet("{agentId}/entries/recent")]
+    public async Task<IActionResult> ListRecentEntries(
+        string agentId, [FromQuery] int limit = 50, CancellationToken ct = default)
+    {
+        if (Reject(agentId) is { } guard)
+            return guard;
+
+        try
+        {
+            var store = memoryStoreFactory.Create(AgentId.From(agentId));
+            await store.InitializeAsync(ct).ConfigureAwait(false);
+
+            var entries = await store.ListRecentAsync(Math.Clamp(limit, 1, 200), ct).ConfigureAwait(false);
+            return Ok(new { agentId, entries = entries.Select(ToDto).ToList(), count = entries.Count });
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to list memory entries for agent '{AgentId}'.", agentId);
+            return StatusCode(500, new { error = "Failed to access memory store." });
+        }
+    }
+
+    /// <summary>
+    /// Adds a memory note written by the operator.
+    /// </summary>
+    /// <remarks>
+    /// Stamps <see cref="MemoryProvenance.User"/> — a write on this route is a first-party human
+    /// instruction from the agent's owner — and never reads a provenance from the body. See
+    /// <see cref="MemoryEntryWrite"/> for why that asymmetry is the whole security property.
+    /// The content still passes through <see cref="UntrustedContentSanitizer"/> first: stamping the
+    /// row first-party is a statement about who asked for it, not a promise about what it contains.
+    /// </remarks>
+    [HttpPost("{agentId}/entries")]
+    public async Task<IActionResult> AddEntry(string agentId, [FromBody] MemoryEntryWrite request, CancellationToken ct)
+    {
+        if (Reject(agentId) is { } guard)
+            return guard;
+
+        var content = UntrustedContentSanitizer.Sanitize(request?.Content);
+        if (string.IsNullOrWhiteSpace(content))
+            return BadRequest(new { error = "Content is required." });
+
+        if (content.Length > MaxEntryLength)
+            return BadRequest(new { error = $"Content exceeds the {MaxEntryLength} character limit." });
+
+        try
+        {
+            var store = memoryStoreFactory.Create(AgentId.From(agentId));
+            await store.InitializeAsync(ct).ConfigureAwait(false);
+
+            var entry = new MemoryEntry
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                AgentId = agentId,
+                SourceType = ManualSourceType,
+                Content = content,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Provenance = MemoryProvenance.User,
+                MetadataJson = BuildMetadataJson(request?.Category, request?.Tags)
+            };
+
+            var saved = await store.InsertAsync(entry, ct).ConfigureAwait(false);
+            return Ok(ToDto(saved));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to add a memory entry for agent '{AgentId}'.", agentId);
+            return StatusCode(500, new { error = "Failed to write to the memory store." });
+        }
+    }
+
+    /// <summary>
+    /// Replaces the content of one memory note, keeping its id and original creation time.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="IMemoryStore"/> has no update verb, so this deletes and re-inserts under the SAME
+    /// id rather than adding one. That reuses two paths this store already tests, and the FTS index
+    /// follows automatically through the insert/delete triggers — an <c>UpdateAsync</c> bolted on
+    /// here would have to re-derive the embedding and re-sync FTS by hand, which is exactly the kind
+    /// of second, subtly different write path that drifts.
+    /// <para>
+    /// It is not atomic: a crash between the delete and the insert loses the note. The window is
+    /// small and the failure is visible rather than silent, which is the right trade against
+    /// maintaining a parallel write path — but it is a real limitation, not an oversight.
+    /// </para>
+    /// </remarks>
+    [HttpPut("{agentId}/entries/{entryId}")]
+    public async Task<IActionResult> UpdateEntry(
+        string agentId, string entryId, [FromBody] MemoryEntryWrite request, CancellationToken ct)
+    {
+        if (Reject(agentId) is { } guard)
+            return guard;
+
+        var content = UntrustedContentSanitizer.Sanitize(request?.Content);
+        if (string.IsNullOrWhiteSpace(content))
+            return BadRequest(new { error = "Content is required." });
+
+        if (content.Length > MaxEntryLength)
+            return BadRequest(new { error = $"Content exceeds the {MaxEntryLength} character limit." });
+
+        try
+        {
+            var store = memoryStoreFactory.Create(AgentId.From(agentId));
+            await store.InitializeAsync(ct).ConfigureAwait(false);
+
+            var existing = await store.GetByIdAsync(entryId, ct).ConfigureAwait(false);
+            if (existing is null)
+                return NotFound(new { error = $"Memory entry '{entryId}' not found." });
+
+            // Re-stamped as a first-party human write, because that is what just happened to it -
+            // and the embedding is dropped so InsertAsync regenerates it from the new content
+            // rather than leaving a vector that describes the text this note used to hold.
+            var replacement = existing with
+            {
+                Content = content,
+                Provenance = MemoryProvenance.User,
+                SourceType = ManualSourceType,
+                MetadataJson = BuildMetadataJson(request?.Category, request?.Tags) ?? existing.MetadataJson,
+                Embedding = null,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+
+            await store.DeleteAsync(entryId, ct).ConfigureAwait(false);
+            var saved = await store.InsertAsync(replacement, ct).ConfigureAwait(false);
+            return Ok(ToDto(saved));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to update memory entry '{EntryId}' for agent '{AgentId}'.", entryId, agentId);
+            return StatusCode(500, new { error = "Failed to write to the memory store." });
+        }
+    }
+
+    /// <summary>Deletes one memory note.</summary>
+    [HttpDelete("{agentId}/entries/{entryId}")]
+    public async Task<IActionResult> DeleteEntry(string agentId, string entryId, CancellationToken ct)
+    {
+        if (Reject(agentId) is { } guard)
+            return guard;
+
+        try
+        {
+            var store = memoryStoreFactory.Create(AgentId.From(agentId));
+            await store.InitializeAsync(ct).ConfigureAwait(false);
+
+            var existing = await store.GetByIdAsync(entryId, ct).ConfigureAwait(false);
+            if (existing is null)
+                return NotFound(new { error = $"Memory entry '{entryId}' not found." });
+
+            await store.DeleteAsync(entryId, ct).ConfigureAwait(false);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to delete memory entry '{EntryId}' for agent '{AgentId}'.", entryId, agentId);
+            return StatusCode(500, new { error = "Failed to write to the memory store." });
+        }
+    }
+
+    /// <summary>Notes written by hand carry their own source type, so they are filterable apart
+    /// from indexed conversation turns and from what the agent saved itself.</summary>
+    private const string ManualSourceType = "manual";
+
+    /// <summary>A note, not a document. Long enough for a paragraph of business background.</summary>
+    private const int MaxEntryLength = 8000;
+
+    /// <summary>
+    /// The guard the three write verbs share with the reads above: the agent must exist and have
+    /// memory enabled. Returns null when the request may proceed.
+    /// </summary>
+    private IActionResult? Reject(string agentId)
+    {
+        var descriptor = agentRegistry.Get(AgentId.From(agentId));
+        if (descriptor is null)
+            return NotFound(new { error = $"Agent '{agentId}' not found." });
+
+        return descriptor.Memory is not { Enabled: true }
+            ? NotFound(new { error = $"Agent '{agentId}' does not have memory enabled." })
+            : null;
+    }
+
+    private static MemoryEntryDto ToDto(MemoryEntry entry) => new(
+        Id: entry.Id,
+        CreatedAt: entry.CreatedAt,
+        SourceType: entry.SourceType,
+        SessionId: entry.SessionId,
+        ContentPreview: TextTruncation.SafeTruncate(entry.Content, 200, "...")!);
+
+    private static string? BuildMetadataJson(string? category, IReadOnlyList<string>? tags)
+    {
+        var cleanTags = tags?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).ToList();
+        if (string.IsNullOrWhiteSpace(category) && (cleanTags is null || cleanTags.Count == 0))
+            return null;
+
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(category))
+            payload["category"] = category.Trim();
+        if (cleanTags is { Count: > 0 })
+            payload["tags"] = cleanTags;
+
+        return System.Text.Json.JsonSerializer.Serialize(payload);
     }
 
     private async Task<MemoryStoreDto?> GetStatsForAgentAsync(string agentId, CancellationToken ct)
