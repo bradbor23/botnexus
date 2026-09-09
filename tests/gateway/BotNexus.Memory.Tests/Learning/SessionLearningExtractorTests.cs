@@ -1,3 +1,4 @@
+using BotNexus.Domain.Primitives;
 using BotNexus.Memory.Learning;
 using BotNexus.Memory.Models;
 using BotNexus.Memory.Tests.TestInfrastructure;
@@ -41,7 +42,7 @@ public sealed class SessionLearningExtractorTests
         await context.Store.InsertAsync(ConversationRow("c1", 0, "s1"));
 
         var written = await SessionLearningExtractor.ExtractAsync(
-            context.Store, "agent-a", "s1", NullLogger.Instance);
+            context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         written.ShouldBe(1);
 
@@ -61,9 +62,9 @@ public sealed class SessionLearningExtractorTests
         await context.Store.InsertAsync(ConversationRow("c1", 0, "s1"));
 
         var first = await SessionLearningExtractor.ExtractAsync(
-            context.Store, "agent-a", "s1", NullLogger.Instance);
+            context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
         var second = await SessionLearningExtractor.ExtractAsync(
-            context.Store, "agent-a", "s1", NullLogger.Instance);
+            context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         first.ShouldBe(1);
         second.ShouldBe(0);
@@ -82,7 +83,7 @@ public sealed class SessionLearningExtractorTests
             ConversationRow("c1", 0, "s1", user: "hi there", assistant: "Hello! How can I help?"));
 
         var written = await SessionLearningExtractor.ExtractAsync(
-            context.Store, "agent-a", "s1", NullLogger.Instance);
+            context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         written.ShouldBe(0);
     }
@@ -96,7 +97,7 @@ public sealed class SessionLearningExtractorTests
         await context.Store.InsertAsync(
             ConversationRow("c1", 0, "s1", provenance: MemoryProvenance.ExternalUntrusted));
 
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         var learning = (await context.Store.GetBySessionAsync("s1", 50))
             .Single(r => r.SourceType == SessionLearningExtractor.LearningSourceType);
@@ -111,7 +112,7 @@ public sealed class SessionLearningExtractorTests
         await using var context = await MemoryStoreTestContext.CreateAsync();
         await context.Store.InsertAsync(ConversationRow("c1", 0, "s1", userId: "person-a"));
 
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         var learning = (await context.Store.GetBySessionAsync("s1", 50))
             .Single(r => r.SourceType == SessionLearningExtractor.LearningSourceType);
@@ -127,7 +128,7 @@ public sealed class SessionLearningExtractorTests
         await context.Store.InsertAsync(ConversationRow("c1", 0, "s1", userId: "person-a"));
         await context.Store.InsertAsync(ConversationRow("c2", 2, "s1", userId: "person-b"));
 
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         var learning = (await context.Store.GetBySessionAsync("s1", 50))
             .Where(r => r.SourceType == SessionLearningExtractor.LearningSourceType)
@@ -142,7 +143,7 @@ public sealed class SessionLearningExtractorTests
         await using var context = await MemoryStoreTestContext.CreateAsync();
 
         var written = await SessionLearningExtractor.ExtractAsync(
-            context.Store, "agent-a", "no-such-session", NullLogger.Instance);
+            context.Store, AgentId.From("agent-a"), SessionId.From("no-such-session"), NullLogger.Instance);
 
         written.ShouldBe(0);
     }
@@ -156,9 +157,9 @@ public sealed class SessionLearningExtractorTests
         await using var context = await MemoryStoreTestContext.CreateAsync();
         await context.Store.InsertAsync(ConversationRow("c1", 0, "s1"));
 
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
-        await SessionLearningExtractor.ExtractAsync(context.Store, "agent-a", "s1", NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
+        await SessionLearningExtractor.ExtractAsync(context.Store, AgentId.From("agent-a"), SessionId.From("s1"), NullLogger.Instance);
 
         var rows = await context.Store.GetBySessionAsync("s1", 50);
         rows.Count(r => r.SourceType == SessionLearningExtractor.LearningSourceType).ShouldBe(1);

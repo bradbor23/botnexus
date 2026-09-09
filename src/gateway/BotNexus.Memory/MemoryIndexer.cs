@@ -97,7 +97,8 @@ public sealed class MemoryIndexer(
             await IndexSessionCoreAsync(session, AgentId.From(agentId), SessionId.From(sessionId), store, cancellationToken).ConfigureAwait(false);
         }
 
-        await ExtractSessionLearningAsync(agentId, sessionId, cancellationToken).ConfigureAwait(false);
+        await ExtractSessionLearningAsync(AgentId.From(agentId), SessionId.From(sessionId), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -117,11 +118,11 @@ public sealed class MemoryIndexer(
     /// failed session close.
     /// </para>
     /// </remarks>
-    private async Task ExtractSessionLearningAsync(string agentId, string sessionId, CancellationToken cancellationToken)
+    private async Task ExtractSessionLearningAsync(AgentId agentId, SessionId sessionId, CancellationToken cancellationToken)
     {
         try
         {
-            var store = _storeFactory.Create(AgentId.From(agentId));
+            var store = _storeFactory.Create(agentId);
             await store.InitializeAsync(cancellationToken).ConfigureAwait(false);
             await SessionLearningExtractor
                 .ExtractAsync(store, agentId, sessionId, _logger, cancellationToken)

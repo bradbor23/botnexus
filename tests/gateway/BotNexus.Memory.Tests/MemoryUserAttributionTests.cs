@@ -106,18 +106,24 @@ public sealed class MemoryUserAttributionTests
             SqlitePoolCleanup.ClearPoolFor(dbPath);
             if (Directory.Exists(tempDirectory))
             {
-                for (var attempt = 0; attempt < 5; attempt++)
-                {
-                    try
+                // TestAwait.EventuallyAsync rather than a retry loop around Task.Delay: the wait is
+                // for the OS to release the file handle, which is a condition to observe, not a
+                // duration to guess at. Same helper MemoryStoreTestContext.DisposeAsync uses.
+                await TestAwait.EventuallyAsync(
+                    () =>
                     {
-                        Directory.Delete(tempDirectory, true);
-                        break;
-                    }
-                    catch (IOException) when (attempt < 4)
-                    {
-                        await Task.Delay(50);
-                    }
-                }
+                        try
+                        {
+                            Directory.Delete(tempDirectory, recursive: true);
+                            return true;
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
+                    $"temporary memory store directory '{tempDirectory}' to be deletable",
+                    timeout: TimeSpan.FromSeconds(2));
             }
         }
     }

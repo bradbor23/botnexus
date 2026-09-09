@@ -1,3 +1,4 @@
+using BotNexus.Domain.Primitives;
 using BotNexus.Memory.Models;
 using Microsoft.Extensions.Logging;
 
@@ -57,18 +58,22 @@ public static class SessionLearningExtractor
     /// <returns>The number of new learning rows written.</returns>
     public static async Task<int> ExtractAsync(
         IMemoryStore store,
-        string agentId,
-        string sessionId,
+        AgentId agentId,
+        SessionId sessionId,
         ILogger logger,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(logger);
 
-        if (string.IsNullOrWhiteSpace(sessionId))
+        // .Value is unwrapped only here, at the store boundary: IMemoryStore addresses rows by the
+        // raw column values it persists, so the typed identifiers stop at the edge rather than
+        // leaking through the call chain (#3099).
+        var sessionKey = sessionId.Value;
+        if (string.IsNullOrWhiteSpace(sessionKey))
             return 0;
 
-        var entries = await store.GetBySessionAsync(sessionId, MaxEntriesScanned, ct).ConfigureAwait(false);
+        var entries = await store.GetBySessionAsync(sessionKey, MaxEntriesScanned, ct).ConfigureAwait(false);
         if (entries.Count == 0)
             return 0;
 
@@ -107,8 +112,8 @@ public static class SessionLearningExtractor
             var row = new MemoryEntry
             {
                 Id = string.Empty,
-                AgentId = agentId,
-                SessionId = sessionId,
+                AgentId = agentId.Value,
+                SessionId = sessionKey,
                 TurnIndex = item.SourceTurnIndex,
                 SourceType = LearningSourceType,
                 Content = item.Content,
@@ -120,7 +125,7 @@ public static class SessionLearningExtractor
                 IsArchived = false,
                 // Least-trusted contributor wins; see the class remarks.
                 Provenance = item.Provenance,
-                OriginSessionId = sessionId,
+                OriginSessionId = sessionKey,
                 UserId = userId,
             };
 
@@ -134,8 +139,8 @@ public static class SessionLearningExtractor
             logger.LogInformation(
                 "Session learning extraction wrote {Written} learning row(s) for agent '{AgentId}' session '{SessionId}'.",
                 written,
-                agentId,
-                sessionId);
+                agentId.Value,
+                sessionKey);
         }
 
         return written;
