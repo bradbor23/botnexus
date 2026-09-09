@@ -29,7 +29,7 @@
             aria-label="@($"Edit {DisplayName}'s persona")"
             title="Edit this agent's persona"
             @onclick="() => OnPersonaRequested.InvokeAsync()">
-        <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Class="agent-panel-avatar" />
+        <AgentAvatar AgentId="@AgentId" DisplayName="@Agent?.DisplayName" Emoji="@Agent?.Emoji" Hue="@Agent?.AvatarHue" Activity="@Activity" Class="agent-panel-avatar" />
         <span class="agent-panel-meta" title="@AgentId">
             <span class="agent-panel-title" data-testid="agent-identity-name">@DisplayName</span>
             @if (!string.IsNullOrWhiteSpace(Description))
@@ -47,6 +47,12 @@
             </svg>
         </span>
     </button>
+    @* OUTSIDE the button, deliberately. The button carries an explicit aria-label, and an
+       aria-label REPLACES the element's inner text for assistive technology - a state span nested
+       inside it would render, pass a "the label exists" test, and never be announced. The chip
+       shows no state text of its own, so without this the dot is information available only to
+       people who can see colour. *@
+    <span class="sr-only" data-testid="agent-identity-activity">@Activity.Label</span>
 </div>
 
 @code {
@@ -63,6 +69,12 @@
     public EventCallback OnPersonaRequested { get; set; }
 
     private AgentState? Agent => Store.GetAgent(AgentId);
+
+    private AgentActivitySpec Activity => AgentActivityModel.For(
+        Agent?.IsConnected ?? false,
+        Agent?.IsStreaming ?? false,
+        Agent?.ActiveToolCalls.Count ?? 0,
+        Agent?.IsReadOnly ?? false);
 
     private string DisplayName =>
         PortalText.SingleLine(Agent?.DisplayName) is { Length: > 0 } name ? name : PortalText.SingleLine(AgentId);

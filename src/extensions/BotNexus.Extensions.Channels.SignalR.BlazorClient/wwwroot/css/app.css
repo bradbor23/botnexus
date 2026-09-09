@@ -8865,3 +8865,31 @@ h3.conversation-title.editable:hover {
     white-space: nowrap;
     margin-top: 0.1rem;
 }
+
+/* Agent activity on the avatar: identity and state in one piece of real estate, so the working
+   agent stands out among sixteen instead of being found by reading sixteen labels. Idle draws
+   nothing on purpose - a dot on every agent distinguishes none of them. */
+.agent-avatar { position: relative; }
+.agent-avatar-activity {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    /* Rings it against whatever sits behind, so the dot stays legible on both themes and on the
+       avatar's own generated hue. */
+    box-shadow: 0 0 0 2px var(--panel-bg);
+}
+.agent-avatar-activity.activity-working { background: var(--accent); }
+.agent-avatar-activity.activity-tools { background: var(--accent); animation: agent-activity-pulse 1.6s ease-in-out infinite; }
+.agent-avatar-activity.activity-offline { background: var(--color-ink-faint); }
+
+@keyframes agent-activity-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.agent-card-status.status-working,
+.agent-card-status.status-tools { color: var(--accent); }
+.agent-card-status.status-offline { color: var(--color-ink-faint); }

@@ -307,4 +307,74 @@ public sealed class AgentIdentityTests : IDisposable
 
         Assert.Equal("Trigger Agent", cut.Find("[data-testid='agent-identity-name']").TextContent.Trim());
     }
+
+    // ── activity indicator (Interface Review P2) ──────────────────────────────
+
+    private void SeedWithActivity(string agentId, bool connected, bool streaming)
+    {
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = agentId,
+            DisplayName = "Trigger Agent",
+            IsConnected = connected,
+            IsStreaming = streaming
+        });
+        _store.SelectView(agentId, string.Empty, SelectionSource.UserClick);
+    }
+
+    [Fact]
+    public void A_working_agent_shows_an_activity_dot_on_its_avatar()
+    {
+        SeedWithActivity("busy-agent", connected: true, streaming: true);
+
+        var cut = RenderFor("busy-agent");
+
+        Assert.NotNull(cut.Find("[data-testid='agent-avatar-activity']"));
+    }
+
+    [Fact]
+    public void An_idle_agent_shows_no_dot()
+    {
+        // Sixteen dots distinguish nothing; the point is that the working one stands out.
+        SeedWithActivity("calm-agent", connected: true, streaming: false);
+
+        var cut = RenderFor("calm-agent");
+
+        Assert.Empty(cut.FindAll("[data-testid='agent-avatar-activity']"));
+    }
+
+    [Fact]
+    public void The_state_is_announced_in_text_because_colour_is_not_an_announcement()
+    {
+        SeedWithActivity("busy-agent", connected: true, streaming: true);
+
+        var cut = RenderFor("busy-agent");
+
+        Assert.Equal("Working", cut.Find("[data-testid='agent-identity-activity']").TextContent.Trim());
+    }
+
+    [Fact]
+    public void The_state_label_sits_outside_the_trigger_button()
+    {
+        // The button carries an explicit aria-label, and aria-label REPLACES an element's inner
+        // text for assistive technology. A label nested inside would render, satisfy a naive
+        // "the label exists" assertion, and never be announced.
+        SeedWithActivity("busy-agent", connected: true, streaming: true);
+
+        var cut = RenderFor("busy-agent");
+
+        var trigger = cut.Find("[data-testid='agent-persona-trigger']");
+        Assert.Empty(trigger.QuerySelectorAll("[data-testid='agent-identity-activity']"));
+        Assert.NotNull(cut.Find("[data-testid='agent-identity-activity']"));
+    }
+
+    [Fact]
+    public void A_disconnected_agent_reads_as_offline_rather_than_whatever_it_was_doing()
+    {
+        SeedWithActivity("gone-agent", connected: false, streaming: true);
+
+        var cut = RenderFor("gone-agent");
+
+        Assert.Equal("Offline", cut.Find("[data-testid='agent-identity-activity']").TextContent.Trim());
+    }
 }
