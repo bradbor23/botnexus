@@ -86,13 +86,7 @@ public sealed class MemoryController(
 
             var result = await store.SearchWithReportAsync(query, limit, ct: ct).ConfigureAwait(false);
 
-            var dtos = result.Entries.Select(scored => new MemoryEntryDto(
-                Id: scored.Entry.Id,
-                CreatedAt: scored.Entry.CreatedAt,
-                SourceType: scored.Entry.SourceType,
-                SessionId: scored.Entry.SessionId,
-                ContentPreview: TextTruncation.SafeTruncate(scored.Entry.Content, 200, "...")!
-            )).ToList();
+            var dtos = result.Entries.Select(scored => ToDto(scored.Entry)).ToList();
 
             // #3244: the scan report travels with the results, so "no older match" and "older rows
             // were never scored" are distinguishable in the UI instead of looking identical.
@@ -315,7 +309,12 @@ public sealed class MemoryController(
         CreatedAt: entry.CreatedAt,
         SourceType: entry.SourceType,
         SessionId: entry.SessionId,
-        ContentPreview: TextTruncation.SafeTruncate(entry.Content, 200, "...")!);
+        ContentPreview: TextTruncation.SafeTruncate(entry.Content, 200, "...")!,
+        Provenance: entry.NormalizedProvenance,
+        TrustTier: entry.TrustTier.ToString(),
+        IsFirstParty: entry.IsFirstParty,
+        UserId: entry.UserId,
+        ExpiresAt: entry.ExpiresAt);
 
     private static MemoryEntryDetailDto ToDetailDto(MemoryEntry entry) => new(
         Id: entry.Id,
@@ -385,12 +384,28 @@ internal sealed record MemoryStoreDto(
     int? VectorScanCeiling,
     bool ExceedsVectorScanCeiling);
 
+/// <remarks>
+/// Carries the same trust trio as <see cref="MemoryEntryDetailDto"/>, for the reason that record
+/// already gives: someone pruning memory needs to see which notes are quarantined or untrusted,
+/// because that is usually why they are looking. The split between the two stays exactly where it
+/// was - this one truncates to a preview and must never be loaded into an editor - so widening it
+/// with trust does not blur the distinction, which is about CONTENT rather than about metadata.
+/// <para>
+/// <c>ExpiresAt</c> travels too: an entry past its expiry is invisible to search but still
+/// deletable by id, and an operator looking at a list has no other way to tell.
+/// </para>
+/// </remarks>
 internal sealed record MemoryEntryDto(
     string Id,
     DateTimeOffset CreatedAt,
     string SourceType,
     string? SessionId,
-    string ContentPreview);
+    string ContentPreview,
+    string Provenance,
+    string TrustTier,
+    bool IsFirstParty,
+    string? UserId,
+    DateTimeOffset? ExpiresAt);
 
 /// <summary>
 /// One entry as the management surface needs it, carrying the WHOLE note.
