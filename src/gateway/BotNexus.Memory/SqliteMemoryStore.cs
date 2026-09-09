@@ -324,6 +324,37 @@ public sealed class SqliteMemoryStore(
         }, ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<MemoryEntry>> ListRecentAsync(int limit = 50, CancellationToken ct = default)
+    {
+        await InitializeAsync(ct).ConfigureAwait(false);
+
+        var cappedLimit = Math.Clamp(limit, 1, 500);
+        return await SqliteRetryHelper.ExecuteWithRetryAsync(async token =>
+        {
+            await using var connection = CreateConnection();
+            await connection.OpenAsync(token).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, agent_id, session_id, turn_index, source_type, content, metadata_json,
+                       embedding, created_at, updated_at, expires_at, is_archived,
+                       provenance, origin_conversation_id, origin_session_id
+                FROM memories
+                WHERE is_archived = 0
+                ORDER BY created_at DESC
+                LIMIT $limit
+                """;
+            command.Parameters.AddWithValue("$limit", cappedLimit);
+
+            await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+            List<MemoryEntry> results = [];
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+                results.Add(ReadMemory(reader));
+
+            return results as IReadOnlyList<MemoryEntry>;
+        }, ct).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<MemoryEntry>> SearchAsync(string query, int topK = 10, MemorySearchFilter? filter = null, CancellationToken ct = default)
     {
         var scored = await SearchScoredAsync(query, topK, filter, ct).ConfigureAwait(false);
