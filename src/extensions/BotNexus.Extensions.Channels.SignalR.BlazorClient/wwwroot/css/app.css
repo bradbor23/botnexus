@@ -5210,6 +5210,111 @@ h3.conversation-title.editable:hover {
 }
 
 /* ── Portal loading gate ─────────────────────────────────────────────── */
+/* ── cold-start skeleton ─────────────────────────────────────────────────────
+   The chrome paints in well under a second; the body then waited on the hub with
+   nothing in it (measured: still empty 11.3s after reload). These blocks stand in
+   for the shape that is coming, so the arrival settles into a layout the eye has
+   already accepted rather than replacing a void.
+
+   One colour, one radius, no borders: a skeleton that looks like real UI competes
+   with the real UI a moment later. It should read as absence, not as content. */
+.portal-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    width: 100%;
+    min-height: 200px;
+}
+
+.sk-block {
+    display: block;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    /* Sized by the modifiers below; a bare block is a full-width line. */
+    height: 0.75rem;
+    width: 100%;
+    animation: portal-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.sk-w-xs { width: 12%; }
+.sk-w-sm { width: 22%; }
+.sk-w-md { width: 45%; }
+.sk-w-lg { width: 70%; }
+
+.sk-h-line { height: 0.75rem; }
+.sk-h-control { height: 2rem; }
+.sk-h-tile { height: 4.5rem; flex: 1; }
+.sk-h-composer { height: 3.25rem; }
+
+.portal-skeleton-summary {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.portal-skeleton-starter,
+.portal-skeleton-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.portal-skeleton-toolbar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.portal-skeleton-table,
+.portal-skeleton-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.portal-skeleton-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.portal-skeleton-message {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    /* An explicit width, not max-width. `align-self: flex-end` below opts the own-side rows out of
+       the column's default stretch, and a shrink-to-fit box whose only children are sized in % OF
+       IT resolves to zero width - visible as nothing at all. */
+    width: 70%;
+}
+
+/* The alternation is what makes it read as a conversation rather than a list. */
+.portal-skeleton-message.is-own {
+    align-self: flex-end;
+    align-items: flex-end;
+}
+
+/* Staggered so the surface reads as one loading thing rather than a row of
+   synchronised lights. */
+.portal-skeleton-row:nth-child(even) .sk-block,
+.portal-skeleton-message:nth-child(even) .sk-block {
+    animation-delay: 0.2s;
+}
+
+@keyframes portal-skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+
+/* A pulsing placeholder is motion the user did not ask for, and this one covers the
+   whole viewport. Honour the preference: the shapes still communicate the layout. */
+@media (prefers-reduced-motion: reduce) {
+    .sk-block {
+        animation: none;
+        opacity: 0.7;
+    }
+}
+
 .portal-loading {
     display: flex;
     align-items: center;
