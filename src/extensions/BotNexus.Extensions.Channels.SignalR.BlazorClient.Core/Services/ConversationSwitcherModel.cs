@@ -15,12 +15,18 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 /// <param name="Conversation">The conversation this row opens.</param>
 /// <param name="GroupLabel">The label of the group this row renders under.</param>
 /// <param name="IsOtherAgent">True when this row belongs to an agent other than the active one.</param>
+/// <param name="Snippet">
+/// The matching message, for a row found by CONTENT rather than by title. Null for title matches,
+/// where the title is already the evidence. Appended last and optional so every existing
+/// construction keeps compiling.
+/// </param>
 public sealed record ConversationSwitcherRow(
     string AgentId,
     string AgentDisplayName,
     ConversationState Conversation,
     string GroupLabel,
-    bool IsOtherAgent);
+    bool IsOtherAgent,
+    string? Snippet = null);
 
 /// <summary>A labelled group of switcher rows, in render order. Never empty.</summary>
 /// <param name="Label">The group heading.</param>
@@ -81,6 +87,17 @@ public static class ConversationSwitcherModel
     public const string OtherAgentsLabel = "Other agents";
 
     /// <summary>
+    /// Heading for conversations matched by what was SAID in them rather than by their title.
+    /// </summary>
+    /// <remarks>
+    /// A separate group rather than rows mixed into the title matches, because the two answer
+    /// different questions: a title match is "this is called that", a content match is "someone
+    /// said that in here". Mixing them would leave the reader unable to tell why a row appeared,
+    /// which is exactly the information the snippet exists to supply.
+    /// </remarks>
+    public const string FoundInMessagesLabel = "Found in messages";
+
+    /// <summary>
     /// Build the switcher view for the active agent, extending to every other agent once the user
     /// has typed something.
     /// </summary>
@@ -104,7 +121,8 @@ public static class ConversationSwitcherModel
         IEnumerable<AgentState> agents,
         SelectionSource selectionSource,
         IReadOnlySet<string>? cronConversationIds,
-        string? query)
+        string? query,
+        IReadOnlyDictionary<string, string>? contentMatches = null)
     {
         ArgumentNullException.ThrowIfNull(agents);
 
@@ -120,10 +138,63 @@ public static class ConversationSwitcherModel
         if (otherAgents is not null)
             groups.Add(otherAgents);
 
+        var foundInMessages = BuildContentGroup(roster, groups, contentMatches);
+        if (foundInMessages is not null)
+            groups.Add(foundInMessages);
+
         if (groups.Count == 0)
             return ConversationSwitcherView.Empty;
 
         return new ConversationSwitcherView(groups, groups.SelectMany(g => g.Rows).ToList());
+    }
+
+    /// <summary>
+    /// Conversations matched by what was said in them, minus any the title match already listed.
+    /// </summary>
+    /// <remarks>
+    /// Built HERE rather than appended by the component, so content rows land in the same
+    /// <c>Flattened</c> list the keyboard walks. A group bolted on at render time would be visible
+    /// and unreachable by arrow key, which is worse than not showing it.
+    /// <para>
+    /// Rows already listed by title are skipped: the same conversation appearing twice makes the
+    /// list longer without making it more useful, and the title match is the stronger signal.
+    /// </para>
+    /// </remarks>
+    private static ConversationSwitcherGroup? BuildContentGroup(
+        IReadOnlyList<AgentState> roster,
+        IReadOnlyList<ConversationSwitcherGroup> existing,
+        IReadOnlyDictionary<string, string>? contentMatches)
+    {
+        if (contentMatches is null || contentMatches.Count == 0)
+            return null;
+
+        var alreadyShown = existing
+            .SelectMany(g => g.Rows)
+            .Select(r => r.Conversation.ConversationId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var rows = new List<ConversationSwitcherRow>();
+        foreach (var agent in roster)
+        {
+            foreach (var conversation in agent.Conversations.Values.ToArray())
+            {
+                if (conversation.ConversationId is not { Length: > 0 } id)
+                    continue;
+
+                if (alreadyShown.Contains(id) || !contentMatches.TryGetValue(id, out var snippet))
+                    continue;
+
+                rows.Add(new ConversationSwitcherRow(
+                    agent.AgentId,
+                    agent.DisplayName,
+                    conversation,
+                    FoundInMessagesLabel,
+                    IsOtherAgent: false,
+                    Snippet: snippet));
+            }
+        }
+
+        return rows.Count == 0 ? null : new ConversationSwitcherGroup(FoundInMessagesLabel, rows);
     }
 
     /// <summary>

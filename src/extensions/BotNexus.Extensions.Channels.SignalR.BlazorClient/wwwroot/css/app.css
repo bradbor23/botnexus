@@ -8852,3 +8852,16 @@ h3.conversation-title.editable:hover {
     justify-content: flex-end;
     margin-top: 0.4rem;
 }
+
+/* Content-match snippet in the conversation switcher: the evidence for why a row whose title does
+   not contain the query is nevertheless in the list. */
+.conversation-switcher-snippet {
+    display: block;
+    width: 100%;
+    font-size: 0.72rem;
+    color: var(--color-ink-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 0.1rem;
+}
