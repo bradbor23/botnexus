@@ -8629,7 +8629,11 @@ h3.conversation-title.editable:hover {
 .agent-persona-panel {
     background: var(--panel-bg);
     border-left: 1px solid var(--border);
-    width: min(430px, 100vw);
+    /* 430px left the twelve-swatch colour row 7px short of fitting, stranding one swatch on a
+       second line: the row needs 404px (Auto 44 + 12x24 + 12x6 gaps) and had 397. At 460 it fits
+       with room to spare, and the text fields get the width back too. The row keeps flex-wrap, so
+       a viewport narrower than the drawer still wraps rather than overflowing. */
+    width: min(460px, 100vw);
     height: 100%;
     display: flex;
     flex-direction: column;
