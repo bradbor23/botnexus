@@ -47,18 +47,12 @@ internal static class CopilotMessagesRequestBuilder
         }
 
         Dictionary<string, object?>? systemBlock = null;
-        string? volatileContext = null;
-
         if (context.SystemPrompt is { } systemPrompt)
         {
-            var (stableText, volatileText) =
-                SystemPromptPartition.Split(systemPrompt.SanitizeSurrogates());
-            volatileContext = volatileText;
-
             systemBlock = new Dictionary<string, object?>
             {
                 ["type"] = "text",
-                ["text"] = stableText
+                ["text"] = systemPrompt.SanitizeSurrogates()
             };
 
             if (remainingBreakpoints > 0)
@@ -77,19 +71,6 @@ internal static class CopilotMessagesRequestBuilder
                 model.BaseUrl);
         }
 
-        // After the breakpoint, never before it: the volatile half is rebuilt per request, so
-        // inside a cached prefix it would guarantee a miss on the following one.
-        Dictionary<string, object?>? volatileSystemBlock = null;
-        if (!SystemPromptPartition.TryAppendToBlockConversation(messages, volatileContext) &&
-            !string.IsNullOrWhiteSpace(volatileContext))
-        {
-            volatileSystemBlock = new Dictionary<string, object?>
-            {
-                ["type"] = "text",
-                ["text"] = volatileContext
-            };
-        }
-
         var body = new JsonObject
         {
             ["model"] = model.Id,
@@ -99,11 +80,7 @@ internal static class CopilotMessagesRequestBuilder
         };
 
         if (systemBlock is not null)
-        {
-            body["system"] = volatileSystemBlock is null
-                ? ToNode(new object[] { systemBlock })
-                : ToNode(new object[] { systemBlock, volatileSystemBlock });
-        }
+            body["system"] = ToNode(new object[] { systemBlock });
 
         if (toolBlocks is not null)
             body["tools"] = ToNode(toolBlocks);
