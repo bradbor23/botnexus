@@ -447,6 +447,55 @@ public sealed class ConversationSwitcherModelTests
             .Snippet.ShouldBe("the gateway restart lost its pid file");
     }
 
+    // ── content matches must obey the same visibility rules as every other group ──
+    // The search endpoint walks all of session history. It knows nothing about archived rows,
+    // runtime-internal threads or read-only agents, so this model is the only place those can be
+    // excluded. Against a real instance the endpoint returned 31 distinct ARCHIVED conversations;
+    // for the query "memory", 16 of 27 hits were archived.
+
+    [Fact]
+    public void An_archived_conversation_matched_by_content_stays_hidden()
+    {
+        var view = BuildWithContent(
+            [Conv("c-1", "Tuesday standup", status: "Archived")],
+            "gateway",
+            new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
+    }
+
+    [Fact]
+    public void A_runtime_internal_conversation_matched_by_content_stays_hidden()
+    {
+        // The sidebar hides these outright. Search must not be the one surface that reveals them.
+        var view = BuildWithContent(
+            [Conv("c-1", "Bookkeeping", visibility: ConversationVisibility.InternalHidden)],
+            "gateway",
+            new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
+    }
+
+    [Fact]
+    public void A_read_only_agents_conversation_matched_by_content_stays_hidden()
+    {
+        // BuildOtherAgentsGroup already excludes observer agents because the sidebar's own agent
+        // dropdown does. Offering one of their conversations here would contradict that.
+        var view = ConversationSwitcherModel.Build(
+            "a-1",
+            [
+                Agent("a-1", "Alpha", false, Conv("c-1", "Tuesday standup")),
+                Agent("a-2", "Observer", true, Conv("c-2", "Watched thread")),
+            ],
+            SelectionSource.UserClick,
+            null,
+            "gateway",
+            new Dictionary<string, string> { ["c-2"] = "the gateway restart lost its pid file" });
+
+        view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
+        view.Flattened.ShouldNotContain(r => r.Conversation.ConversationId == "c-2");
+    }
+
     [Fact]
     public void A_conversation_already_matched_by_title_is_not_listed_twice()
     {
