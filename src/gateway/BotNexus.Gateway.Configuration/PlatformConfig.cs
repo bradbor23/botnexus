@@ -1023,6 +1023,32 @@ public sealed class LocationConfig
     [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "location", Order = 6)]
     public bool VerifyTls { get; set; } = true;
 
+    /// <summary>
+    /// Agent ids allowed to see this location. Absent means every agent, which is the default and
+    /// the behaviour that shipped; <c>*</c> means the same explicitly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An <b>absent</b> list and an <b>empty</b> one mean different things, deliberately. Absent is
+    /// "unrestricted" - the upgrade default, so adding this field changes nothing. An empty list is
+    /// a list that grants nobody, which is how a location is taken out of circulation without
+    /// deleting its configuration.
+    /// </para>
+    /// <para>
+    /// This governs who may SEE the location. No credential is exposed either way - that boundary
+    /// is held by the projection in <c>ListLocationsTool</c> and enforced by an architecture fence.
+    /// What this stops is an agent that needs one internal API also enumerating the Proxmox host,
+    /// the NAS and the database, endpoints and usernames included.
+    /// </para>
+    /// </remarks>
+    [Display(
+        Name = "Agents",
+        Description = "Agent ids allowed to see this location. Leave empty for every agent. Use * for every agent explicitly.",
+        GroupName = "Location",
+        Order = 20)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "location", Order = 20)]
+    public List<string>? Agents { get; set; }
+
     /// <summary>Human-readable description.</summary>
     [Display(
         Name = "Description",
