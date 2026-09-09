@@ -55,6 +55,61 @@ public sealed class AgentIdentityTests : IDisposable
         Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
     }
 
+    // ── The chip's one line: role beats prose ──────────────────────────────
+
+    [Fact]
+    public void Identity_prefers_what_the_agent_owns_over_its_description()
+    {
+        // The chip is a single ellipsis-truncated line. Responsibility is defined as one short
+        // line naming what the agent owns, so it survives that truncation; a description is prose
+        // and gets cut mid-sentence.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "role-agent",
+            DisplayName = "Role Agent",
+            Responsibility = "Owns the billing pipeline",
+            Description = "Reconciles invoices nightly and escalates mismatches to the on-call.",
+            IsConnected = true
+        });
+        _store.SelectView("role-agent", string.Empty, SelectionSource.UserClick);
+
+        var cut = RenderFor("role-agent");
+
+        Assert.Equal("Owns the billing pipeline", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
+    [Fact]
+    public void Identity_still_shows_the_description_when_no_role_is_set()
+    {
+        // Most existing agents have only a description. Preferring the new field must not blank
+        // the line for every one of them.
+        Seed("desc-only", "Desc Only", "Handles widget triage");
+
+        var cut = RenderFor("desc-only");
+
+        Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
+    [Fact]
+    public void A_whitespace_only_role_falls_through_to_the_description()
+    {
+        // A field cleared to spaces rather than to null is a real state - the persona form writes
+        // it - and treating it as "set" would blank the chip's only sublabel.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "blank-role",
+            DisplayName = "Blank Role",
+            Responsibility = "   ",
+            Description = "Handles widget triage",
+            IsConnected = true
+        });
+        _store.SelectView("blank-role", string.Empty, SelectionSource.UserClick);
+
+        var cut = RenderFor("blank-role");
+
+        Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
     [Fact]
     public void Identity_keeps_agent_id_in_dom_for_hover_reveal()
     {

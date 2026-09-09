@@ -5204,6 +5204,23 @@ h3.conversation-title.editable:hover {
     flex-shrink: 0;
 }
 
+/* The role line: one line naming what this agent owns, sitting between the name and the prose.
+   Deliberately NOT clamped to two lines like the description below it - a role that needs two
+   lines is not a role line, and letting it wrap would blur the distinction the two fields exist
+   to draw. It truncates instead, and the full text is one click away in the persona drawer.
+
+   Weightier and less muted than the description, because on a roster it is the line being
+   scanned; the description is the line read once you have stopped scanning. */
+.agent-card-responsibility {
+    font-size: var(--text-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .agent-card-description {
     font-size: var(--text-label);
     color: var(--text-muted);

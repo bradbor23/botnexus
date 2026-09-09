@@ -111,4 +111,54 @@ public sealed class AgentPersonaPromptTests
         prompt.ShouldContain("You are Gantry Manager.");
         prompt.ShouldContain("You own: keeps the gantry healthy");
     }
+
+    // ── precedence against an agent's own authored prompt ─────────────────────
+    // The plan that introduced the persona asked for this to be DECIDED rather than left to fall
+    // out of section ordering. It is decided: the persona goes first, the hand-written prompt goes
+    // last, so on disagreement the prompt file wins.
+
+    [Fact]
+    public void The_persona_comes_before_the_agents_own_authored_prompt()
+    {
+        // Ordering IS the precedence rule here, so it is worth pinning rather than trusting two
+        // integer constants to stay on the right side of each other.
+        var prompt = SystemPromptBuilder.Build(new SystemPromptParams
+        {
+            WorkspaceDir = Path.Combine(Path.GetTempPath(), "persona-precedence-workspace"),
+            ToolNames = ["read"],
+            PromptMode = PromptMode.Full,
+            Persona = new AgentPersona("Gantry Manager", "keeps the gantry healthy", null, null),
+            ExtraSystemPrompt = "AUTHORED-PROMPT-MARKER: you are actually a release auditor.",
+            Runtime = new RuntimeInfo { AgentId = "test-agent", Channel = "signalr" },
+        });
+
+        var personaAt = prompt.IndexOf("Gantry Manager", StringComparison.Ordinal);
+        var authoredAt = prompt.IndexOf("AUTHORED-PROMPT-MARKER", StringComparison.Ordinal);
+
+        personaAt.ShouldBeGreaterThanOrEqualTo(0);
+        authoredAt.ShouldBeGreaterThanOrEqualTo(0);
+        personaAt.ShouldBeLessThan(
+            authoredAt,
+            "the persona is three fields an operator changes in seconds; an authored prompt is "
+            + "something someone sat down and wrote, so it comes later and wins on disagreement");
+    }
+
+    [Fact]
+    public void An_authored_prompt_survives_alongside_a_persona_rather_than_being_replaced_by_it()
+    {
+        // The failure this guards against is the persona quietly displacing a prompt file, which is
+        // exactly what the plan warned about.
+        var prompt = SystemPromptBuilder.Build(new SystemPromptParams
+        {
+            WorkspaceDir = Path.Combine(Path.GetTempPath(), "persona-precedence-workspace"),
+            ToolNames = ["read"],
+            PromptMode = PromptMode.Full,
+            Persona = new AgentPersona("Gantry Manager", "keeps the gantry healthy", null, null),
+            ExtraSystemPrompt = "AUTHORED-PROMPT-MARKER",
+            Runtime = new RuntimeInfo { AgentId = "test-agent", Channel = "signalr" },
+        });
+
+        prompt.ShouldContain("AUTHORED-PROMPT-MARKER");
+        prompt.ShouldContain("Gantry Manager");
+    }
 }

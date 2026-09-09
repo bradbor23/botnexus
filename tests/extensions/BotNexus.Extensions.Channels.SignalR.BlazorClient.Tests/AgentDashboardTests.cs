@@ -241,6 +241,103 @@ public sealed class AgentDashboardTests : IDisposable
         Assert.DoesNotContain("SubAgent", cut.Markup);
     }
 
+    // ── The role line (Personalisation Plan 1.1) ───────────────────────────
+    //
+    // Responsibility reached the descriptor, the API, the hub contract and the system prompt, and
+    // then rendered on exactly one surface: the form that edits it. The plan's stated goal was a
+    // roster somebody could scan by role, so the field existing was never the deliverable.
+
+    [Fact]
+    public void Shows_what_an_agent_owns_on_its_card()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", Responsibility = "Owns the billing pipeline" }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        Assert.Equal(
+            "Owns the billing pipeline",
+            cut.Find("[data-testid=agent-card-responsibility]").TextContent.Trim());
+    }
+
+    [Fact]
+    public void The_role_line_is_readable_rather_than_swallowed_by_the_identity_buttons_label()
+    {
+        // The identity button carries an explicit aria-label, and an aria-label REPLACES an
+        // element's inner text for assistive technology. A role line nested inside that button
+        // would render, pass a "the text is in the markup" assertion, and be announced to nobody.
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", Responsibility = "Owns the billing pipeline" }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        var trigger = cut.Find("[data-testid=agent-card-persona-trigger]");
+        Assert.Empty(trigger.QuerySelectorAll("[data-testid=agent-card-responsibility]"));
+    }
+
+    [Fact]
+    public void An_agent_can_carry_both_a_role_and_a_description()
+    {
+        // They answer different questions, so one must not quietly replace the other.
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new()
+            {
+                AgentId = "a1",
+                DisplayName = "Alpha",
+                Responsibility = "Owns the billing pipeline",
+                Description = "Reconciles invoices nightly and escalates mismatches."
+            }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        Assert.Contains("Owns the billing pipeline", cut.Find("[data-testid=agent-card-responsibility]").TextContent);
+        Assert.Contains("Reconciles invoices nightly", cut.Find(".agent-card-description").TextContent);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void The_role_line_is_absent_rather_than_empty_when_no_role_is_set(string? responsibility)
+    {
+        // An empty <p> is still a box with margin - a whitespace-only value would leave a gap on
+        // the card that looks like a rendering fault.
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", Responsibility = responsibility }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        Assert.Empty(cut.FindAll("[data-testid=agent-card-responsibility]"));
+    }
+
+    [Fact]
+    public void A_role_line_cannot_grow_the_card_with_embedded_newlines()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["a1"] = new() { AgentId = "a1", DisplayName = "Alpha", Responsibility = "Owns\nthe\tbilling" }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+
+        var cut = _ctx.Render<AgentDashboard>();
+
+        var text = cut.Find("[data-testid=agent-card-responsibility]").TextContent;
+        Assert.DoesNotContain("\n", text);
+        Assert.DoesNotContain("\t", text);
+    }
+
     [Fact]
     public void Description_hidden_when_null_or_empty()
     {

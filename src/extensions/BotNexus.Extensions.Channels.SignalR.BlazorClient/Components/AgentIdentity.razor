@@ -79,7 +79,24 @@
     private string DisplayName =>
         PortalText.SingleLine(Agent?.DisplayName) is { Length: > 0 } name ? name : PortalText.SingleLine(AgentId);
 
-    private string Description => PortalText.SingleLine(Agent?.Description);
+    /// <summary>
+    /// The chip's one subtitle line.
+    ///
+    /// <remarks>
+    /// Responsibility wins over Description when both are set. The chip has room for exactly one
+    /// ellipsis-truncated line, and Responsibility is the field defined as "one short line naming
+    /// what it owns" - it survives that truncation intact, where prose gets cut mid-sentence.
+    /// <para>
+    /// The class name stays <c>.agent-panel-description</c> whichever field feeds it: it is the
+    /// documented hover-reveal contract (the id replaces it on hover) and is asserted by component
+    /// and E2E tests. Renaming it to match the source field would break that for no gain.
+    /// </para>
+    /// </remarks>
+    /// </summary>
+    private string Description =>
+        PortalText.SingleLine(Agent?.Responsibility) is { Length: > 0 } responsibility
+            ? responsibility
+            : PortalText.SingleLine(Agent?.Description);
 
     protected override void OnInitialized() => Store.OnChanged += HandleStoreChanged;
 
