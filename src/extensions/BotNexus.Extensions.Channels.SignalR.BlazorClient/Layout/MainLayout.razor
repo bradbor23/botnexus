@@ -21,11 +21,14 @@
     @* Top bar with burger + logo *@
     <header class="app-banner">
         <div class="banner-header">
-            <button class="burger-btn" @onclick="ToggleSidebar" aria-label="Toggle menu" data-testid="sidebar-toggle-btn">
-                <span class="burger-line"></span>
-                <span class="burger-line"></span>
-                <span class="burger-line"></span>
-            </button>
+            @if (ShowsConversations)
+            {
+                <button class="burger-btn" @onclick="ToggleSidebar" aria-label="Toggle menu" data-testid="sidebar-toggle-btn">
+                    <span class="burger-line"></span>
+                    <span class="burger-line"></span>
+                    <span class="burger-line"></span>
+                </button>
+            }
             <a href="" class="banner-home-link" data-testid="banner-home-link" title="Home" @onclick="CloseSidebar">
                 <span class="banner-logo">&#x1F916;</span>
                 <span class="banner-title">BotNexus</span>
@@ -147,6 +150,8 @@
             <div class="sidebar-overlay" @onclick="CloseSidebar"></div>
         }
 
+        @if (ShowsConversations)
+        {
         <aside class="main-sidebar @(_sidebarOpen ? "sidebar-open" : "sidebar-closed")">
             @* Navigation moved to the toolbar under the banner; the sidebar is the conversation
                list now. The hamburger toggles THIS, which is why its label says conversations. *@
@@ -183,6 +188,7 @@
                 }
             </div>
         </aside>
+        }
 
         @* Update confirmation overlay *@
         @if (_showUpdateConfirm)
@@ -207,8 +213,11 @@
            panels already use, rather than a second drag implementation. The JS resolves the left
            pane as this element's previousElementSibling, which is the sidebar. Desktop only: on
            mobile the sidebar is a fixed overlay, so there is no boundary to drag. *@
-        <div class="panel-splitter sidebar-splitter" role="separator" aria-orientation="vertical"
-             aria-label="Resize sidebar" title="Drag to resize"></div>
+        @if (ShowsConversations)
+        {
+            <div class="panel-splitter sidebar-splitter" role="separator" aria-orientation="vertical"
+                 aria-label="Resize sidebar" title="Drag to resize"></div>
+        }
         <main class="main-canvas">
             <GlobalErrorBoundary>
             @Body
@@ -1100,6 +1109,44 @@
     }
 
 
+    /// <summary>
+    /// Whether this route is one where a list of conversations is part of the task.
+    /// </summary>
+    /// <remarks>
+    /// The sidebar is the conversation list and nothing else since navigation moved to the toolbar,
+    /// yet it was rendered on every route - 240px of chat furniture on Activity, Agents,
+    /// Configuration, Skills and Plugins, which is a quarter of the window on a table that is
+    /// already horizontally dense.
+    /// <para>
+    /// An ALLOW-list, not a deny-list. A deny-list silently regains the old behaviour every time
+    /// someone adds a page: the default should be "this page does not get chat furniture", and a
+    /// page that genuinely wants the conversation list can say so here.
+    /// </para>
+    /// </remarks>
+    private bool ShowsConversations => IsConversationRoute(Nav.ToBaseRelativePath(Nav.Uri));
+
+    /// <summary>Pure route test, so it can be exercised without a NavigationManager.</summary>
+    /// <param name="relativePath">The base-relative path, with or without a trailing slash.</param>
+    /// <returns>True when the conversation sidebar belongs on this route.</returns>
+    internal static bool IsConversationRoute(string? relativePath)
+    {
+        var path = (relativePath ?? string.Empty).TrimEnd('/');
+
+        // The query string is not part of the route decision: /activity?agent=x is still Activity.
+        var queryStart = path.IndexOf('?', StringComparison.Ordinal);
+        if (queryStart >= 0)
+            path = path[..queryStart];
+
+        // Root is the landing page, where picking up a conversation IS the task.
+        if (path.Length == 0)
+            return true;
+
+        return path.Equals("chat", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("chat/", StringComparison.OrdinalIgnoreCase)
+            || path.Equals("agent", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("agent/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
         var relative = Nav.ToBaseRelativePath(e.Location).TrimEnd('/');
@@ -1110,7 +1157,14 @@
                 await Interaction.RefreshAgentsAsync();
                 StateHasChanged();
             });
+
+            return;
         }
+
+        // Every OTHER navigation still needs a render: whether the sidebar belongs on the page is
+        // now a function of the route, and without this it would keep whatever shape the previous
+        // page left it in.
+        _ = InvokeAsync(StateHasChanged);
     }
 
     private string NavClass(string page)
