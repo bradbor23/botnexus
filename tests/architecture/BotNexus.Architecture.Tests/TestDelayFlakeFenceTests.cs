@@ -15,8 +15,12 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     private const string BaselineFileName = "TestDelayFlakeBaseline.baseline";
     // #3625 ratchet: CrossWorldFederationControllerTests' single finite wait (a 25ms Task.Delay
     // poll loop) was replaced with an awaited signal, so its baseline entry was removed entirely.
-    private const int ExpectedBaselineEntryCount = 109;
-    private const int ExpectedBaselineViolationCount = 148;
+    // Ratcheted again: DefaultAgentRegistryTests' two 20ms sleeps were the visible half of a real
+    // race in InMemoryActivityBroadcaster - SubscribeAsync did not register the subscriber until
+    // first enumeration, so the sleeps were waiting for something that had not been asked to
+    // happen. Fixing the broadcaster removed the need for both, and the entry with them.
+    private const int ExpectedBaselineEntryCount = 108;
+    private const int ExpectedBaselineViolationCount = 146;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.
