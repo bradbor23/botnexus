@@ -176,7 +176,19 @@ public static class ConversationSwitcherModel
         var rows = new List<ConversationSwitcherRow>();
         foreach (var agent in roster)
         {
-            foreach (var conversation in agent.Conversations.Values.ToArray())
+            // Read-only agents are excluded here for the same reason BuildOtherAgentsGroup excludes
+            // them: the sidebar's own agent dropdown lists only !IsReadOnly agents, so offering one
+            // of their conversations as a destination contradicts the rest of the portal.
+            if (agent.IsReadOnly)
+                continue;
+
+            // Reachable(), not agent.Conversations.Values. The search endpoint walks all of session
+            // history and knows nothing about archived rows or runtime-internal threads, so this is
+            // the ONLY place those can be excluded - and without it, content search surfaces
+            // conversations every other group in this model deliberately hides. Measured against a
+            // real instance, the endpoint returned 31 distinct archived conversations, and for the
+            // query "memory" 16 of 27 hits were archived.
+            foreach (var conversation in Reachable(agent))
             {
                 if (conversation.ConversationId is not { Length: > 0 } id)
                     continue;
