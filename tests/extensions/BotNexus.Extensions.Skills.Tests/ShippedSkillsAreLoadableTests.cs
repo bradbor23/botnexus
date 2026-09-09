@@ -105,6 +105,50 @@ public sealed class ShippedSkillsAreLoadableTests
     }
 
     [Fact]
+    public void Every_install_script_is_committed_executable()
+    {
+        // A shell script with a shebang that is not executable fails with "Permission denied" the
+        // first time an operator runs it the obvious way. It slipped through because this repo
+        // sets core.fileMode=false - the checkout lives on a volume that cannot hold the bit - so
+        // `chmod +x` is a NO-OP as far as git is concerned and the file commits as 100644. The
+        // mode has to be set in the index directly (`git update-index --chmod=+x`), which is not
+        // something anyone does by habit.
+        //
+        // Reads the mode out of git rather than off disk, because on this checkout disk cannot
+        // answer: every file reports the same permissions whatever git records.
+        var modes = Git("ls-files -s -- scripts/install-*.sh")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Split('\t'))
+            .Where(parts => parts.Length == 2)
+            .Select(parts => (Mode: parts[0].Split(' ')[0], Path: parts[1].Trim()))
+            .ToList();
+
+        modes.ShouldNotBeEmpty("no install scripts found - the glob or the directory has moved");
+
+        var notExecutable = modes.Where(m => m.Mode != "100755").Select(m => m.Path).ToList();
+        notExecutable.ShouldBeEmpty(
+            $"committed non-executable, so running them directly fails: {string.Join(", ", notExecutable)}");
+    }
+
+    /// <summary>Runs a git command in the repository and returns stdout.</summary>
+    private static string Git(string arguments)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = arguments,
+            WorkingDirectory = RepoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        })!;
+
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return output;
+    }
+
+    [Fact]
     public void A_skills_description_says_when_to_use_it_not_just_what_it_is()
     {
         // The description is the only thing a model sees when deciding whether to load a skill.
