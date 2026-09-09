@@ -140,9 +140,10 @@ scripts/gateway-restart.sh
 ```
 
 Substitute your own home for `~/.botnexus` if `BOTNEXUS_HOME` is set — see
-[Home directory](#home-directory). The unattended sync script — `scripts/botnexus-sync.sh`, which
-drives a host-specific two-instance setup — does the same publish-and-replace; the commands above
-are the manual equivalent for a local edit-and-check loop.
+[Home directory](#home-directory). `scripts/botnexus-sync.sh` performs the same publish-and-replace
+inside a two-instance sync, but nothing in the repo installs or schedules it — it is a worked
+example of the sequence, not something running on your machine. On a normal checkout the commands
+above are the whole story.
 
 Two things make a skipped or partial publish hard to spot:
 
