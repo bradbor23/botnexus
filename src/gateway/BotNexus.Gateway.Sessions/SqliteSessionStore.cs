@@ -1385,7 +1385,7 @@ public sealed class SqliteSessionStore : SessionStoreBase, IConversationCostRead
     /// person means by "the conversation where we discussed X" is what was said, not what a tool
     /// printed, and letting tool spew rank against prose buries the answer.
     /// </remarks>
-    public async Task<IReadOnlyList<ConversationSearchHit>> SearchHistoryAsync(
+    public override async Task<IReadOnlyList<ConversationSearchHit>> SearchHistoryAsync(
         string query, int limit = 25, CancellationToken cancellationToken = default)
     {
         var match = BuildHistoryMatchExpression(query);

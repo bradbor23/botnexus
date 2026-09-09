@@ -1,5 +1,6 @@
 using BotNexus.Domain.Primitives;
 using BotNexus.Gateway.Abstractions.Models;
+using BotNexus.Gateway.Abstractions.Sessions;
 using BotNexus.Gateway.Sessions;
 using BotNexus.Testing;
 using Microsoft.Data.Sqlite;
@@ -120,6 +121,27 @@ public sealed class SqliteSessionStoreContentSearchTests : IDisposable
         hits.ShouldNotBeEmpty();
         hits[0].ConversationId.ShouldNotBeNullOrWhiteSpace(
             "a hit nobody can navigate to is not an answer");
+    }
+
+    [Fact]
+    public async Task Is_reachable_through_ISessionStore_not_only_the_concrete_type()
+    {
+        // THE test in this file. Every other one here calls the concrete SqliteSessionStore, and
+        // they all passed while the feature returned nothing in production.
+        //
+        // A class's interface map is fixed where the interface is added - SessionStoreBase. With
+        // only a default interface method to bind to, ISessionStore.SearchHistoryAsync bound to
+        // that empty default there, and SqliteSessionStore declaring a matching public method did
+        // not re-map it; the method was merely new. So the concrete type found 99 rows and the
+        // interface found none - and ConversationsController holds the interface.
+        var conversations = CreateConversationStore();
+        ISessionStore store = CreateSessionStore(conversations);
+        await SeedAsync((SqliteSessionStore)store, "s-1", User("the gateway restart lost its pid file"));
+
+        var hits = await store.SearchHistoryAsync("pid", 10, CancellationToken.None);
+
+        hits.ShouldNotBeEmpty(
+            "callers hold ISessionStore; a method the interface cannot dispatch to is dead code");
     }
 
     // ─── the backfill, which is where this quietly fails ─────────────────────
