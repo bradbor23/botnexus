@@ -8768,3 +8768,87 @@ h3.conversation-title.editable:hover {
     color: var(--color-ink-faint);
     margin-left: auto;
 }
+
+/* ── Persona drawer: tabs and memory list ──────────────────────── */
+.agent-persona-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0 1rem;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+.agent-persona-tab {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--color-ink-faint);
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.6rem;
+    cursor: pointer;
+}
+.agent-persona-tab.selected {
+    color: inherit;
+    border-bottom-color: var(--accent);
+}
+.agent-persona-empty {
+    color: var(--color-ink-faint);
+    font-size: 0.85rem;
+    margin: 0.9rem 0;
+}
+.agent-persona-add {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+}
+.agent-persona-add .agent-persona-textarea { flex: 1 1 auto; }
+.agent-persona-memory-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.agent-persona-memory-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.6rem 0.7rem;
+}
+.agent-persona-memory-text {
+    margin: 0 0 0.4rem;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.agent-persona-memory-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--color-ink-faint);
+}
+.agent-persona-memory-spacer { flex: 1 1 auto; }
+.agent-persona-memory-trust {
+    color: var(--color-danger, var(--accent));
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 0 0.3rem;
+}
+.agent-persona-memory-btn {
+    background: none;
+    border: 0;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    padding: 0.1rem 0.2rem;
+}
+.agent-persona-memory-btn.danger { color: var(--color-danger, var(--accent)); }
+.agent-persona-memory-actions {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+    margin-top: 0.4rem;
+}

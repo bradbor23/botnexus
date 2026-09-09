@@ -63,7 +63,18 @@
                 </button>
             </div>
 
+            <div class="agent-persona-tabs" role="tablist">
+                <button type="button" role="tab" class="agent-persona-tab @(_tab == PersonaTab ? "selected" : "")"
+                        aria-selected="@(_tab == PersonaTab)" data-testid="agent-persona-tab-persona"
+                        @onclick="() => SetTab(PersonaTab)">Persona</button>
+                <button type="button" role="tab" class="agent-persona-tab @(_tab == MemoryTab ? "selected" : "")"
+                        aria-selected="@(_tab == MemoryTab)" data-testid="agent-persona-tab-memory"
+                        @onclick="ShowMemoryAsync">Memory</button>
+            </div>
+
             <div class="agent-persona-body">
+            @if (_tab == PersonaTab)
+            {
                 <label for="agent-persona-name">Name</label>
                 <input id="agent-persona-name"
                        class="agent-persona-input"
@@ -134,6 +145,102 @@
                 {
                     <p class="agent-persona-error" role="alert" data-testid="agent-persona-error">@_error</p>
                 }
+            }
+            else
+            {
+                @* Memory edits apply immediately - there is no batching here and no Save button for
+                   them. Persona is a form you fill in and submit; memory is a list you act on, and
+                   pretending otherwise would leave a half-edited list behind a Cancel. *@
+                <p class="agent-persona-hint">Notes this agent carries into every future conversation.</p>
+
+                @if (_memoryUnavailable)
+                {
+                    <p class="agent-persona-empty" data-testid="agent-persona-memory-unavailable">
+                        Memory is not enabled for this agent.
+                    </p>
+                }
+                else if (_memoryLoading)
+                {
+                    <p class="agent-persona-empty" data-testid="agent-persona-memory-loading">Loading...</p>
+                }
+                else
+                {
+                    <div class="agent-persona-add">
+                        <textarea class="agent-persona-textarea"
+                                  data-testid="agent-persona-memory-new"
+                                  rows="2"
+                                  placeholder="Something to remember..."
+                                  @bind="_newNote"
+                                  @bind:event="oninput"></textarea>
+                        <button type="button" class="toolbar-btn primary"
+                                data-testid="agent-persona-memory-add"
+                                disabled="@(string.IsNullOrWhiteSpace(_newNote) || _busy)"
+                                @onclick="AddNoteAsync">Add</button>
+                    </div>
+
+                    @if (_memoryError is not null)
+                    {
+                        <p class="agent-persona-error" role="alert" data-testid="agent-persona-memory-error">@_memoryError</p>
+                    }
+
+                    @if (_memory.Count == 0)
+                    {
+                        <p class="agent-persona-empty" data-testid="agent-persona-memory-empty">
+                            Nothing remembered yet.
+                        </p>
+                    }
+                    else
+                    {
+                        <ul class="agent-persona-memory-list">
+                            @foreach (var note in _memory)
+                            {
+                                <li class="agent-persona-memory-item" data-testid="agent-persona-memory-item">
+                                    @if (_editingId == note.Id)
+                                    {
+                                        <textarea class="agent-persona-textarea"
+                                                  data-testid="agent-persona-memory-edit"
+                                                  rows="3"
+                                                  @bind="_editDraft"
+                                                  @bind:event="oninput"></textarea>
+                                        <div class="agent-persona-memory-actions">
+                                            <button type="button" class="toolbar-btn"
+                                                    data-testid="agent-persona-memory-edit-cancel"
+                                                    @onclick="CancelEdit">Cancel</button>
+                                            <button type="button" class="toolbar-btn primary"
+                                                    data-testid="agent-persona-memory-edit-save"
+                                                    disabled="@(string.IsNullOrWhiteSpace(_editDraft) || _busy)"
+                                                    @onclick="() => SaveEditAsync(note.Id)">Save</button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <p class="agent-persona-memory-text">@note.Content</p>
+                                        <div class="agent-persona-memory-meta">
+                                            @* Surfaced because it is usually WHY someone is looking:
+                                               a note the agent must not treat as its own knowledge. *@
+                                            @if (!note.IsFirstParty)
+                                            {
+                                                <span class="agent-persona-memory-trust"
+                                                      data-testid="agent-persona-memory-trust"
+                                                      title="Not treated as this agent's own knowledge.">@note.TrustTier</span>
+                                            }
+                                            <span class="agent-persona-memory-source">@note.SourceType</span>
+                                            <span class="agent-persona-memory-spacer"></span>
+                                            <button type="button" class="agent-persona-memory-btn"
+                                                    data-testid="agent-persona-memory-edit-btn"
+                                                    @onclick="() => BeginEdit(note)">Edit</button>
+                                            <button type="button" class="agent-persona-memory-btn danger"
+                                                    data-testid="agent-persona-memory-delete-btn"
+                                                    disabled="@_busy"
+                                                    @onclick="() => DeleteNoteAsync(note.Id)">Delete</button>
+                                        </div>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                }
+            }
             </div>
 
             <div class="agent-persona-footer">
@@ -141,15 +248,25 @@
                    data-testid="agent-persona-deep-link"
                    href="@($"agents/{_agentId}")">All settings</a>
                 <span class="agent-persona-footer-spacer"></span>
-                <button type="button"
-                        class="toolbar-btn"
-                        data-testid="agent-persona-cancel"
-                        @onclick="Close">Cancel</button>
-                <button type="button"
-                        class="toolbar-btn primary"
-                        data-testid="agent-persona-save"
-                        disabled="@(!CanSave)"
-                        @onclick="SaveAsync">@(_saving ? "Saving..." : "Save")</button>
+                @if (_tab == PersonaTab)
+                {
+                    <button type="button"
+                            class="toolbar-btn"
+                            data-testid="agent-persona-cancel"
+                            @onclick="Close">Cancel</button>
+                    <button type="button"
+                            class="toolbar-btn primary"
+                            data-testid="agent-persona-save"
+                            disabled="@(!CanSave)"
+                            @onclick="SaveAsync">@(_saving ? "Saving..." : "Save")</button>
+                }
+                else
+                {
+                    <button type="button"
+                            class="toolbar-btn"
+                            data-testid="agent-persona-done"
+                            @onclick="Close">Done</button>
+                }
             </div>
         </div>
     </div>
@@ -172,6 +289,18 @@
     private ElementReference _overlay;
     private HttpClient? _http;
     private IAgentPersonaLauncher? _launcher;
+
+    private const string PersonaTab = "persona";
+    private const string MemoryTab = "memory";
+    private string _tab = PersonaTab;
+    private bool _memoryLoading;
+    private bool _memoryUnavailable;
+    private bool _busy;
+    private string? _memoryError;
+    private string? _newNote;
+    private string? _editingId;
+    private string? _editDraft;
+    private List<MemoryNote> _memory = [];
 
     /// <summary>
     /// Resolved rather than injected. This panel is rendered by <c>MainLayout</c>, so a hard
@@ -221,6 +350,12 @@
             Description = agent?.Description,
             Boundaries = agent?.Boundaries
         };
+        _tab = PersonaTab;
+        _memory = [];
+        _memoryError = null;
+        _memoryUnavailable = false;
+        _newNote = null;
+        _editingId = null;
         _open = true;
         _focusPending = true;
         StateHasChanged();
@@ -245,6 +380,135 @@
     {
         // Intentionally empty - see remarks.
     }
+
+    private void SetTab(string tab) => _tab = tab;
+
+    private async Task ShowMemoryAsync()
+    {
+        _tab = MemoryTab;
+        // Loaded on first view rather than on open: most visits are a persona tweak, and fetching
+        // an agent's whole memory to render a form nobody asked for is work for nothing.
+        if (_memory.Count == 0 && !_memoryUnavailable)
+            await LoadMemoryAsync();
+    }
+
+    private async Task LoadMemoryAsync()
+    {
+        if (_http is null)
+            return;
+
+        _memoryLoading = true;
+        _memoryError = null;
+        StateHasChanged();
+
+        try
+        {
+            var response = await _http.GetAsync(MemoryUrl("entries/recent?limit=100"));
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // The route 404s both for an unknown agent and for one without memory enabled.
+                // Either way there is nothing to manage, and an error would overstate it.
+                _memoryUnavailable = true;
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _memoryError = $"Could not load memory ({(int)response.StatusCode}).";
+                return;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync<MemoryListResponse>();
+            _memory = payload?.Entries?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _memoryError = $"Could not load memory: {ex.Message}";
+        }
+        finally
+        {
+            _memoryLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddNoteAsync()
+    {
+        if (_http is null || string.IsNullOrWhiteSpace(_newNote))
+            return;
+
+        await MutateAsync(
+            () => _http.PostAsJsonAsync(MemoryUrl("entries"), new { content = _newNote }),
+            onSuccess: () => _newNote = null);
+    }
+
+    private void BeginEdit(MemoryNote note)
+    {
+        _editingId = note.Id;
+        _editDraft = note.Content;
+        _memoryError = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editDraft = null;
+    }
+
+    private async Task SaveEditAsync(string entryId)
+    {
+        if (_http is null || string.IsNullOrWhiteSpace(_editDraft))
+            return;
+
+        await MutateAsync(
+            () => _http.PutAsJsonAsync(MemoryUrl($"entries/{Uri.EscapeDataString(entryId)}"), new { content = _editDraft }),
+            onSuccess: CancelEdit);
+    }
+
+    private async Task DeleteNoteAsync(string entryId)
+    {
+        if (_http is null)
+            return;
+
+        await MutateAsync(() => _http.DeleteAsync(MemoryUrl($"entries/{Uri.EscapeDataString(entryId)}")));
+    }
+
+    /// <summary>
+    /// One write, then a reload. Re-reading rather than patching the local list keeps the panel
+    /// honest: the server owns ids, timestamps and the derived trust tier, and a locally-patched
+    /// row would show a note as first-party that the store had just classified otherwise.
+    /// </summary>
+    private async Task MutateAsync(Func<Task<HttpResponseMessage>> write, Action? onSuccess = null)
+    {
+        _busy = true;
+        _memoryError = null;
+        StateHasChanged();
+
+        try
+        {
+            var response = await write();
+            if (!response.IsSuccessStatusCode)
+            {
+                _memoryError = $"That did not save ({(int)response.StatusCode}).";
+                return;
+            }
+
+            onSuccess?.Invoke();
+            await LoadMemoryAsync();
+        }
+        catch (Exception ex)
+        {
+            _memoryError = $"That did not save: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private string MemoryUrl(string suffix) =>
+        $"{Nav.BaseUri.TrimEnd('/')}/api/memory/{Uri.EscapeDataString(_agentId)}/{suffix}";
 
     private void SetHue(int? hue)
     {
@@ -340,6 +604,20 @@
     /// <summary>Whitespace is not a value: an all-spaces boundary line is an empty one.</summary>
     private static string? Blank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record MemoryListResponse(IReadOnlyList<MemoryNote>? Entries);
+
+    /// <summary>
+    /// Mirrors the management projection, which carries the WHOLE note - not the 200-character
+    /// preview the search projection returns. Editing a preview and saving it back would silently
+    /// truncate the note, which is why the two projections are separate server-side.
+    /// </summary>
+    private sealed record MemoryNote(
+        string Id,
+        string Content,
+        string SourceType,
+        string TrustTier,
+        bool IsFirstParty);
 
     private sealed class PersonaEdit
     {
