@@ -43,6 +43,12 @@
     {
         <section class="cron-page-card" data-testid="memory-stores">
             <h3>Stores</h3>
+            @* The table has five columns and a minimum width; below roughly 440px it is wider than
+               the page. Without its own scroll container it was CLIPPED rather than scrollable - on
+               a 375px viewport the size column was cut mid-value and "last indexed" was unreachable
+               entirely, with no horizontal scroll to get to it. The page body must never scroll
+               sideways, so the overflow belongs here. *@
+            <div class="memory-store-scroller">
             <table class="memory-store-table">
                 <thead>
                     <tr>
@@ -82,6 +88,7 @@
                     }
                 </tbody>
             </table>
+            </div>
         </section>
 
         @if (_selected is not null)
