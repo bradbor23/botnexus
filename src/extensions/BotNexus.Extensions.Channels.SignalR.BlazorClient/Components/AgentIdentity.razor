@@ -73,7 +73,7 @@
     private AgentActivitySpec Activity => AgentActivityModel.For(
         Agent?.IsConnected ?? false,
         Agent?.IsStreaming ?? false,
-        Agent?.ActiveToolCalls.Count ?? 0,
+        Agent?.ActiveToolCallCount ?? 0,
         Agent?.IsReadOnly ?? false);
 
     private string DisplayName =>

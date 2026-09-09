@@ -311,8 +311,24 @@ public sealed class AgentState
     /// <summary>All conversations for this agent keyed by conversation ID.</summary>
     public Dictionary<string, ConversationState> Conversations { get; } = new();
 
-    /// <summary>In-progress tool calls keyed by tool-call ID.</summary>
-    public Dictionary<string, ActiveToolCall> ActiveToolCalls { get; } = new();
+    /// <summary>
+    /// How many tool calls this agent has in flight, across all of its conversations.
+    /// </summary>
+    /// <remarks>
+    /// DERIVED, and it has to be. This was a <c>Dictionary&lt;string, ActiveToolCall&gt;</c> that
+    /// nothing ever wrote to - the only non-read reference in the whole repo was a
+    /// <c>Clear()</c> on session reset. Tool calls are tracked per CONVERSATION, on
+    /// <see cref="ConversationStreamState.ActiveToolCalls"/>, because that is the scope a run
+    /// belongs to.
+    /// <para>
+    /// The two callers read this to decide whether an agent is "using tools", so an
+    /// always-empty dictionary meant that state was unreachable in the UI while
+    /// <c>AgentActivityModel.For</c>'s own unit tests passed against a hand-supplied count.
+    /// A property that computes the answer cannot go stale the way a field nobody writes does.
+    /// </para>
+    /// </remarks>
+    public int ActiveToolCallCount =>
+        Conversations.Values.Sum(c => c.StreamState.ActiveToolCalls.Count);
 
     /// <summary>Sub-agents spawned by this agent keyed by sub-agent ID.</summary>
     public Dictionary<string, SubAgentInfo> SubAgents { get; } = new();

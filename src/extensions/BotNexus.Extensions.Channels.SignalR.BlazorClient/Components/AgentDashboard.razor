@@ -33,7 +33,7 @@
                             title="Edit this agent's persona"
                             @onclick="() => OpenPersona(agent.AgentId)"
                             @onclick:stopPropagation="true">
-                        @{ var activity = AgentActivityModel.For(agent.IsConnected, agent.IsStreaming, agent.ActiveToolCalls.Count, agent.IsReadOnly); }
+                        @{ var activity = AgentActivityModel.For(agent.IsConnected, agent.IsStreaming, agent.ActiveToolCallCount, agent.IsReadOnly); }
                         <AgentAvatar AgentId="@agent.AgentId" DisplayName="@agent.DisplayName" Emoji="@agent.Emoji" Hue="@agent.AvatarHue" Activity="@activity" Class="agent-card-emoji avatar-lg" />
                         <span class="agent-card-identity">
                             <span class="agent-card-name">@agent.DisplayName</span>

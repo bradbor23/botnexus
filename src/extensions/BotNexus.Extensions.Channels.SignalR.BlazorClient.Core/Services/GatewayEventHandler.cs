@@ -533,7 +533,8 @@ public sealed class GatewayEventHandler : IGatewayEventHandler, IDisposable
             _store.ClearSteeringQueue(conv.ConversationId);
         }
 
-        agent.ActiveToolCalls.Clear();
+        // Tool calls live on each conversation's stream state, and the loop above already
+        // Reset() them there; the agent has no separate copy to clear.
         agent.SubAgents.Clear();
         agent.UnreadCount = 0;
 
