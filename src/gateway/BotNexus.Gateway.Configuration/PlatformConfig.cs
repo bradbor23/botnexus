@@ -456,6 +456,17 @@ public sealed class GatewaySettingsConfig
         Order = 0)]
     [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "memory-embeddings", Order = 0)]
     public MemoryEmbeddingsConfig? MemoryEmbeddings { get; set; }
+    /// <summary>
+    /// Gateway-level memory settings, currently the shared stores several agents can share
+    /// knowledge through (#3232). Absent means no shared stores, which is the default.
+    /// </summary>
+    [Display(
+        Name = "Shared memory",
+        Description = "Named memory stores that more than one agent can read or write, each with its own access list.",
+        GroupName = "Memory",
+        Order = 1)]
+    [ConfigField(Group = "memory", Order = 1)]
+    public GatewayMemoryConfig? Memory { get; set; }
     /// <summary>CORS settings for browser-based clients.</summary>
     [Display(
         Name = "CORS",
@@ -1041,6 +1052,92 @@ public sealed class LocationConfig
 }
 
 /// <summary>Configuration for granting communication with another world.</summary>
+/// <summary>
+/// Gateway-level memory settings. Agent-level memory lives on the agent descriptor; this is the
+/// part that is shared BETWEEN agents and so has nowhere else to live.
+/// </summary>
+public sealed class GatewayMemoryConfig
+{
+    /// <summary>
+    /// Named stores more than one agent can use. Empty or absent means every agent's memory is
+    /// private to it, which is the default and stays the default.
+    /// </summary>
+    [Display(
+        Name = "Shared stores",
+        Description = "Named memory stores shared between agents. Each store names who may read it and who may write it.",
+        GroupName = "Memory",
+        Order = 0)]
+    [ConfigField(Group = "memory", Order = 0)]
+    public List<SharedMemoryStoreEntry>? SharedStores { get; set; }
+}
+
+/// <summary>
+/// One shared memory store, as an operator writes it.
+///
+/// <remarks>
+/// Mirrors <c>BotNexus.Memory.SharedMemoryStoreConfig</c>, which the registry consumes.
+/// Deliberately a separate type rather than a reference: BotNexus.Gateway.Configuration does not
+/// depend on BotNexus.Memory, and the config surface is a contract with the operator that should
+/// not move every time an internal record does. A fence test pins the two together.
+/// </remarks>
+/// </summary>
+public sealed class SharedMemoryStoreEntry
+{
+    /// <summary>Unique store name, e.g. "platform-knowledge".</summary>
+    [Display(
+        Name = "Name",
+        Description = "Unique name for this store, e.g. platform-knowledge.",
+        GroupName = "Shared memory store",
+        Order = 0)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "shared-memory-store", Order = 0)]
+    public string? Name { get; set; }
+
+    /// <summary>What this store is for, shown wherever the store is listed.</summary>
+    [Display(
+        Name = "Description",
+        Description = "What this store is for. Shown wherever the store is listed.",
+        GroupName = "Shared memory store",
+        Order = 1)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "shared-memory-store", Order = 1)]
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// Agents allowed to READ this store. "*" means every agent.
+    /// </summary>
+    [Display(
+        Name = "Readers",
+        Description = "Agent ids allowed to read this store. Use * for every agent. Empty means nobody.",
+        GroupName = "Shared memory store",
+        Order = 2)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "shared-memory-store", Order = 2)]
+    public List<string>? Readers { get; set; }
+
+    /// <summary>
+    /// Agents allowed to WRITE to this store. "*" means every agent.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Readers"/> on purpose, and normally much shorter. A store many
+    /// agents read and one curates is the shape this is for; making everything writable by
+    /// everyone turns shared memory into a channel for one agent to mislead the rest.
+    /// </remarks>
+    [Display(
+        Name = "Writers",
+        Description = "Agent ids allowed to write to this store. Use * for every agent. Empty means nobody.",
+        GroupName = "Shared memory store",
+        Order = 3)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "shared-memory-store", Order = 3)]
+    public List<string>? Writers { get; set; }
+
+    /// <summary>Days to keep entries. Null keeps them indefinitely.</summary>
+    [Display(
+        Name = "Retention days",
+        Description = "How many days to keep entries in this store. Leave empty to keep them indefinitely.",
+        GroupName = "Shared memory store",
+        Order = 4)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "shared-memory-store", Order = 4)]
+    public int? RetentionDays { get; set; }
+}
+
 public sealed class CrossWorldPermissionConfig
 {
     /// <summary>Identifier of the target world this permission applies to.</summary>

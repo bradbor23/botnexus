@@ -534,6 +534,53 @@ html, body, #app {
     color: var(--text-primary);
 }
 
+/* ── Shared memory stores ───────────────────────────────── */
+
+.memory-shared-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.memory-shared-store {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+}
+
+.memory-shared-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.memory-shared-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.memory-shared-description {
+    margin: 0;
+    max-width: 70ch;
+    font-size: var(--text-label);
+    color: var(--text-muted);
+}
+
+.memory-shared-access {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.15rem;
+}
+
 /* ── Run timeline (Interface Review P2) ─────────────────────────── */
 
 /* A run's steps, derived from the transcript. The layout is a three-column row - marker, body,
