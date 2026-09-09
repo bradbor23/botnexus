@@ -33,7 +33,7 @@
                             title="Edit this agent's persona"
                             @onclick="() => OpenPersona(agent.AgentId)"
                             @onclick:stopPropagation="true">
-                        @{ var activity = AgentActivityModel.For(agent.IsConnected, agent.IsStreaming, agent.ActiveToolCalls.Count, agent.IsReadOnly); }
+                        @{ var activity = AgentActivityModel.For(agent.IsConnected, agent.IsStreaming, agent.ActiveToolCallCount, agent.IsReadOnly); }
                         <AgentAvatar AgentId="@agent.AgentId" DisplayName="@agent.DisplayName" Emoji="@agent.Emoji" Hue="@agent.AvatarHue" Activity="@activity" Class="agent-card-emoji avatar-lg" />
                         <span class="agent-card-identity">
                             <span class="agent-card-name">@agent.DisplayName</span>
@@ -52,6 +52,21 @@
                     @if (agent.UnreadCount > 0)
                     {
                         <span class="agent-card-unread-badge">@agent.UnreadCount</span>
+                    }
+                    @* OUTSIDE the identity button, deliberately - the button carries an explicit
+                       aria-label, and an aria-label REPLACES inner text for assistive technology,
+                       so a role line nested inside it would render, look right, and never be
+                       announced (the same trap the chip's activity label hit).
+
+                       Responsibility ABOVE Description because they answer different questions and
+                       the roster's question is the first one: Responsibility is one line naming
+                       what this agent owns, Description is prose about it. Scanning a wall of
+                       cards for "who handles billing" reads the role lines and nothing else. *@
+                    @if (!string.IsNullOrWhiteSpace(agent.Responsibility))
+                    {
+                        <p class="agent-card-responsibility" data-testid="agent-card-responsibility">
+                            @PortalText.SingleLine(agent.Responsibility)
+                        </p>
                     }
                     @if (!string.IsNullOrEmpty(agent.Description))
                     {

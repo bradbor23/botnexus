@@ -121,6 +121,25 @@ public static class SystemPromptBuilder
         // First. Everything after it - tools, safety, workspace - is guidance about HOW to work;
         // this is the statement of what this agent is for, and it should frame the rest rather
         // than arrive after it.
+        /// <summary>
+        /// The operator-authored persona, first in the prompt.
+        /// </summary>
+        /// <remarks>
+        /// PRECEDENCE, stated explicitly because the plan that introduced the persona asked for it
+        /// to be decided rather than left to fall out of ordering.
+        /// <para>
+        /// The persona is FIRST and the agent's own authored prompt is LAST — workspace prompt
+        /// files land at <see cref="StableProjectContext"/> (180) and
+        /// <see cref="ExtraSystemPrompt"/> (220). So where the two disagree, the hand-written
+        /// prompt file is the later and more specific instruction and it wins.
+        /// </para>
+        /// <para>
+        /// That is the right way round. The persona is three fields an operator can change in
+        /// seconds from a drawer; a prompt file is something someone sat down and wrote. A quick
+        /// edit must not silently override it. The persona states who the agent is; the prompt file
+        /// refines how it works, and may contradict the persona deliberately.
+        /// </para>
+        /// </remarks>
         public const int Persona = 5;
         public const int Tooling = 10;
         public const int Safety = 40;

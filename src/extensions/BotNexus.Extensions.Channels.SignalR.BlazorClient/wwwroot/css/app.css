@@ -534,6 +534,246 @@ html, body, #app {
     color: var(--text-primary);
 }
 
+/* ── Boot skeleton ─────────────────────────────────── */
+
+/* Paints the shell's real geometry while WASM boots: same banner height, same 240px sidebar,
+   same composer at the bottom. It is rendered from static markup in index.html, so it is on
+   screen before the framework is fetched - which is the entire point, since the wait being
+   covered IS the framework fetch.
+
+   Dimensions are taken from the live rules, not eyeballed: --density-bar-h for the banner and
+   240px for the sidebar are the same values .banner-header and .main-sidebar use, so the real
+   UI lands on top of the placeholder rather than shifting it. */
+.boot-skeleton {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg-primary);
+}
+
+.boot-skeleton-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--density-gap);
+    flex-shrink: 0;
+    padding: var(--density-row-pad-y) var(--density-row-pad-x);
+    min-height: var(--density-bar-h);
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-surface) 100%);
+    overflow: hidden;
+}
+
+.boot-skeleton-spacer {
+    flex: 1 1 auto;
+}
+
+/* The nav row, which the real shell has on EVERY route. Leaving it out made the skeleton's
+   content area start where the toolbar would be, so first render pushed everything down by a
+   row - a jump introduced by the loading state itself. */
+.boot-skeleton-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    flex-shrink: 0;
+    padding: 0 var(--density-row-pad-x);
+    min-height: var(--density-control-h);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.boot-skeleton-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Hidden unless the pre-paint script decided a sidebar actually belongs on THIS boot - it is a
+   persisted preference that defaults to closed, and it only appears on conversation routes.
+   Promising a 240px pane that then evaporates is a worse jump than never drawing one. */
+.boot-skeleton-sidebar {
+    display: none;
+    flex: 0 0 240px;
+    width: 240px;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+}
+
+[data-boot-sidebar="true"] .boot-skeleton-sidebar {
+    display: flex;
+}
+
+.boot-skeleton-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Transcript shape - only on chat/* and agent/*, chosen before first paint. Bottom-aligned,
+   because a transcript is: the newest message sits above the composer, and placeholders that
+   started at the top would slide down the moment real messages arrived. */
+.boot-skeleton-transcript {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1rem;
+}
+
+[data-boot-transcript="true"] .boot-skeleton-transcript {
+    display: flex;
+}
+
+/* Page shape - everything else, root included. Top-aligned with a heading and a card grid,
+   which is what Home actually renders and where a cold start most often lands. */
+/* Geometry copied from .home-page, not approximated: same max-width, same auto margins, same
+   padding. That is what puts the placeholder cards where the real cards are about to be. */
+.boot-skeleton-page {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.5rem;
+    max-width: 60rem;
+    margin: 0 auto;
+    width: 100%;
+}
+
+[data-boot-transcript="true"] .boot-skeleton-page {
+    display: none;
+}
+
+/* And the same column counts as .agent-card-grid, at the same breakpoints. */
+.boot-skeleton-cards {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-top: 0.9rem;
+    overflow: hidden;
+}
+
+@media (min-width: 600px) {
+    .boot-skeleton-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 900px) {
+    .boot-skeleton-cards {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+.boot-skeleton-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* The placeholder itself. One shimmer keyframe drives every shape; widths are set inline per
+   element so the rows read as text of differing length rather than a stack of identical bars. */
+.boot-sk {
+    display: block;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--bg-surface) 0%,
+        var(--bg-hover) 50%,
+        var(--bg-surface) 100%);
+    background-size: 200% 100%;
+    animation: boot-sk-shimmer 1.4s ease-in-out infinite;
+}
+
+.boot-sk-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.boot-sk-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.boot-sk-line {
+    height: 10px;
+}
+
+.boot-sk-tab {
+    height: 12px;
+    margin: 0 0.7rem;
+    flex-shrink: 0;
+}
+
+.boot-sk-heading {
+    height: 18px;
+    border-radius: var(--radius-sm);
+}
+
+.boot-sk-card {
+    height: 104px;
+    border-radius: var(--radius-lg);
+}
+
+.boot-sk-field {
+    height: 28px;
+    border-radius: var(--radius-lg);
+}
+
+.boot-sk-row {
+    height: 16px;
+}
+
+.boot-sk-msg {
+    height: 44px;
+    border-radius: var(--radius-lg);
+}
+
+.boot-sk-msg--own {
+    align-self: flex-end;
+}
+
+.boot-sk-composer {
+    height: 56px;
+    border-radius: var(--radius-lg);
+    flex-shrink: 0;
+}
+
+@keyframes boot-sk-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* The sidebar is off-canvas on narrow screens, so a placeholder for it would promise a pane
+   that never appears. Matches the breakpoint .main-sidebar already uses. */
+@media (max-width: 768px) {
+    [data-boot-sidebar="true"] .boot-skeleton-sidebar {
+        display: none;
+    }
+}
+
+/* A shimmer is a decorative loop with no end state, which is exactly what this setting is for.
+   The shapes stay - they are the useful part - they just stop moving. */
+@media (prefers-reduced-motion: reduce) {
+    .boot-sk {
+        animation: none;
+    }
+}
+
 /* ── Loading screen ─────────────────────────────────────────────────── */
 
 .loading-screen {
@@ -5202,6 +5442,23 @@ h3.conversation-title.editable:hover {
     min-width: 1.4rem;
     text-align: center;
     flex-shrink: 0;
+}
+
+/* The role line: one line naming what this agent owns, sitting between the name and the prose.
+   Deliberately NOT clamped to two lines like the description below it - a role that needs two
+   lines is not a role line, and letting it wrap would blur the distinction the two fields exist
+   to draw. It truncates instead, and the full text is one click away in the persona drawer.
+
+   Weightier and less muted than the description, because on a roster it is the line being
+   scanned; the description is the line read once you have stopped scanning. */
+.agent-card-responsibility {
+    font-size: var(--text-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .agent-card-description {

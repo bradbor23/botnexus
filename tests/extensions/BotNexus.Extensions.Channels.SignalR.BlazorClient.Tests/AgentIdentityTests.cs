@@ -55,6 +55,151 @@ public sealed class AgentIdentityTests : IDisposable
         Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
     }
 
+    // ── The chip's one line: role beats prose ──────────────────────────────
+
+    [Fact]
+    public void Identity_prefers_what_the_agent_owns_over_its_description()
+    {
+        // The chip is a single ellipsis-truncated line. Responsibility is defined as one short
+        // line naming what the agent owns, so it survives that truncation; a description is prose
+        // and gets cut mid-sentence.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "role-agent",
+            DisplayName = "Role Agent",
+            Responsibility = "Owns the billing pipeline",
+            Description = "Reconciles invoices nightly and escalates mismatches to the on-call.",
+            IsConnected = true
+        });
+        _store.SelectView("role-agent", string.Empty, SelectionSource.UserClick);
+
+        var cut = RenderFor("role-agent");
+
+        Assert.Equal("Owns the billing pipeline", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
+    [Fact]
+    public void Identity_still_shows_the_description_when_no_role_is_set()
+    {
+        // Most existing agents have only a description. Preferring the new field must not blank
+        // the line for every one of them.
+        Seed("desc-only", "Desc Only", "Handles widget triage");
+
+        var cut = RenderFor("desc-only");
+
+        Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
+    [Fact]
+    public void A_whitespace_only_role_falls_through_to_the_description()
+    {
+        // A field cleared to spaces rather than to null is a real state - the persona form writes
+        // it - and treating it as "set" would blank the chip's only sublabel.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "blank-role",
+            DisplayName = "Blank Role",
+            Responsibility = "   ",
+            Description = "Handles widget triage",
+            IsConnected = true
+        });
+        _store.SelectView("blank-role", string.Empty, SelectionSource.UserClick);
+
+        var cut = RenderFor("blank-role");
+
+        Assert.Equal("Handles widget triage", cut.Find(".agent-panel-description").TextContent.Trim());
+    }
+
+    // ── The wiring behind the avatar's tool state ─────────────────────────
+
+    [Fact]
+    public void An_agent_running_a_tool_shows_it_on_the_chip()
+    {
+        // THE test for this state. AgentActivityModel.For(..., activeToolCalls: 2) was already
+        // covered and passing, but the chip fed it a count that could only ever be zero -
+        // AgentState carried its own ActiveToolCalls dictionary that nothing in the repo ever
+        // wrote to, so "Using tools" was unreachable in the UI while its unit test was green.
+        // Tool calls are tracked per CONVERSATION, which is what this seeds.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "busy-agent",
+            DisplayName = "Busy Agent",
+            IsConnected = true
+        });
+
+        var agent = _store.GetAgent("busy-agent")!;
+        var conversation = new ConversationState { ConversationId = "c-1" };
+        conversation.StreamState.ActiveToolCalls["call-1"] = new ActiveToolCall
+        {
+            ToolCallId = "call-1",
+            ToolName = "bash",
+            StartedAt = DateTimeOffset.UtcNow,
+            MessageId = "m-1"
+        };
+        agent.Conversations["c-1"] = conversation;
+        _store.SelectView("busy-agent", "c-1", SelectionSource.UserClick);
+
+        var cut = RenderFor("busy-agent");
+
+        Assert.Equal(
+            "Using tools",
+            cut.Find("[data-testid=agent-identity-activity]").TextContent.Trim());
+    }
+
+    [Fact]
+    public void A_tool_running_in_any_of_an_agents_conversations_counts()
+    {
+        // An agent is a roster entry; its conversations are where runs happen. A tool running in
+        // one the user is not currently looking at is still that agent being busy.
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "multi-agent",
+            DisplayName = "Multi Agent",
+            IsConnected = true
+        });
+
+        var agent = _store.GetAgent("multi-agent")!;
+        agent.Conversations["idle"] = new ConversationState { ConversationId = "idle" };
+
+        var busy = new ConversationState { ConversationId = "busy" };
+        busy.StreamState.ActiveToolCalls["call-1"] = new ActiveToolCall
+        {
+            ToolCallId = "call-1",
+            ToolName = "bash",
+            StartedAt = DateTimeOffset.UtcNow,
+            MessageId = "m-1"
+        };
+        agent.Conversations["busy"] = busy;
+
+        // Viewing the IDLE one.
+        _store.SelectView("multi-agent", "idle", SelectionSource.UserClick);
+
+        var cut = RenderFor("multi-agent");
+
+        Assert.Equal(
+            "Using tools",
+            cut.Find("[data-testid=agent-identity-activity]").TextContent.Trim());
+    }
+
+    [Fact]
+    public void An_agent_with_no_tool_running_does_not_claim_to_be_using_tools()
+    {
+        _store.UpsertAgent(new AgentState
+        {
+            AgentId = "quiet-agent",
+            DisplayName = "Quiet Agent",
+            IsConnected = true
+        });
+        _store.GetAgent("quiet-agent")!.Conversations["c-1"] =
+            new ConversationState { ConversationId = "c-1" };
+        _store.SelectView("quiet-agent", "c-1", SelectionSource.UserClick);
+
+        var cut = RenderFor("quiet-agent");
+
+        Assert.NotEqual(
+            "Using tools",
+            cut.Find("[data-testid=agent-identity-activity]").TextContent.Trim());
+    }
     [Fact]
     public void Identity_keeps_agent_id_in_dom_for_hover_reveal()
     {
