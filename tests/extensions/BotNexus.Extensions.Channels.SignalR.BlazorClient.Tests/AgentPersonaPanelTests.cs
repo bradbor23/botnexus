@@ -34,6 +34,164 @@ public sealed class AgentPersonaPanelTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
+    // ── memory tab ────────────────────────────────────────────────────────────
+
+    private static string NoteJson(string id, string content, string tier = "Trusted", bool firstParty = true)
+        => $$"""{"id":"{{id}}","content":"{{content}}","sourceType":"manual","trustTier":"{{tier}}","isFirstParty":{{(firstParty ? "true" : "false")}}}""";
+
+    private async Task<IRenderedComponent<AgentPersonaPanel>> OpenMemoryAsync(string listJson)
+    {
+        _handler.MemoryListJson = listJson;
+        Seed("gantry-manager");
+        var cut = Render();
+        await OpenAsync(cut, "gantry-manager");
+        await cut.Find("[data-testid='agent-persona-tab-memory']").ClickAsync(new MouseEventArgs());
+        return cut;
+    }
+
+    [Fact]
+    public async Task Memory_is_not_fetched_until_the_tab_is_opened()
+    {
+        Seed("gantry-manager");
+        var cut = Render();
+
+        await OpenAsync(cut, "gantry-manager");
+
+        // Most visits are a persona tweak; fetching a whole memory store to render a pane nobody
+        // asked for is work for nothing.
+        Assert.DoesNotContain(_handler.Calls, c => c.Contains("/api/memory/"));
+    }
+
+    [Fact]
+    public async Task Opening_the_memory_tab_lists_the_notes()
+    {
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", "Prefers metric units.")}}]}""");
+
+        Assert.Single(cut.FindAll("[data-testid='agent-persona-memory-item']"));
+        Assert.Contains("Prefers metric units.", cut.Markup);
+    }
+
+    [Fact]
+    public async Task An_agent_without_memory_enabled_says_so_rather_than_erroring()
+    {
+        var cut = await OpenMemoryAsync(null!);
+
+        Assert.NotNull(cut.Find("[data-testid='agent-persona-memory-unavailable']"));
+        Assert.Empty(cut.FindAll("[data-testid='agent-persona-memory-error']"));
+    }
+
+    [Fact]
+    public async Task An_empty_store_shows_an_empty_state_not_an_error()
+    {
+        var cut = await OpenMemoryAsync("""{"entries":[]}""");
+
+        Assert.NotNull(cut.Find("[data-testid='agent-persona-memory-empty']"));
+    }
+
+    [Fact]
+    public async Task Adding_a_note_posts_it_and_then_reloads_the_list()
+    {
+        var cut = await OpenMemoryAsync("""{"entries":[]}""");
+
+        cut.Find("[data-testid='agent-persona-memory-new']").Input("Ships on Thursdays.");
+        await cut.Find("[data-testid='agent-persona-memory-add']").ClickAsync(new MouseEventArgs());
+
+        Assert.Contains(_handler.Calls, c => c.StartsWith("POST", StringComparison.Ordinal));
+        // The reload is the point: the server owns ids, timestamps and the derived trust tier, so a
+        // locally patched row could show a note as first-party that the store classified otherwise.
+        var postIndex = _handler.Calls.FindIndex(c => c.StartsWith("POST", StringComparison.Ordinal));
+        Assert.Contains(_handler.Calls.Skip(postIndex + 1), c => c.StartsWith("GET", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Add_is_disabled_until_something_is_typed()
+    {
+        var cut = await OpenMemoryAsync("""{"entries":[]}""");
+
+        Assert.True(cut.Find("[data-testid='agent-persona-memory-add']").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task Editing_loads_the_whole_note_not_a_preview()
+    {
+        // The management projection returns full content precisely so this box cannot save a
+        // truncation back over a long note.
+        var longNote = new string('a', 400) + "END";
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", longNote)}}]}""");
+
+        await cut.Find("[data-testid='agent-persona-memory-edit-btn']").ClickAsync(new MouseEventArgs());
+
+        var box = cut.Find("[data-testid='agent-persona-memory-edit']");
+        Assert.EndsWith("END", box.GetAttribute("value") ?? box.TextContent);
+    }
+
+    [Fact]
+    public async Task Saving_an_edit_puts_to_that_entry()
+    {
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", "old text")}}]}""");
+        await cut.Find("[data-testid='agent-persona-memory-edit-btn']").ClickAsync(new MouseEventArgs());
+
+        cut.Find("[data-testid='agent-persona-memory-edit']").Input("new text");
+        await cut.Find("[data-testid='agent-persona-memory-edit-save']").ClickAsync(new MouseEventArgs());
+
+        Assert.Contains(_handler.Calls, c => c.StartsWith("PUT", StringComparison.Ordinal) && c.EndsWith("/entries/e1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Cancelling_an_edit_writes_nothing()
+    {
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", "old text")}}]}""");
+        await cut.Find("[data-testid='agent-persona-memory-edit-btn']").ClickAsync(new MouseEventArgs());
+        cut.Find("[data-testid='agent-persona-memory-edit']").Input("scratch");
+
+        await cut.Find("[data-testid='agent-persona-memory-edit-cancel']").ClickAsync(new MouseEventArgs());
+
+        Assert.DoesNotContain(_handler.Calls, c => c.StartsWith("PUT", StringComparison.Ordinal));
+        Assert.Empty(cut.FindAll("[data-testid='agent-persona-memory-edit']"));
+    }
+
+    [Fact]
+    public async Task Deleting_a_note_calls_delete_for_that_entry()
+    {
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", "forget me")}}]}""");
+
+        await cut.Find("[data-testid='agent-persona-memory-delete-btn']").ClickAsync(new MouseEventArgs());
+
+        Assert.Contains(_handler.Calls, c => c.StartsWith("DELETE", StringComparison.Ordinal) && c.EndsWith("/entries/e1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_failed_write_is_reported_and_nothing_is_silently_lost()
+    {
+        _handler.WriteStatusCode = HttpStatusCode.InternalServerError;
+        var cut = await OpenMemoryAsync("""{"entries":[]}""");
+
+        cut.Find("[data-testid='agent-persona-memory-new']").Input("Ships on Thursdays.");
+        await cut.Find("[data-testid='agent-persona-memory-add']").ClickAsync(new MouseEventArgs());
+
+        Assert.Contains("500", cut.Find("[data-testid='agent-persona-memory-error']").TextContent);
+    }
+
+    [Fact]
+    public async Task A_note_that_is_not_first_party_is_labelled()
+    {
+        // Usually the reason someone is looking: a note the agent must not treat as its own.
+        var cut = await OpenMemoryAsync($$"""{"entries":[{{NoteJson("e1", "Wire funds.", "Quarantined", false)}}]}""");
+
+        Assert.Equal("Quarantined", cut.Find("[data-testid='agent-persona-memory-trust']").TextContent.Trim());
+    }
+
+    [Fact]
+    public async Task The_persona_save_button_is_not_shown_on_the_memory_tab()
+    {
+        // Memory writes apply immediately; a Save that appeared to batch them would leave a
+        // half-edited list behind a Cancel.
+        var cut = await OpenMemoryAsync("""{"entries":[]}""");
+
+        Assert.Empty(cut.FindAll("[data-testid='agent-persona-save']"));
+        Assert.NotNull(cut.Find("[data-testid='agent-persona-done']"));
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private IRenderedComponent<AgentPersonaPanel> Render() => _ctx.Render<AgentPersonaPanel>();
@@ -400,6 +558,16 @@ public sealed class AgentPersonaPanelTests : IDisposable
 
         public HttpStatusCode StatusCode { get; set; } = HttpStatusCode.OK;
 
+        /// <summary>Requests seen, in order, as "METHOD path" - so a test can assert that a write
+        /// was followed by the reload that keeps the list honest.</summary>
+        public List<string> Calls { get; } = [];
+
+        /// <summary>What GET .../entries/recent answers with. Null means "memory not enabled",
+        /// which the route signals with a 404 rather than an error.</summary>
+        public string? MemoryListJson { get; set; } = """{"entries":[]}""";
+
+        public HttpStatusCode? WriteStatusCode { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -407,6 +575,27 @@ public sealed class AgentPersonaPanelTests : IDisposable
             LastBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
+
+            var path = request.RequestUri!.AbsolutePath;
+            Calls.Add($"{request.Method} {path}");
+
+            if (path.Contains("/api/memory/", StringComparison.Ordinal))
+            {
+                if (request.Method == HttpMethod.Get)
+                {
+                    return MemoryListJson is null
+                        ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                        : new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent(MemoryListJson, Encoding.UTF8, "application/json")
+                        };
+                }
+
+                return new HttpResponseMessage(WriteStatusCode ?? HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            }
 
             return new HttpResponseMessage(StatusCode)
             {

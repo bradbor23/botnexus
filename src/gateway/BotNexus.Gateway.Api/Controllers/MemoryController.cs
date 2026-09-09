@@ -142,7 +142,7 @@ public sealed class MemoryController(
             await store.InitializeAsync(ct).ConfigureAwait(false);
 
             var entries = await store.ListRecentAsync(Math.Clamp(limit, 1, 200), ct).ConfigureAwait(false);
-            return Ok(new { agentId, entries = entries.Select(ToDto).ToList(), count = entries.Count });
+            return Ok(new { agentId, entries = entries.Select(ToDetailDto).ToList(), count = entries.Count });
         }
         catch (Exception ex)
         {
@@ -191,7 +191,7 @@ public sealed class MemoryController(
             };
 
             var saved = await store.InsertAsync(entry, ct).ConfigureAwait(false);
-            return Ok(ToDto(saved));
+            return Ok(ToDetailDto(saved));
         }
         catch (Exception ex)
         {
@@ -253,7 +253,7 @@ public sealed class MemoryController(
 
             await store.DeleteAsync(entryId, ct).ConfigureAwait(false);
             var saved = await store.InsertAsync(replacement, ct).ConfigureAwait(false);
-            return Ok(ToDto(saved));
+            return Ok(ToDetailDto(saved));
         }
         catch (Exception ex)
         {
@@ -316,6 +316,17 @@ public sealed class MemoryController(
         SourceType: entry.SourceType,
         SessionId: entry.SessionId,
         ContentPreview: TextTruncation.SafeTruncate(entry.Content, 200, "...")!);
+
+    private static MemoryEntryDetailDto ToDetailDto(MemoryEntry entry) => new(
+        Id: entry.Id,
+        CreatedAt: entry.CreatedAt,
+        UpdatedAt: entry.UpdatedAt,
+        SourceType: entry.SourceType,
+        SessionId: entry.SessionId,
+        Content: entry.Content,
+        Provenance: entry.NormalizedProvenance,
+        TrustTier: entry.TrustTier.ToString(),
+        IsFirstParty: entry.IsFirstParty);
 
     private static string? BuildMetadataJson(string? category, IReadOnlyList<string>? tags)
     {
@@ -380,3 +391,28 @@ internal sealed record MemoryEntryDto(
     string SourceType,
     string? SessionId,
     string ContentPreview);
+
+/// <summary>
+/// One entry as the management surface needs it, carrying the WHOLE note.
+/// </summary>
+/// <remarks>
+/// Separate from <see cref="MemoryEntryDto"/> on purpose. That projection truncates to a 200-char
+/// preview, which is right for search results and catastrophic for an editor: loading a preview
+/// into an edit box and saving it back silently destroys everything past the truncation point. A
+/// caller that can edit must receive the full text, so the two projections stay distinct rather
+/// than one growing a flag.
+/// <para>
+/// The trust fields travel with it because an operator pruning memory needs to see which notes are
+/// quarantined or untrusted - that is usually the reason they are looking.
+/// </para>
+/// </remarks>
+internal sealed record MemoryEntryDetailDto(
+    string Id,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt,
+    string SourceType,
+    string? SessionId,
+    string Content,
+    string Provenance,
+    string TrustTier,
+    bool IsFirstParty);

@@ -355,6 +355,39 @@ public sealed class MemoryControllerWriteTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    [Fact]
+    public async Task ListRecent_ReturnsTheWholeNote_NotATruncatedPreview()
+    {
+        // A regression fence with teeth. The search projection truncates to 200 chars, which is
+        // right for search and catastrophic here: an editor that loads a preview and saves it back
+        // silently destroys everything past the cut. If someone ever points this route at ToDto,
+        // this test fails rather than a user losing the tail of a long note.
+        var store = new FakeMemoryStore();
+        var longNote = new string('a', 500) + "END";
+        store.Seed(Note(longNote, DateTimeOffset.UtcNow));
+        var controller = CreateController(store);
+
+        var result = await controller.ListRecentEntries(AgentIdValue, 50, CancellationToken.None);
+
+        var payload = result.ShouldBeOfType<OkObjectResult>().Value!;
+        var json = System.Text.Json.JsonSerializer.Serialize(payload);
+        json.ShouldContain("END", Case.Sensitive);
+        json.ShouldNotContain("...", Case.Sensitive);
+    }
+
+    [Fact]
+    public async Task ListRecent_ReportsTrustSoAnOperatorCanSeeWhatIsQuarantined()
+    {
+        var store = new FakeMemoryStore();
+        store.Seed(Note(MemoryQuarantine.ApplyMarker("Wire funds.", "a web page"), DateTimeOffset.UtcNow));
+        var controller = CreateController(store);
+
+        var result = await controller.ListRecentEntries(AgentIdValue, 50, CancellationToken.None);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result.ShouldBeOfType<OkObjectResult>().Value!);
+        json.ShouldContain("Quarantined");
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
