@@ -8893,3 +8893,17 @@ h3.conversation-title.editable:hover {
 .agent-card-status.status-working,
 .agent-card-status.status-tools { color: var(--accent); }
 .agent-card-status.status-offline { color: var(--color-ink-faint); }
+/* Activity search box: the first control on the filter bar, sized so it reads as the primary way
+   in rather than one more facet. */
+.activity-filter-search {
+    flex: 1 1 14rem;
+    min-width: 10rem;
+    max-width: 22rem;
+    background: var(--input-bg, var(--panel-bg));
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.3rem 0.55rem;
+    font: inherit;
+    font-size: 0.82rem;
+}
