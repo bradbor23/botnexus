@@ -16,7 +16,8 @@ namespace BotNexus.Gateway.Api.Controllers;
 public sealed class MemoryController(
     IAgentRegistry agentRegistry,
     IMemoryStoreFactory memoryStoreFactory,
-    ILogger<MemoryController> logger) : ControllerBase
+    ILogger<MemoryController> logger,
+    ISharedMemoryStoreRegistry? sharedStores = null) : ControllerBase
 {
     /// <summary>
     /// Lists all agents that have memory enabled along with their store statistics.
@@ -38,6 +39,48 @@ public sealed class MemoryController(
         }
 
         return Ok(results);
+    }
+
+    /// <summary>
+    /// Lists the shared memory stores and who may read or write each one.
+    /// </summary>
+    /// <remarks>
+    /// Access lists rather than contents. Who can reach a shared store is the thing an operator
+    /// has to be able to check, and it is the thing that is invisible everywhere else - a store
+    /// several agents write to is a channel one agent can use to influence the others, and the
+    /// only place that relationship is written down is config.json.
+    /// <para>
+    /// The registry parameter is optional to match every other consumer of it, so this endpoint
+    /// answers with an empty list rather than a 500 on a gateway that has none.
+    /// </para>
+    /// </remarks>
+    [HttpGet("shared")]
+    public IActionResult ListSharedStores()
+    {
+        if (sharedStores is null)
+            return Ok(Array.Empty<SharedMemoryStoreDto>());
+
+        var agentIds = agentRegistry.GetAll()
+            .Select(a => a.AgentId.Value)
+            .ToList();
+
+        var dtos = sharedStores.GetAllConfigs()
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(c => new SharedMemoryStoreDto
+            {
+                Name = c.Name,
+                Description = c.Description,
+                Readers = c.Readers,
+                Writers = c.Writers,
+                RetentionDays = c.RetentionDays,
+                // Resolved against the live roster so "*" reads as a number rather than a glyph
+                // the operator has to expand in their head.
+                ReaderCount = agentIds.Count(id => sharedStores.CanRead(id, c.Name)),
+                WriterCount = agentIds.Count(id => sharedStores.CanWrite(id, c.Name))
+            })
+            .ToList();
+
+        return Ok(dtos);
     }
 
     /// <summary>

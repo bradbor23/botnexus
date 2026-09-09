@@ -111,6 +111,33 @@ public sealed record MemorySearchResponseDto
 /// itself — and the two surfaces overlap on exactly one verb. Worth doing later, as its own change.
 /// </para>
 /// </remarks>
+/// <summary>
+/// A memory store shared between agents, with the access lists that define who reaches it.
+/// </summary>
+public sealed record SharedMemoryStoreDto
+{
+    /// <summary>Store name, unique across the gateway.</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>What the store is for, as the operator described it.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Reader access list verbatim, which may be a single "*".</summary>
+    public IReadOnlyList<string> Readers { get; init; } = [];
+
+    /// <summary>Writer access list verbatim, which may be a single "*".</summary>
+    public IReadOnlyList<string> Writers { get; init; } = [];
+
+    /// <summary>Days entries are kept, or null for indefinitely.</summary>
+    public int? RetentionDays { get; init; }
+
+    /// <summary>Agents on the current roster that can read it, with "*" resolved.</summary>
+    public int ReaderCount { get; init; }
+
+    /// <summary>Agents on the current roster that can write to it, with "*" resolved.</summary>
+    public int WriterCount { get; init; }
+}
+
 public sealed class MemoryApiClient(HttpClient http)
 {
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -118,6 +145,23 @@ public sealed class MemoryApiClient(HttpClient http)
     /// <summary>Every agent with memory enabled, with its store statistics.</summary>
     public async Task<IReadOnlyList<MemoryStoreRowDto>> GetStoresAsync(CancellationToken ct = default)
         => await _http.GetFromJsonAsync<List<MemoryStoreRowDto>>("api/memory", ct).ConfigureAwait(false) ?? [];
+
+    /// <summary>
+    /// The shared stores and their access lists. Empty on a gateway with none configured, which
+    /// is the default and not an error.
+    /// </summary>
+    public async Task<IReadOnlyList<SharedMemoryStoreDto>> GetSharedStoresAsync(CancellationToken ct = default)
+    {
+        // A gateway that predates the endpoint answers 404. That is "no shared stores", not a
+        // failure the page should report - GetFromJsonAsync would throw and blank the whole page.
+        using var response = await _http.GetAsync("api/memory/shared", ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            return [];
+
+        return await response.Content
+            .ReadFromJsonAsync<List<SharedMemoryStoreDto>>(cancellationToken: ct)
+            .ConfigureAwait(false) ?? [];
+    }
 
     /// <summary>
     /// Searches one agent's entries. Returns <see langword="null"/> when the agent is unknown or has

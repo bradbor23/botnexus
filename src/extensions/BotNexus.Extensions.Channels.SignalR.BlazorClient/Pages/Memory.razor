@@ -199,12 +199,61 @@
             </section>
         }
     }
+
+    @* Shared stores (#3232). The per-agent table above answers "who holds memory";
+       this answers "who can see whose". Access lists rather than contents: what a store
+       holds is already searchable, but a store several agents WRITE to is a channel one
+       agent can use to influence the others, and until now that relationship was written
+       down only in config.json. *@
+    <section class="cron-page-card" data-testid="memory-shared-stores">
+        <h3>Shared stores</h3>
+        @if (_sharedStores.Count == 0)
+        {
+            <p class="plugin-form-hint" data-testid="memory-shared-empty">
+                No shared stores. Every agent's memory is private to it. Add one under
+                <a href="configuration">Configuration</a> &rarr; Memory &rarr; Shared stores to let
+                several agents read from, or contribute to, the same set of notes.
+            </p>
+        }
+        else
+        {
+            <ul class="memory-shared-list">
+                @foreach (var store in _sharedStores)
+                {
+                    <li class="memory-shared-store" data-testid="@($"memory-shared-{store.Name}")">
+                        <div class="memory-shared-head">
+                            <span class="memory-shared-name">@store.Name</span>
+                            @if (store.RetentionDays is { } days)
+                            {
+                                <span class="memory-badge">kept @days days</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(store.Description))
+                        {
+                            <p class="memory-shared-description">@store.Description</p>
+                        }
+                        <div class="memory-shared-access">
+                            <span class="memory-badge memory-badge-source"
+                                  title="@AccessTitle(store.Readers)"
+                                  data-testid="@($"memory-shared-readers-{store.Name}")">@Access(store.ReaderCount, store.Readers) can read</span>
+                            @* Writers gets the warning treatment when it is everyone. A store any
+                               agent can write is not shared knowledge, it is a shared surface. *@
+                            <span class="memory-badge @(IsEveryone(store.Writers) ? "memory-badge-warn" : "memory-badge-source")"
+                                  title="@AccessTitle(store.Writers)"
+                                  data-testid="@($"memory-shared-writers-{store.Name}")">@Access(store.WriterCount, store.Writers) can write</span>
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
 </div>
 
 @code {
     [Parameter] public string? AgentId { get; set; }
 
     private IReadOnlyList<MemoryStoreRowDto> _stores = [];
+    private IReadOnlyList<SharedMemoryStoreDto> _sharedStores = [];
     private List<MemorySearchHitDto> _entries = [];
     private MemoryVectorScanDto? _scan;
 
@@ -230,6 +279,16 @@
         try
         {
             _stores = await MemoryApi.GetStoresAsync();
+            // Its own try: a gateway without the endpoint, or with no stores, must not blank the
+            // per-agent table that loaded fine.
+            try
+            {
+                _sharedStores = await MemoryApi.GetSharedStoresAsync();
+            }
+            catch
+            {
+                _sharedStores = [];
+            }
             SetStatus(null);
         }
         catch (Exception ex)
@@ -341,4 +400,26 @@
         < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
         _ => $"{bytes / (1024.0 * 1024.0):0.#} MB",
     };
+
+    /// <summary>
+    /// Renders an access list as a count, resolving "*" to what it actually means right now.
+    /// </summary>
+    /// <remarks>
+    /// A wildcard reads as harmless until you notice the roster has sixteen agents on it. Showing
+    /// the resolved number is the difference between "*" and "all 16 agents".
+    /// </remarks>
+    private static string Access(int resolvedCount, IReadOnlyList<string> configured)
+    {
+        if (configured.Count == 0)
+            return "Nobody";
+        if (IsEveryone(configured))
+            return $"All {resolvedCount} agents";
+        return resolvedCount == 1 ? "1 agent" : $"{resolvedCount} agents";
+    }
+
+    private static string AccessTitle(IReadOnlyList<string> configured) =>
+        configured.Count == 0 ? "No agents are granted this" : string.Join(", ", configured);
+
+    private static bool IsEveryone(IReadOnlyList<string> configured) =>
+        configured.Contains("*", StringComparer.Ordinal);
 }
