@@ -33,7 +33,11 @@ public sealed record CompactionOptions
         Description = "Token threshold as a fraction of context window (0.0-1.0) at which auto-compaction triggers (default: 0.6).",
         GroupName = "Compaction",
         Order = 2)]
-    [ConfigField(Widget = ConfigFieldWidget.Secret, Group = "compaction", Order = 2, Secret = true)]
+    // Not a secret: a 0-1 ratio. It carried [Secret] only because its name contains the substring
+    // "token", and redaction substitutes the string "***" for the terminal value - which put a
+    // string where a double belongs in the GET /config document. The architecture fence already
+    // records this property as a reviewed non-secret exemption; the annotation contradicted it.
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 2)]
     public double TokenThresholdRatio { get; init; } = 0.6;
 
     /// <summary>Approximate context window size in tokens for the model (default: 128000).</summary>
@@ -42,7 +46,8 @@ public sealed record CompactionOptions
         Description = "Approximate context window size in tokens for the model (default: 128000).",
         GroupName = "Compaction",
         Order = 3)]
-    [ConfigField(Widget = ConfigFieldWidget.Secret, Group = "compaction", Order = 3, Secret = true)]
+    // Not a secret, for the same reason as TokenThresholdRatio above: a window size in tokens.
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 3)]
     public int ContextWindowTokens { get; init; } = 128_000;
 
     /// <summary>
