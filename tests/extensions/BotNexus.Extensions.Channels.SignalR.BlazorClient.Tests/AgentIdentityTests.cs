@@ -207,4 +207,62 @@ public sealed class AgentIdentityTests : IDisposable
 
         Assert.Empty(cut.FindAll(".agent-panel-description"));
     }
+
+    // ── Persona trigger (slide-out entry point) ───────────────────────────────
+    // The name became a <button> so it can open the persona slide-out. These facts pin the parts
+    // that are contract: the button exists, the name test-id stays ON the name element, the click
+    // raises the callback exactly once, and an unset callback is a harmless no-op - the last one
+    // matters because every existing fixture renders this chip without supplying it.
+
+    [Fact]
+    public void Identity_renders_the_name_inside_a_persona_trigger_button()
+    {
+        Seed("trigger-agent", "Trigger Agent");
+
+        var cut = RenderFor("trigger-agent");
+
+        var trigger = cut.Find("[data-testid='agent-persona-trigger']");
+        Assert.Equal("BUTTON", trigger.TagName);
+        Assert.Equal("button", trigger.GetAttribute("type"));
+        Assert.Equal("Trigger Agent", trigger.TextContent.Trim());
+    }
+
+    [Fact]
+    public void Identity_keeps_the_name_testid_on_the_name_element()
+    {
+        Seed("trigger-agent", "Trigger Agent");
+
+        var cut = RenderFor("trigger-agent");
+
+        Assert.Equal("Trigger Agent", cut.Find("[data-testid='agent-identity-name']").TextContent.Trim());
+        Assert.NotNull(cut.Find("[data-testid='agent-identity']"));
+    }
+
+    [Fact]
+    public void Identity_persona_trigger_raises_its_callback_once_per_click()
+    {
+        Seed("trigger-agent", "Trigger Agent");
+        var raised = 0;
+
+        var cut = _ctx.Render<AgentIdentity>(p => p
+            .Add(c => c.AgentId, "trigger-agent")
+            .Add(c => c.OnPersonaRequested, () => raised++));
+
+        cut.Find("[data-testid='agent-persona-trigger']").Click();
+
+        Assert.Equal(1, raised);
+    }
+
+    [Fact]
+    public void Identity_persona_trigger_is_a_no_op_when_no_callback_is_supplied()
+    {
+        Seed("trigger-agent", "Trigger Agent");
+
+        var cut = RenderFor("trigger-agent");
+
+        // Every pre-existing fixture renders the chip this way. Clicking must not throw.
+        cut.Find("[data-testid='agent-persona-trigger']").Click();
+
+        Assert.Equal("Trigger Agent", cut.Find("[data-testid='agent-identity-name']").TextContent.Trim());
+    }
 }
