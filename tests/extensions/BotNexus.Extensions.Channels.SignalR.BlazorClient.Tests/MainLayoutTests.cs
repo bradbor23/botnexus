@@ -1347,4 +1347,101 @@ public sealed class MainLayoutTests : IDisposable
             return Task.FromResult(response);
         }
     }
+
+    // ── sidebar scoping (Interface Review P2) ─────────────────────────────────
+    // The sidebar has been the conversation list and nothing else since navigation moved to the
+    // toolbar, yet it rendered on every route - 240px of chat furniture on pages with no
+    // conversations in them.
+
+    private void NavigateTo(string relative) =>
+        _ctx.Services.GetRequiredService<NavigationManager>().NavigateTo($"http://localhost/{relative}");
+
+    private static bool HasConversationSidebar(IRenderedComponent<MainLayout> cut) =>
+        cut.FindAll(".main-sidebar").Count > 0;
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("chat")]
+    [InlineData("agent/a-1")]
+    [InlineData("agent/a-1/conversation/c-1")]
+    [InlineData("chat/a-1/c-1")]
+    public void The_conversation_sidebar_is_shown_where_conversations_are_the_task(string route)
+    {
+        NavigateTo(route);
+
+        HasConversationSidebar(RenderLayout()).ShouldBeTrue($"'{route}' is a conversation route");
+    }
+
+    [Theory]
+    [InlineData("activity")]
+    [InlineData("agents")]
+    [InlineData("configuration")]
+    [InlineData("skills")]
+    [InlineData("plugins")]
+    [InlineData("cron")]
+    [InlineData("guide")]
+    public void The_conversation_sidebar_is_not_shown_where_it_has_nothing_to_do_with_the_page(string route)
+    {
+        // The exact pages the review named, plus their siblings. This is an allow-list in the
+        // component, so a page added later gets no chat furniture unless it asks for it.
+        NavigateTo(route);
+
+        HasConversationSidebar(RenderLayout()).ShouldBeFalse($"'{route}' has no conversations in it");
+    }
+
+    [Fact]
+    public void Agents_and_agent_are_different_routes()
+    {
+        // "agents" is the roster page and "agent/x" is a conversation with x. A prefix match on
+        // "agent" would have swallowed both and undone half the fix.
+        NavigateTo("agents");
+        HasConversationSidebar(RenderLayout()).ShouldBeFalse("the agent roster is not a conversation");
+    }
+
+    [Fact]
+    public void A_query_string_does_not_change_whether_the_sidebar_belongs()
+    {
+        NavigateTo("activity?agent=a-1&status=active");
+
+        HasConversationSidebar(RenderLayout()).ShouldBeFalse("Activity with filters is still Activity");
+    }
+
+    [Fact]
+    public void The_burger_goes_with_the_sidebar_it_toggles()
+    {
+        // It exists to open and close the conversation list; on a page with no conversation list it
+        // is a control that does nothing.
+        NavigateTo("activity");
+        RenderLayout().FindAll("[data-testid='sidebar-toggle-btn']").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void The_burger_is_present_on_a_conversation_route()
+    {
+        NavigateTo("chat");
+        RenderLayout().FindAll("[data-testid='sidebar-toggle-btn']").ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public void The_resize_splitter_goes_with_the_sidebar_too()
+    {
+        // The splitter drags the boundary between sidebar and canvas. With no sidebar there is no
+        // boundary, and a draggable handle against nothing is a bug someone would file.
+        NavigateTo("activity");
+        RenderLayout().FindAll(".sidebar-splitter").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Navigating_away_from_chat_removes_the_sidebar_without_a_reload()
+    {
+        // Whether the sidebar belongs is now a function of the route, so every navigation needs a
+        // render - not just the two that already triggered an agent refresh.
+        NavigateTo("chat");
+        var cut = RenderLayout();
+        HasConversationSidebar(cut).ShouldBeTrue();
+
+        NavigateTo("activity");
+
+        cut.WaitForAssertion(() => HasConversationSidebar(cut).ShouldBeFalse(), TimeSpan.FromSeconds(2));
+    }
 }
