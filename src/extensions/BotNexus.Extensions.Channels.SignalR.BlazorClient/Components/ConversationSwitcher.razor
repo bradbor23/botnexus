@@ -173,7 +173,7 @@
     /// Filled asynchronously; the title filter never waits on it, so the list stays responsive on
     /// every keystroke and content rows arrive underneath when the server answers.
     /// </summary>
-    private Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
+    private IReadOnlyList<ConversationContentMatch> _contentMatches = [];
 
     private CancellationTokenSource? _contentSearchCts;
     private bool _contentSearching;
@@ -346,7 +346,7 @@
     {
         _open = true;
         _query = "";
-        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
+        _contentMatches = [];
         // Open on the conversation the user is already in, so Enter is a no-op rather than a
         // surprise jump, and arrowing starts from where they are.
         _highlight = IndexOfActive(BuildView());
@@ -395,7 +395,7 @@
     {
         _open = false;
         _query = "";
-        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
+        _contentMatches = [];
         _highlight = 0;
         _panelReady = false;
     }
@@ -426,7 +426,7 @@
 
         // Stale content rows are worse than none: they would claim a message match for a query the
         // user has already moved on from. Cleared synchronously, refilled when the server answers.
-        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
+        _contentMatches = [];
         _ = SearchContentAsync(_query);
     }
 
@@ -476,11 +476,14 @@
             if (cts.Token.IsCancellationRequested)
                 return;
 
-            var matches = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Kept as an ordered list. The endpoint returns hits in bm25 relevance order, and
+            // collapsing them into a dictionary here was what discarded that ranking before the
+            // model ever saw it.
+            var matches = new List<ConversationContentMatch>();
             foreach (var result in payload?.Results ?? [])
             {
                 if (!string.IsNullOrWhiteSpace(result.ConversationId))
-                    matches[result.ConversationId] = result.Snippet ?? "";
+                    matches.Add(new ConversationContentMatch(result.ConversationId, result.Snippet ?? ""));
             }
 
             _contentMatches = matches;

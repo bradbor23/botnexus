@@ -412,7 +412,7 @@ public sealed class ConversationSwitcherModelTests
     private static ConversationSwitcherView BuildWithContent(
         IEnumerable<ConversationState> conversations,
         string? query,
-        Dictionary<string, string> contentMatches) =>
+        IReadOnlyList<ConversationContentMatch> contentMatches) =>
         ConversationSwitcherModel.Build(
             "a-1",
             [Agent("a-1", "Alpha", false, conversations.ToArray())],
@@ -428,7 +428,7 @@ public sealed class ConversationSwitcherModelTests
         // unreachable from the switcher no matter what was in it.
         var conversations = new[] { Conv("c-1", "Tuesday standup") };
 
-        var view = BuildWithContent(conversations, "gateway", new() { ["c-1"] = "the gateway restart lost its pid file" });
+        var view = BuildWithContent(conversations, "gateway", [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         var group = view.Groups.ShouldHaveSingleItem();
         group.Label.ShouldBe(ConversationSwitcherModel.FoundInMessagesLabel);
@@ -441,7 +441,7 @@ public sealed class ConversationSwitcherModelTests
         var view = BuildWithContent(
             [Conv("c-1", "Tuesday standup")],
             "gateway",
-            new() { ["c-1"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         view.Groups.ShouldHaveSingleItem().Rows.ShouldHaveSingleItem()
             .Snippet.ShouldBe("the gateway restart lost its pid file");
@@ -459,7 +459,7 @@ public sealed class ConversationSwitcherModelTests
         var view = BuildWithContent(
             [Conv("c-1", "Tuesday standup", status: "Archived")],
             "gateway",
-            new() { ["c-1"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
     }
@@ -471,7 +471,7 @@ public sealed class ConversationSwitcherModelTests
         var view = BuildWithContent(
             [Conv("c-1", "Bookkeeping", visibility: ConversationVisibility.InternalHidden)],
             "gateway",
-            new() { ["c-1"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
     }
@@ -490,7 +490,7 @@ public sealed class ConversationSwitcherModelTests
             SelectionSource.UserClick,
             null,
             "gateway",
-            new Dictionary<string, string> { ["c-2"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-2", "the gateway restart lost its pid file")]);
 
         view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
         view.Flattened.ShouldNotContain(r => r.Conversation.ConversationId == "c-2");
@@ -504,7 +504,7 @@ public sealed class ConversationSwitcherModelTests
         var view = BuildWithContent(
             [Conv("c-1", "Gateway restart")],
             "gateway",
-            new() { ["c-1"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         view.Flattened.Count(r => r.Conversation.ConversationId == "c-1").ShouldBe(1);
         view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
@@ -518,7 +518,7 @@ public sealed class ConversationSwitcherModelTests
         var view = BuildWithContent(
             [Conv("c-1", "Tuesday standup"), Conv("c-2", "Gateway notes")],
             "gateway",
-            new() { ["c-1"] = "the gateway restart lost its pid file" });
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
 
         view.Flattened.Select(r => r.Conversation.ConversationId).ShouldBe(["c-2", "c-1"]);
     }
@@ -539,8 +539,83 @@ public sealed class ConversationSwitcherModelTests
         // The server searches every transcript; the roster in this client may not hold all of them
         // (another agent's conversation, one pruned locally). A row with no conversation behind it
         // could not be opened, so it must not be offered.
-        var view = BuildWithContent([Conv("c-1", "Tuesday standup")], "gateway", new() { ["c-999"] = "gateway" });
+        var view = BuildWithContent([Conv("c-1", "Tuesday standup")], "gateway", [new ConversationContentMatch("c-999", "gateway")]);
 
         view.Flattened.ShouldNotContain(r => r.Conversation.ConversationId == "c-999");
+    }
+
+    // ── relevance order and agent attribution ────────────────────────────────
+
+    [Fact]
+    public void Content_rows_keep_the_servers_relevance_order()
+    {
+        // Hits arrive in bm25 order. Walking the roster instead re-orders them by whatever order
+        // agents and their conversations happen to be in, discarding the only signal that says
+        // which match is the good one.
+        var view = BuildWithContent(
+            [Conv("c-1", "First"), Conv("c-2", "Second"), Conv("c-3", "Third")],
+            "gateway",
+            [
+                new ConversationContentMatch("c-3", "best"),
+                new ConversationContentMatch("c-1", "middling"),
+                new ConversationContentMatch("c-2", "worst"),
+            ]);
+
+        view.Groups.Single(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel)
+            .Rows.Select(r => r.Conversation.ConversationId)
+            .ShouldBe(["c-3", "c-1", "c-2"]);
+    }
+
+    [Fact]
+    public void A_content_row_for_another_agent_is_marked_as_such()
+    {
+        // IsOtherAgent drives both the owning-agent label and the active-row styling. Reporting
+        // another agent's conversation as the current agent's hides who owns it, and lets the row
+        // be styled active for a conversation that is not the one on screen.
+        var view = ConversationSwitcherModel.Build(
+            "a-1",
+            [
+                Agent("a-1", "Alpha", false, Conv("c-1", "Mine")),
+                Agent("a-2", "Beta", false, Conv("c-2", "Theirs")),
+            ],
+            SelectionSource.UserClick,
+            null,
+            "gateway",
+            [new ConversationContentMatch("c-2", "the gateway restart lost its pid file")]);
+
+        var row = view.Groups.Single(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel)
+            .Rows.ShouldHaveSingleItem();
+        row.AgentId.ShouldBe("a-2");
+        row.AgentDisplayName.ShouldBe("Beta");
+        row.IsOtherAgent.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_content_row_for_the_current_agent_is_not_marked_as_another_agents()
+    {
+        var view = BuildWithContent(
+            [Conv("c-1", "Tuesday standup")],
+            "gateway",
+            [new ConversationContentMatch("c-1", "the gateway restart lost its pid file")]);
+
+        view.Groups.Single(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel)
+            .Rows.ShouldHaveSingleItem().IsOtherAgent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_duplicated_hit_is_listed_once()
+    {
+        // The endpoint groups by conversation, but a defensive de-dupe here keeps a repeated id
+        // from rendering the same row twice with different snippets.
+        var view = BuildWithContent(
+            [Conv("c-1", "Tuesday standup")],
+            "gateway",
+            [
+                new ConversationContentMatch("c-1", "first"),
+                new ConversationContentMatch("c-1", "second"),
+            ]);
+
+        view.Groups.Single(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel)
+            .Rows.ShouldHaveSingleItem().Snippet.ShouldBe("first");
     }
 }

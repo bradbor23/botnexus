@@ -28,6 +28,19 @@ public sealed record ConversationSwitcherRow(
     bool IsOtherAgent,
     string? Snippet = null);
 
+/// <summary>
+/// One conversation the backend found by its content, with the line that proves why.
+/// </summary>
+/// <remarks>
+/// A LIST of these rather than a dictionary keyed by id, because the order is information: the
+/// endpoint returns hits in bm25 relevance order, and that ranking is the only signal saying which
+/// match is the good one. A dictionary discards it, after which rows come out in whatever order the
+/// roster happens to be in.
+/// </remarks>
+/// <param name="ConversationId">The conversation the match was found in.</param>
+/// <param name="Snippet">The best-ranked matching line for it.</param>
+public sealed record ConversationContentMatch(string ConversationId, string Snippet);
+
 /// <summary>A labelled group of switcher rows, in render order. Never empty.</summary>
 /// <param name="Label">The group heading.</param>
 /// <param name="Rows">The rows in the group, already in display order.</param>
@@ -122,7 +135,7 @@ public static class ConversationSwitcherModel
         SelectionSource selectionSource,
         IReadOnlySet<string>? cronConversationIds,
         string? query,
-        IReadOnlyDictionary<string, string>? contentMatches = null)
+        IReadOnlyList<ConversationContentMatch>? contentMatches = null)
     {
         ArgumentNullException.ThrowIfNull(agents);
 
@@ -138,7 +151,7 @@ public static class ConversationSwitcherModel
         if (otherAgents is not null)
             groups.Add(otherAgents);
 
-        var foundInMessages = BuildContentGroup(roster, groups, contentMatches);
+        var foundInMessages = BuildContentGroup(currentAgentId, roster, groups, contentMatches);
         if (foundInMessages is not null)
             groups.Add(foundInMessages);
 
@@ -161,11 +174,12 @@ public static class ConversationSwitcherModel
     /// </para>
     /// </remarks>
     private static ConversationSwitcherGroup? BuildContentGroup(
+        string currentAgentId,
         IReadOnlyList<AgentState> roster,
         IReadOnlyList<ConversationSwitcherGroup> existing,
-        IReadOnlyDictionary<string, string>? contentMatches)
+        IReadOnlyList<ConversationContentMatch>? contentMatches)
     {
-        if (contentMatches is null || contentMatches.Count == 0)
+        if (contentMatches is not { Count: > 0 })
             return null;
 
         var alreadyShown = existing
@@ -173,37 +187,53 @@ public static class ConversationSwitcherModel
             .Select(r => r.Conversation.ConversationId)
             .ToHashSet(StringComparer.Ordinal);
 
-        var rows = new List<ConversationSwitcherRow>();
+        // Every conversation a content hit is ALLOWED to resolve to, indexed for lookup.
+        //
+        // Read-only agents are excluded for the same reason BuildOtherAgentsGroup excludes them:
+        // the sidebar's own agent dropdown lists only !IsReadOnly agents, so offering one of their
+        // conversations as a destination contradicts the rest of the portal.
+        //
+        // Reachable(), not agent.Conversations.Values. The search endpoint walks all of session
+        // history and knows nothing about archived rows or runtime-internal threads, so this is the
+        // ONLY place those can be excluded - and without it, content search surfaces conversations
+        // every other group in this model deliberately hides. Measured against a real instance, the
+        // endpoint returned 31 distinct archived conversations, and for the query "memory" 16 of 27
+        // hits were archived.
+        var candidates = new Dictionary<string, (AgentState Agent, ConversationState Conversation)>(StringComparer.Ordinal);
         foreach (var agent in roster)
         {
-            // Read-only agents are excluded here for the same reason BuildOtherAgentsGroup excludes
-            // them: the sidebar's own agent dropdown lists only !IsReadOnly agents, so offering one
-            // of their conversations as a destination contradicts the rest of the portal.
             if (agent.IsReadOnly)
                 continue;
 
-            // Reachable(), not agent.Conversations.Values. The search endpoint walks all of session
-            // history and knows nothing about archived rows or runtime-internal threads, so this is
-            // the ONLY place those can be excluded - and without it, content search surfaces
-            // conversations every other group in this model deliberately hides. Measured against a
-            // real instance, the endpoint returned 31 distinct archived conversations, and for the
-            // query "memory" 16 of 27 hits were archived.
             foreach (var conversation in Reachable(agent))
             {
-                if (conversation.ConversationId is not { Length: > 0 } id)
-                    continue;
-
-                if (alreadyShown.Contains(id) || !contentMatches.TryGetValue(id, out var snippet))
-                    continue;
-
-                rows.Add(new ConversationSwitcherRow(
-                    agent.AgentId,
-                    agent.DisplayName,
-                    conversation,
-                    FoundInMessagesLabel,
-                    IsOtherAgent: false,
-                    Snippet: snippet));
+                if (conversation.ConversationId is { Length: > 0 } id)
+                    candidates.TryAdd(id, (agent, conversation));
             }
+        }
+
+        // Driven by the MATCH list, not the roster: hits arrive in bm25 relevance order, and
+        // walking the roster instead would re-order them by whatever order agents happen to be in,
+        // discarding the only signal that says which match is the good one.
+        var rows = new List<ConversationSwitcherRow>();
+        foreach (var match in contentMatches)
+        {
+            if (string.IsNullOrEmpty(match.ConversationId) || !alreadyShown.Add(match.ConversationId))
+                continue;
+
+            if (!candidates.TryGetValue(match.ConversationId, out var found))
+                continue;
+
+            rows.Add(new ConversationSwitcherRow(
+                found.Agent.AgentId,
+                found.Agent.DisplayName,
+                found.Conversation,
+                FoundInMessagesLabel,
+                // A hit can belong to any agent. Marking it as the current agent's would hide the
+                // owning-agent label and let the row be styled active for a conversation that is
+                // not the one on screen.
+                IsOtherAgent: !string.Equals(found.Agent.AgentId, currentAgentId, StringComparison.Ordinal),
+                Snippet: match.Snippet));
         }
 
         return rows.Count == 0 ? null : new ConversationSwitcherGroup(FoundInMessagesLabel, rows);
