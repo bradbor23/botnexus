@@ -1,6 +1,7 @@
 using BotNexus.Domain.Primitives;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Sessions;
+using BotNexus.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -34,7 +35,9 @@ public sealed class SqliteSessionStoreContentSearchTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        // Scoped to this test's own directory: ClearAllPools() is process-global and would dispose
+        // sibling tests' live SQLite handles under parallel collections (#3324, #3392).
+        SqlitePoolCleanup.ClearPoolsUnder(_directoryPath);
         if (Directory.Exists(_directoryPath))
             Directory.Delete(_directoryPath, recursive: true);
     }
@@ -132,7 +135,7 @@ public sealed class SqliteSessionStoreContentSearchTests : IDisposable
         var store = CreateSessionStore(conversations);
         await SeedAsync(store, "s-old", User("the gateway restart lost its pid file"));
 
-        SqliteConnection.ClearAllPools();
+        SqlitePoolCleanup.ClearPoolFor(_sessionDbPath);
         await DropIndexAsync();
 
         var conversations2 = CreateConversationStore();
