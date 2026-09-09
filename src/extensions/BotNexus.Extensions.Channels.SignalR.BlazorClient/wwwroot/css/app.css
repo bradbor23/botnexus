@@ -8907,3 +8907,111 @@ h3.conversation-title.editable:hover {
     font: inherit;
     font-size: 0.82rem;
 }
+
+/* ── Memory overview page ──────────────────────────────────────────────────
+   Cross-agent store list and search. Per-agent note curation lives in the
+   persona drawer; these styles cover only what that surface does not.
+   Colours come from the existing token set so the page follows the theme. */
+
+.linklike {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.linklike:hover { text-decoration: underline; }
+
+.memory-store-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.memory-store-table th,
+.memory-store-table td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.memory-store-table th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+/* Digits line up so two stores' counts can be compared down the column. */
+.memory-store-table td.num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.memory-store-table tr.is-selected { background: var(--surface-2); }
+
+.memory-entry-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.memory-entry {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.75rem;
+}
+
+/* A row the platform will not push into always-on prompt context is marked at
+   the edge, so it reads as different before any badge is parsed. */
+.memory-entry.is-untrusted { border-left-color: var(--warning, #b8860b); }
+
+.memory-entry-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.memory-entry-date {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.memory-entry-preview {
+    margin: 0.4rem 0 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.memory-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+
+.memory-badge-source  { background: var(--surface-2); color: var(--text-muted); }
+.memory-badge-trusted { background: var(--surface-2); color: var(--success, #2e7d5b); }
+.memory-badge-warn    { background: var(--surface-2); color: var(--warning, #b8860b); }
+.memory-badge-danger  { background: var(--surface-2); color: var(--error, #a33a34); }
+.memory-badge-user    { background: var(--surface-2); color: var(--accent); }
+
+.memory-forget { margin-left: 0.25rem; }
+
+.memory-scan-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.8rem;
+    color: var(--warning, #b8860b);
+}

@@ -39,6 +39,8 @@ builder.Services.AddScoped<ToolsApiClient>();
 // choice: Pages/Plugins.razor injects it, so navigating to /plugins threw
 // "No registered service of type 'PluginsApiClient'" and the page never rendered at all.
 builder.Services.AddScoped<PluginsApiClient>();
+// Pages/Memory.razor injects this; see the note above for what a missing registration costs.
+builder.Services.AddScoped<MemoryApiClient>();
 builder.Services.AddScoped<NavOrderApiClient>();
 builder.Services.AddScoped<NotificationsApiClient>();
 builder.Services.AddScoped<DesktopNotifier>();
