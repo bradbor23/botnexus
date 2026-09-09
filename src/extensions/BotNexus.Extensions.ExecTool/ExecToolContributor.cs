@@ -25,14 +25,24 @@ namespace BotNexus.Extensions.ExecTool;
 public sealed class ExecToolContributor : IAgentToolContributor
 {
     private readonly IFileSystem? _fileSystem;
+    private readonly IToolEnvironmentPolicy? _environmentPolicy;
 
     /// <summary>
     /// Creates the contributor. The file system is injected so Windows <c>.cmd</c>/<c>.bat</c>
     /// resolution stays testable; when omitted the tool uses the real file system.
     /// </summary>
-    public ExecToolContributor(IFileSystem? fileSystem = null)
+    /// <param name="fileSystem">File system used for Windows .cmd/.bat resolution.</param>
+    /// <param name="environmentPolicy">
+    /// The operator's environment pass-through decision, shared with the built-in <c>shell</c>
+    /// tool. Omitted or null means the strict built-in allow-list, which is the safe direction:
+    /// a missing registration withholds variables rather than exposing them.
+    /// </param>
+    public ExecToolContributor(
+        IFileSystem? fileSystem = null,
+        IToolEnvironmentPolicy? environmentPolicy = null)
     {
         _fileSystem = fileSystem;
+        _environmentPolicy = environmentPolicy;
     }
 
     /// <inheritdoc />
@@ -49,7 +59,8 @@ public sealed class ExecToolContributor : IAgentToolContributor
         if (!IsToolAllowed(context.Descriptor.ToolIds, ExecToolName))
             return Task.FromResult(new AgentToolContribution([]));
 
-        IReadOnlyList<IAgentTool> tools = [new ExecTool(context.WorkspacePath, _fileSystem)];
+        IReadOnlyList<IAgentTool> tools =
+            [new ExecTool(context.WorkspacePath, _fileSystem, _environmentPolicy?.PassThroughVariables)];
         return Task.FromResult(new AgentToolContribution(tools));
     }
 

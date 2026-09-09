@@ -577,6 +577,31 @@ public sealed class GatewaySettingsConfig
     public string? ShellPreference { get; set; }
 
     /// <summary>
+    /// Extra environment variable names exposed to <c>bash</c> and <c>exec</c> child processes.
+    /// </summary>
+    /// <remarks>
+    /// Tool subprocesses get an environment built from an allow-list
+    /// (<c>ToolProcessEnvironment.AllowedVariables</c>), not the gateway's own environment. That
+    /// is what stops an agent holding <c>bash</c> from reading the provider keys and <c>env:</c>
+    /// credentials this gateway runs under - <c>ISecretResolver</c> keeps a resolved credential
+    /// out of an agent's context, and this keeps it out of the agent's shell.
+    /// <para>
+    /// This list is the escape hatch, and it is per-NAME on purpose: a toolchain that genuinely
+    /// needs <c>DOTNET_ROOT</c> or <c>NODE_OPTIONS</c> says so here. There is deliberately no
+    /// switch that restores wholesale inheritance, because that is the vulnerability rather than a
+    /// setting. Adding a name that carries authentication material hands it to every agent that
+    /// can run a command.
+    /// </para>
+    /// </remarks>
+    [Display(
+        Name = "Tool environment pass-through",
+        Description = "Extra environment variable names exposed to bash and exec child processes. Tool subprocesses otherwise receive a fixed allow-list that carries no credentials. Do not add anything that authenticates.",
+        GroupName = "Execution",
+        Order = 1)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "execution", Order = 1)]
+    public List<string>? ToolEnvironmentPassThrough { get; set; }
+
+    /// <summary>
     /// Custom shell command array for command execution.
     /// Element [0] is the executable, remaining elements are base arguments.
     /// The agent's command string is appended as the final argument.
