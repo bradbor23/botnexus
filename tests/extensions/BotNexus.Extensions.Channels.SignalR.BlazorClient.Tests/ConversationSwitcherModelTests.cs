@@ -404,4 +404,94 @@ public sealed class ConversationSwitcherModelTests
         Assert.Empty(view.Groups);
         Assert.Equal(0, view.Count);
     }
+
+    // ── content matches (Interface Review P1 hookup) ──────────────────────────
+    // Titles were the only thing the switcher could see. These cover the rows that appear because
+    // of what was SAID in a conversation, which is the half that could not work before.
+
+    private static ConversationSwitcherView BuildWithContent(
+        IEnumerable<ConversationState> conversations,
+        string? query,
+        Dictionary<string, string> contentMatches) =>
+        ConversationSwitcherModel.Build(
+            "a-1",
+            [Agent("a-1", "Alpha", false, conversations.ToArray())],
+            SelectionSource.UserClick,
+            null,
+            query,
+            contentMatches);
+
+    [Fact]
+    public void A_conversation_matched_only_by_content_still_appears()
+    {
+        // The title says nothing about "gateway"; the transcript does. Before this, the row was
+        // unreachable from the switcher no matter what was in it.
+        var conversations = new[] { Conv("c-1", "Tuesday standup") };
+
+        var view = BuildWithContent(conversations, "gateway", new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        var group = view.Groups.ShouldHaveSingleItem();
+        group.Label.ShouldBe(ConversationSwitcherModel.FoundInMessagesLabel);
+        group.Rows.ShouldHaveSingleItem().Conversation.ConversationId.ShouldBe("c-1");
+    }
+
+    [Fact]
+    public void The_snippet_travels_with_the_row_because_it_is_why_the_row_is_there()
+    {
+        var view = BuildWithContent(
+            [Conv("c-1", "Tuesday standup")],
+            "gateway",
+            new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        view.Groups.ShouldHaveSingleItem().Rows.ShouldHaveSingleItem()
+            .Snippet.ShouldBe("the gateway restart lost its pid file");
+    }
+
+    [Fact]
+    public void A_conversation_already_matched_by_title_is_not_listed_twice()
+    {
+        // The same row appearing under two headings makes the list longer without making it more
+        // useful, and the title match is the stronger signal.
+        var view = BuildWithContent(
+            [Conv("c-1", "Gateway restart")],
+            "gateway",
+            new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        view.Flattened.Count(r => r.Conversation.ConversationId == "c-1").ShouldBe(1);
+        view.Groups.ShouldNotContain(g => g.Label == ConversationSwitcherModel.FoundInMessagesLabel);
+    }
+
+    [Fact]
+    public void Content_rows_are_in_the_flattened_list_so_the_keyboard_reaches_them()
+    {
+        // A group bolted on at render time would be visible and unreachable by arrow key, which is
+        // worse than not showing it at all. Flattened is what the keyboard walks.
+        var view = BuildWithContent(
+            [Conv("c-1", "Tuesday standup"), Conv("c-2", "Gateway notes")],
+            "gateway",
+            new() { ["c-1"] = "the gateway restart lost its pid file" });
+
+        view.Flattened.Select(r => r.Conversation.ConversationId).ShouldBe(["c-2", "c-1"]);
+    }
+
+    [Fact]
+    public void No_content_matches_leaves_the_view_exactly_as_it_was()
+    {
+        var withNone = BuildWithContent([Conv("c-1", "Gateway notes")], "gateway", []);
+        var withNull = Build([Conv("c-1", "Gateway notes")], "gateway");
+
+        withNone.Groups.Count.ShouldBe(withNull.Groups.Count);
+        withNone.Flattened.Count.ShouldBe(withNull.Flattened.Count);
+    }
+
+    [Fact]
+    public void A_content_match_for_a_conversation_the_client_does_not_know_is_ignored()
+    {
+        // The server searches every transcript; the roster in this client may not hold all of them
+        // (another agent's conversation, one pruned locally). A row with no conversation behind it
+        // could not be opened, so it must not be offered.
+        var view = BuildWithContent([Conv("c-1", "Tuesday standup")], "gateway", new() { ["c-999"] = "gateway" });
+
+        view.Flattened.ShouldNotContain(r => r.Conversation.ConversationId == "c-999");
+    }
 }

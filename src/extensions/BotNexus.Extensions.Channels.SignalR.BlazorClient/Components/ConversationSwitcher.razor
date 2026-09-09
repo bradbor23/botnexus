@@ -1,3 +1,4 @@
+@using System.Net.Http.Json
 @inject IClientStateStore Store
 @inject IAgentInteractionService Interaction
 @inject NavigationManager Nav
@@ -74,7 +75,16 @@
                 @if (view.IsEmpty)
                 {
                     <div class="conversation-switcher-empty" data-testid="conversation-switcher-empty">
-                        No conversations match &ldquo;@_query&rdquo; in any agent.
+                        @if (_contentSearching)
+                        {
+                            @* Saying "nothing matches" while still looking is a lie with a short
+                               shelf life, and the reader acts on it before it corrects itself. *@
+                            <text>Searching messages for &ldquo;@_query&rdquo;&hellip;</text>
+                        }
+                        else
+                        {
+                            <text>No conversations match &ldquo;@_query&rdquo; in any agent.</text>
+                        }
                     </div>
                 }
                 else
@@ -124,6 +134,14 @@
                                 {
                                     <span class="conversation-switcher-unread" aria-label="Unread messages"></span>
                                 }
+                                @* The snippet IS the reason this row is here. A content match whose
+                                   title does not contain the query looks arbitrary without it. *@
+                                @if (row.Snippet is { Length: > 0 } snippet)
+                                {
+                                    <span class="conversation-switcher-snippet"
+                                          data-testid="conversation-switcher-snippet"
+                                          title="@PortalText.SingleLine(snippet)">@PortalText.SingleLine(snippet)</span>
+                                }
                             </button>
                         }
                     }
@@ -149,6 +167,16 @@
 
     private bool _open;
     private string _query = "";
+
+    /// <summary>
+    /// Conversations matched by CONTENT, keyed by conversation id, with the matching snippet.
+    /// Filled asynchronously; the title filter never waits on it, so the list stays responsive on
+    /// every keystroke and content rows arrive underneath when the server answers.
+    /// </summary>
+    private Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
+
+    private CancellationTokenSource? _contentSearchCts;
+    private bool _contentSearching;
     private int _highlight;
     private ElementReference _inputRef;
     private ElementReference _triggerRef;
@@ -235,6 +263,8 @@
 
     public void Dispose()
     {
+        _contentSearchCts?.Cancel();
+        _contentSearchCts?.Dispose();
         Store.OnChanged -= HandleStoreChanged;
 
         // The launcher is scoped and outlives this component; a leaked subscription would raise
@@ -298,7 +328,8 @@
         Store.Agents.Values.ToArray(),
         Store.ActiveSelectionSource,
         _cronConversationIds,
-        _query);
+        _query,
+        _contentMatches);
 
     private async Task ToggleAsync()
     {
@@ -315,6 +346,7 @@
     {
         _open = true;
         _query = "";
+        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
         // Open on the conversation the user is already in, so Enter is a no-op rather than a
         // surprise jump, and arrowing starts from where they are.
         _highlight = IndexOfActive(BuildView());
@@ -363,6 +395,7 @@
     {
         _open = false;
         _query = "";
+        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
         _highlight = 0;
         _panelReady = false;
     }
@@ -390,7 +423,91 @@
         // conversation than the one under the highlight. Reset to the top - the best match after
         // typing is the first surviving row, not whatever sat at the old offset.
         _highlight = 0;
+
+        // Stale content rows are worse than none: they would claim a message match for a query the
+        // user has already moved on from. Cleared synchronously, refilled when the server answers.
+        _contentMatches = new Dictionary<string, string>(StringComparer.Ordinal);
+        _ = SearchContentAsync(_query);
     }
+
+    /// <summary>
+    /// Asks the gateway which conversations contain the typed text, after a short pause.
+    /// </summary>
+    /// <remarks>
+    /// Debounced and cancellable because this is a keystroke-driven remote call over a table of
+    /// transcripts: firing per character would put a full-text query behind every letter of a word,
+    /// and let an early request answer after a later one and repopulate the list with results for a
+    /// prefix the user has already replaced.
+    /// <para>
+    /// Failure is silent by design. The title filter has already produced a usable list; degrading
+    /// that into an error banner because a supplementary search did not answer would make the
+    /// control worse than before content search existed.
+    /// </para>
+    /// </remarks>
+    private async Task SearchContentAsync(string query)
+    {
+        _contentSearchCts?.Cancel();
+        _contentSearchCts?.Dispose();
+        _contentSearchCts = null;
+
+        // One character matches most transcripts and tells the reader nothing; the round trip is
+        // pure cost until the query is specific enough to exclude something.
+        if (query.Trim().Length < 3)
+            return;
+
+        var cts = new CancellationTokenSource();
+        _contentSearchCts = cts;
+
+        try
+        {
+            await Task.Delay(250, cts.Token);
+
+            if (Services.GetService(typeof(HttpClient)) is not HttpClient http)
+                return;
+
+            var url = $"{Nav.BaseUri.TrimEnd('/')}/api/conversations/search?q={Uri.EscapeDataString(query.Trim())}&limit=20";
+            _contentSearching = true;
+
+            var response = await http.GetAsync(url, cts.Token);
+            if (!response.IsSuccessStatusCode)
+                return;
+
+            var payload = await response.Content.ReadFromJsonAsync<ContentSearchResponse>(cts.Token);
+            if (cts.Token.IsCancellationRequested)
+                return;
+
+            var matches = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var result in payload?.Results ?? [])
+            {
+                if (!string.IsNullOrWhiteSpace(result.ConversationId))
+                    matches[result.ConversationId] = result.Snippet ?? "";
+            }
+
+            _contentMatches = matches;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a later keystroke, or the panel closed. Not a failure.
+        }
+        catch (Exception)
+        {
+            // See remarks: the title list still stands on its own.
+        }
+        finally
+        {
+            // Re-render on EVERY exit, not just the successful one. _contentSearching drives the
+            // "Searching messages..." text, so clearing the flag without a render left the panel
+            // claiming it was still looking after a failed or empty search - permanently.
+            _contentSearching = false;
+            if (!cts.IsCancellationRequested)
+                await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private sealed record ContentSearchResponse(IReadOnlyList<ContentSearchResult>? Results);
+
+    private sealed record ContentSearchResult(string? ConversationId, string? Snippet);
 
     private async Task OnKeyDownAsync(KeyboardEventArgs e)
     {

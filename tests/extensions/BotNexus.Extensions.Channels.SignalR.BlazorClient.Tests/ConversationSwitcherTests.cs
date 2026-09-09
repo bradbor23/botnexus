@@ -546,4 +546,111 @@ public sealed class ConversationSwitcherTests : IDisposable
         var own = Rows(cut).Single(r => r.GetAttribute("data-agent-id") == "agent-1");
         Assert.Equal("true", own.GetAttribute("aria-selected"));
     }
+
+    // ── content search hookup (Interface Review P1) ───────────────────────────
+
+    [Fact]
+    public async Task Typing_reaches_the_content_search_endpoint_but_only_once_the_query_is_specific()
+    {
+        // Both halves in one test, and deliberately so: the short query is proved NOT to have
+        // fired by the call count when the long one does. Asserting "no call yet" on its own would
+        // pass simply by running before the debounce elapsed.
+        var handler = new RecordingHandler();
+        _ctx.Services.AddSingleton(new HttpClient(handler));
+        Seed(Conversation("c-1", "Tuesday standup"));
+        var cut = Render();
+        Open(cut);
+
+        Input(cut).Input("ga");
+        Input(cut).Input("gateway");
+
+        await cut.WaitForAssertionAsync(
+            () => handler.Urls.ShouldNotBeEmpty(),
+            TimeSpan.FromSeconds(5));
+
+        handler.Urls.Count.ShouldBe(1, "a two-character query must not put a full-text search behind it");
+        handler.Urls[0].ShouldContain("/api/conversations/search");
+        handler.Urls[0].ShouldContain("q=gateway");
+    }
+
+    [Fact]
+    public async Task A_conversation_matched_only_by_content_shows_its_snippet()
+    {
+        // The snippet is the only thing explaining why a row whose title does not contain the
+        // query is in the list.
+        var handler = new RecordingHandler
+        {
+            Body = """{"results":[{"conversationId":"c-1","snippet":"the gateway restart lost its pid file"}]}"""
+        };
+        _ctx.Services.AddSingleton(new HttpClient(handler));
+        Seed(Conversation("c-1", "Tuesday standup"));
+        var cut = Render();
+        Open(cut);
+
+        Input(cut).Input("gateway");
+
+        await cut.WaitForAssertionAsync(
+            () => cut.FindAll("[data-testid='conversation-switcher-snippet']").ShouldNotBeEmpty(),
+            TimeSpan.FromSeconds(5));
+
+        cut.Find("[data-testid='conversation-switcher-snippet']").TextContent
+            .ShouldContain("gateway restart");
+    }
+
+    [Fact]
+    public async Task A_failed_content_search_leaves_the_title_matches_alone()
+    {
+        // The title filter has already produced a usable list. Turning that into an error because
+        // a supplementary search did not answer would make the control worse than before content
+        // search existed.
+        var handler = new RecordingHandler { StatusCode = System.Net.HttpStatusCode.InternalServerError };
+        _ctx.Services.AddSingleton(new HttpClient(handler));
+        Seed(Conversation("c-1", "Skill Review"));
+        var cut = Render();
+        Open(cut);
+
+        Input(cut).Input("skill");
+
+        await cut.WaitForAssertionAsync(
+            () => handler.Urls.ShouldNotBeEmpty(),
+            TimeSpan.FromSeconds(5));
+
+        cut.FindAll("[data-testid='conversation-switcher-row']").ShouldNotBeEmpty(
+            "a failed content search must not take the title matches down with it");
+    }
+
+    [Fact]
+    public void Typing_without_a_registered_HttpClient_is_harmless()
+    {
+        // The switcher is rendered inside ChatPanel, whose fixtures do not register an HttpClient.
+        // The client is resolved, not injected, for exactly that reason - the same lesson as
+        // CronApiClient above.
+        Seed(Conversation("c-1", "Gateway notes"));
+        var cut = Render();
+        Open(cut);
+
+        Input(cut).Input("gateway");
+
+        cut.FindAll("[data-testid='conversation-switcher-row']").ShouldNotBeEmpty();
+    }
+
+    /// <summary>Records the URLs the switcher asks for, and answers with a canned payload.</summary>
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public List<string> Urls { get; } = [];
+
+        public System.Net.HttpStatusCode StatusCode { get; set; } = System.Net.HttpStatusCode.OK;
+
+        public string Body { get; set; } = """{"results":[]}""";
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Urls.Add(Uri.UnescapeDataString(request.RequestUri!.ToString()));
+            return Task.FromResult(new HttpResponseMessage(StatusCode)
+            {
+                Content = new StringContent(Body, System.Text.Encoding.UTF8, "application/json")
+            });
+        }
+    }
 }
