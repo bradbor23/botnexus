@@ -61,6 +61,51 @@ internal static class TestAwait
     }
 
     /// <summary>
+    /// Waits for a task to SETTLE - complete, fault or cancel - without observing its outcome, under
+    /// the same generous deadline as <see cref="SignaledAsync(Task, string, TimeSpan?, CancellationToken)"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the honest replacement for <c>await Task.WhenAny(work, Task.Delay(n))</c> followed by
+    /// <c>completed.ShouldBeSameAs(work)</c>: a hang guard that proves the work terminated, leaving
+    /// the NEXT assertion to say how. <see cref="SignaledAsync(Task, string, TimeSpan?, CancellationToken)"/>
+    /// cannot serve here, because it awaits the task and would rethrow - and these call sites exist
+    /// precisely to be followed by <c>Should.ThrowAsync&lt;...&gt;(() =&gt; work)</c>. Swallowing the
+    /// fault here is therefore deliberate, not sloppy: the caller observes it a line later, and a
+    /// test that forgets to is left with a task whose exception nobody read, exactly as before.
+    /// </para>
+    /// <para>
+    /// Only the deadline is reported. Everything else the task did is the caller's to assert on.
+    /// </para>
+    /// </remarks>
+    public static async Task SettledAsync(
+        Task task,
+        string description,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
+
+        var window = timeout ?? DefaultTimeout;
+        try
+        {
+            await task.WaitAsync(window, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException) when (!task.IsCompleted)
+        {
+            throw new TimeoutException(
+                $"Timed out after {window.TotalSeconds:0.###}s waiting for {description}. The work never " +
+                "terminated, so it hung rather than finishing with any outcome.");
+        }
+        catch
+        {
+            // Settled with a fault or cancellation. That is an outcome, not a hang, and the caller
+            // asserts on it next.
+        }
+    }
+
+    /// <summary>
     /// Waits for a signal that carries a value, under the same generous deadline as
     /// <see cref="SignaledAsync(Task, string, TimeSpan?, CancellationToken)"/>.
     /// </summary>

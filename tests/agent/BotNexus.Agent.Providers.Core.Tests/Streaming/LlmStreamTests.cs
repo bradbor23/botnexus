@@ -172,8 +172,7 @@ public class LlmStreamTests
         stream.EndWithoutResult("transport closed mid-parse");
 
         var resultTask = stream.GetResultAsync();
-        var completed = await Task.WhenAny(resultTask, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(resultTask, "GetResultAsync must complete, not hang, when the stream ends with no result");
+        await TestAwait.SettledAsync(resultTask, "GetResultAsync to terminate when the stream ends without a result");
 
         var ex = await Should.ThrowAsync<LlmStreamIncompleteException>(() => resultTask);
         ex.Reason.ShouldBe("transport closed mid-parse");
@@ -201,8 +200,7 @@ public class LlmStreamTests
                 events.Add(evt);
         });
 
-        var completed = await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(drain, "enumeration must terminate when the stream ends without a result");
+        await TestAwait.SettledAsync(drain, "enumeration to terminate when the stream ends without a result");
         await drain;
 
         events.ShouldHaveSingleItem().ShouldBeOfType<TextDeltaEvent>();
@@ -272,8 +270,9 @@ public class LlmStreamTests
         stream.EndWithoutResult("Copilot Responses stream parse failed: The operation was canceled.", cts.Token);
 
         var resultTask = stream.GetResultAsync();
-        var completed = await Task.WhenAny(resultTask, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(resultTask, "a cancelled stream must still complete its result task, not hang");
+        await TestAwait.SettledAsync(
+            resultTask,
+            "a cancelled stream to still complete its result task rather than hang");
 
         await Should.ThrowAsync<OperationCanceledException>(() => resultTask);
         resultTask.Status.ShouldBe(
@@ -299,8 +298,7 @@ public class LlmStreamTests
         stream.EndWithoutResult("Copilot Responses stream parse failed: malformed frame", cts.Token);
 
         var resultTask = stream.GetResultAsync();
-        var completed = await Task.WhenAny(resultTask, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(resultTask);
+        await TestAwait.SettledAsync(resultTask, "GetResultAsync to terminate on a malformed frame");
 
         var ex = await Should.ThrowAsync<LlmStreamIncompleteException>(() => resultTask);
         ex.Reason.ShouldBe("Copilot Responses stream parse failed: malformed frame");
@@ -329,8 +327,7 @@ public class LlmStreamTests
                 events.Add(evt);
         });
 
-        var completed = await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(drain, "enumeration must terminate when a cancelled stream ends");
+        await TestAwait.SettledAsync(drain, "enumeration to terminate when a cancelled stream ends");
         await drain;
         events.ShouldHaveSingleItem().ShouldBeOfType<TextDeltaEvent>();
     }

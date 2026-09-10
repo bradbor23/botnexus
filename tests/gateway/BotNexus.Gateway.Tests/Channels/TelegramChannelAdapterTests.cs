@@ -267,8 +267,7 @@ public sealed class TelegramChannelAdapterTests
         await adapter.StartAsync(Mock.Of<IChannelDispatcher>(), CancellationToken.None);
 
         var stopTask = adapter.StopAsync(CancellationToken.None);
-        var completed = await Task.WhenAny(stopTask, Task.Delay(PollingSignalHangGuard));
-        completed.ShouldBe(stopTask);
+        await TestAwait.SettledAsync(stopTask, "the adapter to stop rather than hang on its polling signal");
     }
 
     [Fact]

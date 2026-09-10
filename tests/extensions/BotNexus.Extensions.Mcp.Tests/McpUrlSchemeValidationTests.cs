@@ -339,6 +339,7 @@ public sealed class McpUrlSchemeValidationTests
 
         await originLoop;
         // Give any (incorrect) follow-up request a chance to land before asserting it did not.
+        // delay-is-not-a-signal: expiry is expected - the assertion is that no follow-up request lands
         var raced = await Task.WhenAny(targetLoop, Task.Delay(TimeSpan.FromSeconds(2)));
 
         origin.Stop();
