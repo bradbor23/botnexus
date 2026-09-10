@@ -33,10 +33,11 @@ public sealed record CompactionOptions
         Description = "Token threshold as a fraction of context window (0.0-1.0) at which auto-compaction triggers (default: 0.6).",
         GroupName = "Compaction",
         Order = 2)]
-    // Not a secret: a 0-1 ratio. It carried [Secret] only because its name contains the substring
-    // "token", and redaction substitutes the string "***" for the terminal value - which put a
-    // string where a double belongs in the GET /config document. The architecture fence already
-    // records this property as a reviewed non-secret exemption; the annotation contradicted it.
+    // #3654: this is a numeric tuning knob, NOT a credential. It was previously annotated
+    // Secret = true, which made the reflection-driven secret discovery in ConfigSecretMerge treat
+    // it as a scalar redaction target: GET /api/config served the string "***" against a schema
+    // that declares a number, and the SchemaForm password branch committed a JSON *string* back,
+    // producing a config document that would not bind.
     [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 2)]
     public double TokenThresholdRatio { get; init; } = 0.6;
 
@@ -46,7 +47,8 @@ public sealed record CompactionOptions
         Description = "Approximate context window size in tokens for the model (default: 128000).",
         GroupName = "Compaction",
         Order = 3)]
-    // Not a secret, for the same reason as TokenThresholdRatio above: a window size in tokens.
+    // #3654: numeric, not a credential (see TokenThresholdRatio above). Redacting it was also
+    // pointless -- the value is printed in cleartext by the /context slash command.
     [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 3)]
     public int ContextWindowTokens { get; init; } = 128_000;
 

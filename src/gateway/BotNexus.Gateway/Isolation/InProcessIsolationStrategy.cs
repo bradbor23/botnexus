@@ -10,6 +10,7 @@ using BotNexus.Agent.Core.Hooks;
 using BotNexus.Agent.Core.Types;
 using BotNexus.Agent.Providers.Core.Resolution;
 using BotNexus.Cron;
+using BotNexus.Domain.Text;
 using BotNexus.Cron.Tools;
 using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Abstractions.Conversations;
@@ -464,14 +465,12 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
                 initialMessages.Count, summaries.Count, context.History.Count, context.SessionId);
         }
 
-        // #1710: best-effort mid-loop auto-compaction hook. ShouldCompact ran ONLY pre-turn at the
-        // gateway, so a single long dispatch (cron / autonomous follow-up loop) grew the transcript
-        // past the token threshold unchecked until provider overflow. The loop now re-checks between
-        // outer iterations: when over threshold, compact and resync history via the coordinator (the
-        // existing TryReplaceHistoryFromSnapshot apply + handle eviction). Mirrors PrepareTurnAsync.
-        // CompactionOptions and the compactor are consumed read-only (#1687). Null when the supporting
-        // services are unavailable, preserving prior behaviour.
-        Func<CancellationToken, Task>? maybeCompactAsync = null;
+        // #1710/#4121: best-effort mid-loop auto-compaction hook. A long dispatch re-checks
+        // between outer iterations, but it must not evict the handle that is executing this callback:
+        // DisposeAsync would call Agent.AbortAsync and await the same active run. Instead the
+        // coordinator persists without eviction and this callback returns a replacement context for
+        // the loop's next provider turn. Null preserves prior behaviour when services are unavailable.
+        Func<CancellationToken, Task<AgentContext?>>? maybeCompactAsync = null;
         var compactor = _serviceProvider.GetService<ISessionCompactor>();
         var compactionCoordinator = _serviceProvider.GetService<ISessionCompactionCoordinator>();
         var compactionOptions = _serviceProvider.GetService<IOptionsMonitor<CompactionOptions>>();
@@ -493,10 +492,36 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
                 var scopedOptions = ScopedCompactionWindow.Apply(compactionOptions.CurrentValue, scopedContextWindow);
                 if (liveSession is null || !compactor.ShouldCompact(liveSession.Session, scopedOptions))
                 {
-                    return;
+                    return null;
                 }
 
-                await compactionCoordinator.CompactAsync(compactAgentId, liveSession, cancellationToken).ConfigureAwait(false);
+                var outcome = await compactionCoordinator.CompactAsync(
+                    compactAgentId,
+                    liveSession,
+                    cancellationToken,
+                    handlePolicy: CompactionHandlePolicy.KeepCurrent).ConfigureAwait(false);
+                if (!outcome.Applied)
+                {
+                    return null;
+                }
+
+                var compactedEntries = SessionContextProjector.ProjectForResume(liveSession.History);
+                var compactedSummaries = compactedEntries
+                    .Where(entry => entry.Role.Equals(MessageRole.System) && entry.IsCompactionSummary)
+                    .Select(entry => entry.Content)
+                    .Where(content => !string.IsNullOrWhiteSpace(content))
+                    .ToList();
+                var compactedSystemPrompt = compactedSummaries.Count == 0
+                    ? enrichedSystemPrompt
+                    : string.IsNullOrWhiteSpace(enrichedSystemPrompt)
+                        ? string.Join("\n\n", compactedSummaries)
+                        : $"{enrichedSystemPrompt}\n\n## Prior conversation (compacted summary)\n{string.Join("\n\n", compactedSummaries)}";
+                var compactedMessages = compactedEntries
+                    .Select(ConvertSessionEntryToAgentMessage)
+                    .OfType<AgentMessage>()
+                    .ToList();
+
+                return new AgentContext(compactedSystemPrompt, compactedMessages, tools);
             };
         }
 
@@ -623,7 +648,14 @@ public sealed class InProcessIsolationStrategy : IIsolationStrategy
         };
         IAgentHandle handle = inProcessHandle;
 
-        _logger.LogWarning(
+        // #3746: Debug, not Warning. This sits unconditionally on the SUCCESS return path - there is
+        // no failure semantics here for an operator to act on, and at fleet scale it produced 44% of
+        // every warning the gateway emitted (671 lines/day), making the WRN channel useless as a
+        // health signal. Information would still be redundant: the caller already records the same
+        // lifecycle event at INFO ("Created agent instance '{AgentId}' for session '{SessionId}'
+        // (isolation: in-process)"). What this line adds over that one is the resolved tool roster,
+        // which is diagnostic detail - exactly what Debug is for. Same defect class as #2751.
+        _logger.LogDebug(
             "Created agent handle for '{AgentId}' session '{SessionId}' with {ToolCount} tools: {ToolNames}",
             descriptor.AgentId, context.SessionId, tools.Count,
             string.Join(", ", tools.Select(t => t.Name)));
@@ -1101,33 +1133,56 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
             _ => 0
         });
 
+        // #3655: the TOKEN figures below are script-weighted through the shared estimator, so a CJK
+        // transcript is not reported at a quarter of its real cost. The CHARACTER figures beside
+        // them stay raw - they are a different unit and the report shows both.
+        var userAssistantUnits = state.Messages.Sum(static message => message switch
+        {
+            AgentCoreUserMessage user => TokenEstimator.WeightedCharUnits(user.Content),
+            AssistantAgentMessage assistant => TokenEstimator.WeightedCharUnits(assistant.Content),
+            SystemAgentMessage system => TokenEstimator.WeightedCharUnits(system.Content),
+            SubAgentCompletionMessage subAgent => TokenEstimator.WeightedCharUnits(subAgent.Content),
+            _ => 0L
+        });
+
         var toolResultChars = state.Messages.Sum(static message => message switch
         {
             ToolResultAgentMessage tool => tool.Result.Content.Sum(static c => c.Value?.Length ?? 0),
             _ => 0
         });
 
+        var toolResultUnits = state.Messages.Sum(static message => message switch
+        {
+            ToolResultAgentMessage tool => tool.Result.Content.Sum(static c => TokenEstimator.WeightedCharUnits(c.Value)),
+            _ => 0L
+        });
+
+        var systemPromptUnits = TokenEstimator.WeightedCharUnits(state.SystemPrompt);
+        var toolDefinitionChars = toolDefinitions.Sum(static t => t.SchemaChars);
         var historyChars = userAssistantChars + toolResultChars;
-        var totalChars = systemPromptChars
-            + toolDefinitions.Sum(static t => t.SchemaChars + t.Name.Length + (t.Description?.Length ?? 0))
-            + historyChars;
-        var estimatedTokens = totalChars / 4;
+        var historyUnits = userAssistantUnits + toolResultUnits;
+        var totalUnits = systemPromptUnits
+            + ((long)toolDefinitions.Sum(static t => t.SchemaChars + t.Name.Length + (t.Description?.Length ?? 0)))
+            + historyUnits;
+        var estimatedTokens = TokenEstimator.TokensFromUnits(totalUnits);
 
         return new ContextDiagnostics
         {
             SystemPromptChars = systemPromptChars,
-            SystemPromptTokens = systemPromptChars / 4,
+            SystemPromptTokens = TokenEstimator.TokensFromUnits(systemPromptUnits),
             ToolCount = state.Tools.Count,
-            ToolDefinitionChars = toolDefinitions.Sum(static t => t.SchemaChars),
-            ToolDefinitionTokens = toolDefinitions.Sum(static t => t.SchemaChars) / 4,
+            ToolDefinitionChars = toolDefinitionChars,
+            // Tool schemas are JSON emitted by the runtime: structurally ASCII, so the script-blind
+            // ratio is the right estimate and inspecting them would cost a scan for no accuracy.
+            ToolDefinitionTokens = TokenEstimator.EstimateTokensFromCharCount(toolDefinitionChars),
             Tools = toolDefinitions,
             HistoryEntryCount = historyEntries,
             HistoryChars = historyChars,
-            HistoryTokens = historyChars / 4,
+            HistoryTokens = TokenEstimator.TokensFromUnits(historyUnits),
             UserAssistantChars = userAssistantChars,
-            UserAssistantTokens = userAssistantChars / 4,
+            UserAssistantTokens = TokenEstimator.TokensFromUnits(userAssistantUnits),
             ToolResultChars = toolResultChars,
-            ToolResultTokens = toolResultChars / 4,
+            ToolResultTokens = TokenEstimator.TokensFromUnits(toolResultUnits),
             TotalEstimatedTokens = estimatedTokens,
             SystemPrompt = state.SystemPrompt
         };
@@ -1232,8 +1287,33 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
                 : null,
             RunUsage = AggregateRunUsage(messages),
             TurnCount = messages.OfType<AssistantAgentMessage>().Count(),
-            ToolCalls = BuildToolCalls(messages, pendingToolCallIds: null)
+            ToolCalls = BuildToolCalls(messages, pendingToolCallIds: null),
+            // #3565: the blocking boundary now carries the terminal message's provider error, so a
+            // sub-agent run that ended on a rejected turn is distinguishable from one that merely
+            // said little. Gated strictly on StopReason.Error for the same reason MapTurnError is:
+            // an aborted turn also carries an ErrorMessage, and keying on a non-empty message alone
+            // would promote every ordinary cancellation into a fault.
+            TerminalError = DescribeTerminalError(lastAssistant)
         };
+    }
+
+    /// <summary>
+    /// Returns the provider error to report for a run's terminal assistant message, or
+    /// <see langword="null"/> when the message did not end in a provider error (#3565).
+    /// </summary>
+    /// <remarks>
+    /// A provider that errors without detail still yields a non-null string: the presence of the
+    /// error is the load-bearing signal, and collapsing a detail-free failure to <c>null</c> would
+    /// make it indistinguishable from a clean run - the exact conflation #3565 exists to remove.
+    /// </remarks>
+    internal static string? DescribeTerminalError(AssistantAgentMessage? lastAssistant)
+    {
+        if (lastAssistant is not { FinishReason: StopReason.Error })
+            return null;
+
+        return string.IsNullOrWhiteSpace(lastAssistant.ErrorMessage)
+            ? "The provider ended the turn with an error but supplied no detail."
+            : lastAssistant.ErrorMessage;
     }
 
     /// <summary>
@@ -1307,7 +1387,8 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
             // instead of leaving the most expensive runs on the platform unmeasured.
             RunUsage = AggregateRunUsage(snapshot),
             TurnCount = snapshot.OfType<AssistantAgentMessage>().Count(),
-            ToolCalls = BuildToolCalls(snapshot, _agent.State.PendingToolCalls)
+            ToolCalls = BuildToolCalls(snapshot, _agent.State.PendingToolCalls),
+            TerminalError = DescribeTerminalError(lastAssistant)
         };
         return new AgentPromptInterruptedException(partial, oce.CancellationToken);
     }

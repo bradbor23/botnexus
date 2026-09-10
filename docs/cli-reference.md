@@ -1,6 +1,6 @@
 # BotNexus CLI Reference
 
-The `botnexus` command-line tool provides quick access to configuration and agent management without editing `config.json` manually.
+The `botnexus` command-line tool is the stable interface for configuration and agent management. Its configuration commands work with both JSON-backed and SQLite-backed BotNexus homes, so scripts and runbooks do not need to know which backend is active.
 
 ## Setting up the `botnexus` alias
 
@@ -976,7 +976,7 @@ recoverable.
 
 ## config get
 
-Read a configuration value by its dotted key path.
+Read a configuration value by its dotted key path. The command resolves the active backend automatically: it works for a legacy JSON-only home, a SQLite-backed home with no JSON file, and a transitional home containing both.
 
 ### Usage
 
@@ -1038,7 +1038,7 @@ assistant
 
 ## config set
 
-Set a configuration value by its dotted key path.
+Set a configuration value by its dotted key path. The value is type-checked against the platform model, then written through the shared configuration writer to whichever persistent backend is active. The command syntax is identical for JSON and SQLite.
 
 ### Usage
 
@@ -1567,7 +1567,7 @@ The wizard:
 1. Asks which provider to configure (GitHub Copilot, OpenAI, or Anthropic)
 2. Authenticates — OAuth device code flow for Copilot, API key prompt for others
 3. Presents available models and lets you pick a default
-4. Saves the provider to `config.json` (and OAuth tokens to `auth.json`)
+4. Saves the provider through the active configuration backend (and OAuth tokens to `auth.json`)
 
 ### Usage
 
@@ -1626,7 +1626,7 @@ Default model: gpt-4.1
 botnexus provider setup
 ```
 
-Select "OpenAI" and enter your API key when prompted. The key is stored directly in `config.json`.
+Select "OpenAI" and enter your API key when prompted. The provider setting is written through the active configuration backend.
 
 ---
 
@@ -2053,8 +2053,8 @@ botnexus prompt run <TEMPLATE> [OPTIONS]
 | Option | Description |
 |---|---|
 | `--param <KEY=VALUE>` | Template parameter as `key=value`. Repeat for multiple values. |
-| `--agent <ID>` | Target agent ID. Falls back to `gateway.defaultAgentId` if not specified. |
-| `--session <ID>` | Optional session ID for conversation continuity. If omitted, a new session is created. |
+| `--agent <ID>` | Target agent ID. Falls back to `gateway.defaultAgentId` if not specified. Supplying the flag with a blank value is an error (issue #3739). |
+| `--session <ID>` | Optional session ID for conversation continuity. If omitted, a new session is created. Supplying the flag with a blank value is an error (issue #3739). |
 | `--config <PATH>` | Explicit path to `config.json`. Defaults to `~/.botnexus/config.json`. |
 | `--target <DIR>` | BotNexus home directory (config, workspace, extensions). Defaults to `~/.botnexus/`. |
 | `--gateway-url <URL>` | Override gateway URL. Defaults to `gateway.listenUrl` from config (or `http://localhost:5005`). |
@@ -2087,6 +2087,19 @@ botnexus prompt run weekly-status --param project=Gateway --param owner=Bender
 
 ```powershell
 botnexus prompt run daily-standup --session my-session-123
+```
+
+**Blank selectors are rejected, not ignored:**
+
+Omitting `--agent` or `--session` is fine and keeps the fallback behaviour above. Passing either flag
+with an empty or whitespace-only value - what an unset shell variable expands to - fails with a
+non-zero exit before the turn is dispatched, rather than silently running against the default agent
+or a freshly minted session the caller has no id for.
+
+```powershell
+# $SESSION_ID is unset: refused instead of starting an invisible new session
+botnexus prompt run daily-standup --session "$SESSION_ID"
+# Error: --session was supplied but is blank. Pass a value, or omit the flag entirely.
 ```
 
 **Execute against a non-default gateway:**
@@ -2320,6 +2333,11 @@ botnexus doctor agents [OPTIONS]
 | `--target <DIR>` | BotNexus home directory. Defaults to `~/.botnexus`. |
 
 > Without `--cleanup-orphans`, the command reports the plan and exits without deleting anything.
+
+Each directory is listed with its total size on disk and the date of its newest file, so an orphan
+can be judged before it is deleted, and the orphan lines are followed by a total. Deletion always
+re-derives registration from `config.json` at deletion time and refuses any directory whose id is
+registered, so a stale or hand-built plan can never remove a live agent's workspace or memory store.
 
 ### Examples
 
@@ -2667,15 +2685,29 @@ botnexus debug logs <COMMAND> [OPTIONS]
 | `tail` | Show the most recent log entries |
 | `errors` | Filter to ERROR and FATAL entries |
 | `search` | Search log content by text |
-| `session` | Filter logs for a specific session |
+| `session <SESSION-ID>` | Filter logs for a specific session |
 
-### Options
+### Global options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--target <DIR>` | `~/.botnexus` | BotNexus home directory |
 | `--format` | `table` | Output format: `table` or `json` |
-| `--lines <N>` | `50` | Number of entries to show |
+
+### Per-subcommand options
+
+`--limit` is the entry cap and its default differs per subcommand. There is no `--lines` option.
+
+| Subcommand | Option | Default | Description |
+|------------|--------|---------|-------------|
+| `tail` | `--limit <N>` | `50` | Maximum lines to return |
+| `tail` | `--level <LEVEL>` | _(none)_ | Filter by level: `debug`, `info`, `warn`, `error` |
+| `errors` | `--limit <N>` | `20` | Maximum error lines to return |
+| `search` | `--term <TEXT>` | _required_ | Keyword to search for |
+| `search` | `--since <ISO>` | _(none)_ | Only search log files after this datetime |
+| `search` | `--limit <N>` | `50` | Maximum matching lines to return |
+| `session` | `<session-id>` | _required_ | Positional argument: the session ID to search for |
+| `session` | `--limit <N>` | `100` | Maximum matching lines to return |
 
 ### Examples
 
@@ -2683,14 +2715,20 @@ botnexus debug logs <COMMAND> [OPTIONS]
 # Tail recent logs
 botnexus debug logs tail
 
+# Tail the last 200 warnings
+botnexus debug logs tail --limit 200 --level warn
+
 # Show recent errors
 botnexus debug logs errors
 
 # Search for a pattern
-botnexus debug logs search --query "timeout"
+botnexus debug logs search --term "timeout"
 
-# Filter by session
-botnexus debug logs session --id "session-abc123"
+# Search only recent log files
+botnexus debug logs search --term "timeout" --since 2026-09-01T00:00:00
+
+# Filter by session (positional argument, not an option)
+botnexus debug logs session "session-abc123"
 ```
 
 ---

@@ -1,6 +1,8 @@
 # BotNexus API Reference
 
-Complete reference for BotNexus REST API endpoints, including agents, sessions, providers, skills, and system status.
+Reference for BotNexus REST API endpoints, including agents, sessions, providers,
+skills, and system status. This page is not an exhaustive route inventory; see the
+[REST API index](./api/README.md) for the owning per-area references and their scope.
 
 ## Table of Contents
 
@@ -12,12 +14,16 @@ Complete reference for BotNexus REST API endpoints, including agents, sessions, 
 6. [Skills Management](#skills-management)
 7. [Channels Management](#channels-management)
 8. [Extensions Management](#extensions-management)
-9. [Chat](#chat)
-10. [Commands](#commands)
-11. [Session Management](#session-management)
-12. [System & Status](#system--status)
-13. [Error Handling](#error-handling)
-14. [Webhooks](#webhooks)
+9. [Plugins Management](#plugins-management)
+10. [Telemetry Metrics](#telemetry-metrics)
+11. [Chat](#chat)
+12. [Commands](#commands)
+13. [Session Management](#session-management)
+14. [System & Status](#system--status)
+15. [Error Handling](#error-handling)
+16. [Secrets](#secrets)
+17. [Webhooks](#webhooks)
+18. [Real-Time Streaming (SignalR Hub)](#real-time-streaming-signalr-hub)
 
 ---
 
@@ -27,15 +33,17 @@ Complete reference for BotNexus REST API endpoints, including agents, sessions, 
 
 All endpoints follow REST conventions and return JSON responses. The default port is **5005** (configurable via `config.json`).
 
-**Authentication:** All endpoints require API key authentication (see [Authentication](#authentication) below).
+**Authentication:** Requests handled by `GatewayAuthMiddleware` require a gateway API key when keys are configured, except for the explicit middleware bypasses listed in [Authentication](#authentication). Bypassing this middleware does not bypass an endpoint's own authentication. When the API-key handler has no configured identities, it uses development-mode admin access, subject to the optional browser-Origin guard described below.
 
 ---
 
 ## Sparse Fieldsets (`?fields=`)
 
-Any `GET` endpoint accepts an optional `?fields=` query parameter that projects each returned
-object down to only the requested **top-level** fields. This is useful for reducing payload size
-and bandwidth when a client only needs a few properties.
+Supported MVC controller `GET` responses accept an optional `?fields=` query parameter that
+projects returned JSON objects down to the requested **top-level** fields. The gateway registers
+`SparseFieldsetResultFilter` through `AddControllers`; it is not middleware or a filter for minimal
+API endpoints. Projection requires a non-null `ObjectResult` with a successful status (2xx, or no
+explicit status), a non-`ProblemDetails` value, and at least one usable requested field name.
 
 **Default is everything.** When `?fields=` is omitted (or empty/whitespace), the response is the
 full object, byte-for-byte identical to the behaviour before this feature existed. Sparse fieldsets
@@ -43,14 +51,18 @@ are strictly additive and never change the default response shape.
 
 ### Rules
 
+For responses that enter the MVC result filter:
+
 - **Comma-separated:** `?fields=agentId,displayName`.
 - **Case-insensitive:** field names are matched case-insensitively against the JSON property names
   (`?fields=agentid,DISPLAYNAME` works).
 - **Lenient / unknown fields ignored:** unknown field names are silently dropped and never produce a
-  `400`. If none of the requested names match, an empty object `{}` is returned per item.
+  `400`. If none of the requested names match, each projected JSON object becomes `{}`.
 - **Empty parameter = full object:** `?fields=` or `?fields=%20%20` returns the full object.
-- **Applies to lists and single items:** both array responses (list endpoints) and single-object
-  responses (get-by-id endpoints) are projected. For arrays, every element is projected.
+- **Objects and arrays:** single JSON objects and object elements of JSON arrays are projected.
+  Non-object array elements remain unchanged; nested objects inside a selected property are not filtered.
+- **Other results pass through:** null values, other MVC result kinds, scalar JSON payloads, and
+  values whose serialization raises `NotSupportedException` are left unchanged.
 - **Top-level only:** nested field selection (e.g. `?fields=metadata.builtin`) is **not** supported
   in v1. Only top-level properties are projected.
 - **Errors pass through:** non-2xx responses and `ProblemDetails` error bodies are never projected.
@@ -78,8 +90,11 @@ X-Api-Key: your-api-key
 { "agentId": "farnsworth", "displayName": "Farnsworth" }
 ```
 
-The same parameter works on `GET /api/conversations` and `GET /api/conversations/{id}` and, by
-virtue of being a global result filter, on all other `GET` endpoints.
+The same parameter works on the MVC `GET /api/conversations` and `GET /api/conversations/{id}`
+responses. It does not follow that every `GET` endpoint supports projection: `/api/version`,
+`/api/uptime`, and `/api/world` are mapped separately as minimal `Results.Ok` handlers and do not
+enter this MVC filter. See the [filter implementation](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Api/Filters/SparseFieldsetResultFilter.cs)
+and [endpoint registration](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Api/Program.cs).
 
 ---
 
@@ -94,13 +109,34 @@ GET /api/agents
 X-Api-Key: your-api-key-here
 ```
 
-Or pass it as a query parameter:
+Alternatively, send the same gateway API key as a Bearer credential:
 
 ```http
-GET /api/agents?apiKey=your-api-key-here
+GET /api/agents
+Authorization: Bearer your-api-key-here
 ```
 
-**Exemptions:** `/health` and `/swagger` are exempt from authentication. The Blazor WebUI is also exempt when running in development mode.
+The built-in `ApiKeyGatewayAuthHandler` reads headers only; an `apiKey` query parameter is not supported. A nonblank `X-Api-Key` header takes precedence over `Authorization: Bearer` if both are present.
+
+### Gateway API-key middleware bypasses
+
+`GatewayAuthMiddleware.ShouldSkipAuth` bypasses this middleware for the following requests. These are not a blanket declaration that the endpoints are unsecured: endpoint-specific authentication and other middleware still apply.
+
+| Request | Scope of the bypass |
+|---|---|
+| Exact `/health` path | Bypasses the gateway API-key middleware. |
+| `/swagger` path prefix | Bypasses the gateway API-key middleware. |
+| `/api/federation/cross-world` path prefix | Uses federation authentication at the endpoint; the relay checks `X-Cross-World-Key` against the source world and target agent. |
+| `POST` under `/api/webhooks`, except the `/api/webhooks/registrations` and `/api/webhooks/runs` prefixes | Inbound delivery uses its registered webhook secret and HMAC signature verification. Registration/run management is not covered by this bypass. |
+| `GET` or `HEAD` for an existing non-directory file in the web root, outside `/api` | The static-file check is independent of development mode. It does not exempt arbitrary WebUI paths, missing files, directories, or API routes. |
+
+Prefixes above use path-segment matching, not arbitrary string-prefix matching. A bypass does not create an endpoint or imply that every HTTP method is supported there.
+
+### No-key development mode
+
+When the handler's configured API-key identity map is empty, it normally grants the `gateway-dev` admin identity. If the optional `GatewayDevOriginEnforcement` feature flag is enabled, a nonblank browser `Origin` must match `gateway.cors.allowedOrigins`; a rejected Origin produces an authentication failure (`401` from this middleware), not an admin identity. Missing or blank Origin headers are allowed by this guard. With no usable configured origins, the allow-list falls back to `http://localhost:5005`.
+
+The Origin guard is off by default. This no-key behavior applies to requests that reach the API-key handler; endpoints bypassing it retain their own authentication requirements. Do not treat no-key development mode as a production authentication policy.
 
 ### Request & Response Headers
 
@@ -136,7 +172,7 @@ The `/health` endpoint is exempt from rate limiting.
 {
   "gateway": {
     "rateLimit": {
-      "requestsPerMinute": 60,
+      "requestsPerMinute": 300,
       "windowSeconds": 60
     }
   }
@@ -552,102 +588,190 @@ X-Api-Key: your-api-key
 
 Skills are modular knowledge packages that enhance agent reasoning. Learn more in the [Skills Guide](./skills.md).
 
-> **Note:** Skills endpoints are provided by the main BotNexus application host, not the Gateway API project. They are included here for completeness.
+The `/api/skills` routes are registered by `SkillsEndpointContributor` through the
+`IEndpointContributor` seam rather than as a gateway controller, because a gateway project may not
+reference an extension project. They are ordinary authenticated `/api/*` routes and obey the same
+API-key rules as every controller route.
 
-### List Global Skills
+This surface is a **file browser over the skills directory**, not a skill-metadata catalogue: it
+returns directory trees and file contents rooted at `~/.botnexus/skills/`, so the shape is the same
+whether a path names a skill's `SKILL.md`, a `references/` document, or an ordinary folder.
+
+Every path is resolved against the skills root and then containment-checked. A path that escapes the
+root, is absolute, or fails skill-path validation returns `403 Forbidden` rather than `404` - a `404`
+would confirm whether the out-of-root target exists, which is exactly what a traversal attempt is
+probing for.
+
+### Browse the Skills Root
 
 **Endpoint:** `GET /api/skills`
 
-**Description:** Retrieve all global skills available to all agents.
+**Description:** Return the skills directory tree from the root.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `depth` | int | `2` | Traversal depth. Must be between `0` and `5`; anything outside that range is a `400`. |
 
 **Request:**
 ```http
-GET /api/skills
+GET /api/skills?depth=2
 X-Api-Key: your-api-key
 ```
 
 **Response:** 200 OK
 ```json
-[
-  {
-    "name": "git-workflow",
-    "description": "Git workflow and commit conventions for BotNexus",
-    "version": "1.0.0",
-    "scope": "Global",
-    "alwaysLoad": false,
-    "sourcePath": "/home/user/.botnexus/skills/git-workflow/SKILL.md"
-  },
-  {
-    "name": "testing-standards",
-    "description": "Testing patterns and best practices",
-    "version": "1.0.0",
-    "scope": "Global",
-    "alwaysLoad": false,
-    "sourcePath": "/home/user/.botnexus/skills/testing-standards/SKILL.md"
-  }
-]
+{
+  "type": "directory",
+  "path": "",
+  "depthLimit": 2,
+  "entries": [
+    {
+      "name": "git-workflow",
+      "path": "git-workflow",
+      "type": "directory",
+      "children": [
+        { "name": "SKILL.md", "path": "git-workflow/SKILL.md", "type": "file", "size": 4213 }
+      ]
+    }
+  ]
+}
+```
+
+Directories are ordered before files, then by name case-insensitively, so the rendered tree order is
+stable across reloads. `size` and `children` are omitted rather than sent as `null`.
+
+**Response:** 400 Bad Request - `depth` is outside `0..5`.
+
+A missing skills directory is **not** an error: the endpoint returns `200` with an empty `entries`
+array, so a first-run install renders the browser instead of an error state.
+
+### Read a Skills Path
+
+**Endpoint:** `GET /api/skills/{**path}`
+
+**Description:** Return one entry by skills-relative path. A directory yields a single-level listing
+(`depthLimit` `0`); a file yields its content.
+
+**Request:**
+```http
+GET /api/skills/git-workflow/SKILL.md
+X-Api-Key: your-api-key
+```
+
+**Response:** 200 OK - text file
+```json
+{
+  "path": "git-workflow/SKILL.md",
+  "type": "text",
+  "size": 4213,
+  "encoding": "utf-8",
+  "content": "# Git Workflow\n...",
+  "isTruncated": false
+}
 ```
 
 **Response Fields:**
-- `name` (string) — Skill identifier (folder name)
-- `description` (string) — Human-readable skill description
-- `version` (string) — Semantic version of the skill
-- `scope` (string) — Scope: `"Global"` or `"Agent"`
-- `alwaysLoad` (boolean) — Reserved for future use (always false currently)
-- `sourcePath` (string) — File path for debugging
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Skills-relative path, always with `/` separators |
+| `type` | string | `text`, `binary`, or `directory` |
+| `size` | int | Full file size in bytes - the size **on disk**, not the number of bytes returned |
+| `encoding` | string \| null | `utf-8` for text; omitted for binary |
+| `content` | string \| null | Decoded text; omitted for binary |
+| `isTruncated` | boolean | Whether the content was cut at the read cap |
+
+**Binary content is described, never returned.** A file detected as binary comes back with `type`
+`binary` and no `content`, so a browser client cannot accidentally render bytes as text.
+
+**Reads are capped at 512 KB.** A larger file returns the first 512 KB with `isTruncated` `true`
+while `size` still reports the true length - so a client can tell a truncated read from a complete
+one, which comparing the returned length against a cap could not.
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | The path is empty, absolute, or contains invalid characters |
+| `403 Forbidden` | The path escapes the skills root or fails skill-path validation |
+| `404 Not Found` | No file or directory exists at that path |
+
+### Write a Skills File
+
+**Endpoint:** `PUT /api/skills/{**path}`
+
+**Description:** Write UTF-8 text content to a file under the skills root.
+
+**Request:**
+```http
+PUT /api/skills/git-workflow/SKILL.md
+X-Api-Key: your-api-key
+Content-Type: application/json
+
+{
+  "content": "# Git Workflow\n..."
+}
+```
+
+**Response:** 204 No Content
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | Empty/absolute/invalid path, a missing body, the path names a **directory**, or the **parent directory does not exist** |
+| `403 Forbidden` | The path escapes the skills root or fails skill-path validation |
+
+**The write never creates intermediate directories.** A path whose parent is absent is a `400`
+rather than a silent `mkdir -p`, because a typo in a path segment would otherwise materialise a new
+skill folder that nothing knows about.
+
+### Delete a Skills Path
+
+**Endpoint:** `DELETE /api/skills/{**path}`
+
+**Description:** Delete a file, or a directory under the skills root.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `force` | boolean | `false` | Permit recursive deletion of a non-empty directory. |
+
+**Response:** 204 No Content
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | The path is empty, absolute, or contains invalid characters |
+| `403 Forbidden` | The path escapes the skills root or fails skill-path validation |
+| `404 Not Found` | No file or directory exists at that path |
+| `409 Conflict` | The path names a **non-empty directory** and `force` was not set |
+
+**A non-empty directory is a `409`, not a silent recursive delete.** Deleting a skill folder removes
+every reference and script inside it, so the conflict makes the caller state that intent explicitly
+via `force=true`; an empty directory needs no such confirmation because there is nothing to lose.
+
+### Skill Usage Telemetry
+
+`GET /api/skills/telemetry` and `GET /api/skills/telemetry/{skillName}` return recorded skill usage.
+Both are registered **before** the `{**path}` catch-all so `telemetry` binds as a literal segment
+rather than as a skills-relative file path - which also means a real directory named `telemetry`
+under the skills root is unreachable through this API. See
+[Skills: Usage Telemetry](extensions/skills.md) for the record shape.
 
 ---
 
 ### List Agent Skills
 
-**Endpoint:** `GET /api/agents/{name}/skills`
+> **Removed.** There is no per-agent skills endpoint. `AgentsController` declares no `skills`
+> action, and the skills surface is registered as a single extension route group
+> (`SkillsEndpointContributor`) with no per-agent variant. Use
+> [`GET /api/skills`](#list-global-skills), which returns every discovered skill; per-agent
+> resolution and `DisabledSkills` filtering happen inside the agent loop, not at the API.
 
-**Description:** Retrieve all skills (global + per-agent) loaded for a specific agent, respecting `DisabledSkills` configuration.
-
-**Parameters:**
-- `name` (string, path) — Agent name
-
-**Request:**
-```http
-GET /api/agents/code-reviewer/skills
-X-Api-Key: your-api-key
-```
-
-**Response:** 200 OK
-```json
-[
-  {
-    "name": "code-review-criteria",
-    "description": "Code review standards for this project",
-    "version": "1.0.0",
-    "scope": "Agent",
-    "alwaysLoad": false,
-    "sourcePath": "/home/user/.botnexus/agents/code-reviewer/skills/code-review-criteria/SKILL.md",
-    "contentPreview": "# Code Review Criteria\n\nReviewers should check:\n1. Functionality\n2. Code style\n3. Tests\n..."
-  },
-  {
-    "name": "git-workflow",
-    "description": "Git workflow and commit conventions for BotNexus",
-    "version": "1.0.0",
-    "scope": "Global",
-    "alwaysLoad": false,
-    "sourcePath": "/home/user/.botnexus/skills/git-workflow/SKILL.md"
-  }
-]
-```
-
-**Response Fields:**
-- All fields from [List Global Skills](#list-global-skills), plus:
-- `contentPreview` (string) — First 200 characters of skill markdown content (agent endpoint only)
-
-**Skill Resolution Order:**
+**Skill Resolution Order** (applied by the agent loop, not by an endpoint):
 1. Global skills from `~/.botnexus/skills/`
 2. Per-agent skills from `~/.botnexus/agents/{name}/skills/` (override global if same name)
 3. Filtered by agent's `DisabledSkills` configuration
 4. Sorted alphabetically by name
-
-**Error Responses:**
-- `404 Not Found` — Agent does not exist
 
 **Notes:**
 - Agent skills override global skills with the same name
@@ -909,6 +1033,258 @@ X-Api-Key: your-api-key
 **Notes:**
 - The report reflects the **startup** load pass, so it is stable for the lifetime of the process.
 - The non-200 status code makes this endpoint usable directly as a container or deployment readiness probe.
+
+---
+
+## Plugins Management
+
+The `/api/plugins` routes are registered by `PluginsEndpointContributor` through the
+`IEndpointContributor` seam rather than as a gateway controller, because a gateway project may not
+reference an extension project. They are ordinary authenticated `/api/*` routes and obey the same
+API-key rules as every controller route.
+
+This surface is **read plus preference toggle only**. Installing, updating and removing a plugin
+remain CLI operations, so there is deliberately no `POST /api/plugins` and no `DELETE`.
+
+### List Plugins
+
+**Endpoint:** `GET /api/plugins`
+
+**Description:** List every installed plugin, ordered by name so the rendered row order is stable across reloads rather than following the state file's write order.
+
+**Request:**
+```http
+GET /api/plugins
+X-Api-Key: your-api-key
+```
+
+**Response:** 200 OK
+```json
+[
+  {
+    "name": "botnexus-qmd",
+    "source": "https://github.com/example/botnexus-qmd.git",
+    "reference": "main",
+    "resolvedVersion": "9f1c0a4e0c6b6f1a7f6d2b3c4e5f60718293a4b5",
+    "manifestVersion": "1.2.0",
+    "updatesEnabled": true,
+    "installedAtUtc": "2026-08-14T09:12:44.113Z",
+    "fileCount": 18,
+    "trustState": "Unverified",
+    "trustDetail": "All recorded files are present. Content hashes are not yet catalogued.",
+    "updateState": "Unknown",
+    "availableVersion": null,
+    "updateProbeError": null
+  }
+]
+```
+
+### Get Plugin
+
+**Endpoint:** `GET /api/plugins/{name}`
+
+**Description:** Return one installed plugin by name.
+
+**Request:**
+```http
+GET /api/plugins/botnexus-qmd
+X-Api-Key: your-api-key
+```
+
+**Response:** 200 OK - a single `PluginPortalRow` object with the fields listed below.
+
+**Response:** 400 Bad Request - the name segment is empty or whitespace
+```json
+{ "error": "A plugin name is required." }
+```
+
+**Response:** 404 Not Found - no plugin is installed under that name
+```json
+{ "error": "Plugin 'botnexus-qmd' is not installed." }
+```
+
+An unknown name is a `404` rather than an empty `200`: the portal distinguishes "not installed" from
+"installed with nothing to show", and collapsing the two would make a typo indistinguishable from an
+empty plugin.
+
+### Set Update Preference
+
+**Endpoint:** `PUT /api/plugins/{name}/update-preference`
+
+**Description:** Set whether scheduled updates may replace this plugin's content. The change is written back to the installed record, not held in memory, so it survives a gateway restart.
+
+**Request:**
+```http
+PUT /api/plugins/botnexus-qmd/update-preference
+X-Api-Key: your-api-key
+Content-Type: application/json
+
+{
+  "updatesEnabled": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `updatesEnabled` | boolean | Yes | Whether scheduled updates may replace this plugin's content |
+
+**Response:** 200 OK - the updated `PluginPortalRow`. Note that setting `updatesEnabled` to `false` moves `updateState` to `"Pinned"`.
+
+**Response:** 400 Bad Request - the name segment is empty, or the request body is missing.
+
+**Response:** 404 Not Found - no plugin is installed under that name.
+
+The write preserves every other field of the installed record, including the recorded file set. That
+file list is the only description of what the plugin owns, so a preference write that dropped it
+would orphan every file the install wrote.
+
+### PluginPortalRow Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Plugin identifier, and the route parameter that addresses it |
+| `source` | string | Marketplace source the content was fetched from |
+| `reference` | string \| null | Branch or tag requested at install time; `null` for the source's default branch |
+| `resolvedVersion` | string | Exact revision currently on disk - a commit SHA for a git source |
+| `manifestVersion` | string \| null | Version the plugin's own manifest advertises; `null` when unversioned |
+| `updatesEnabled` | boolean | Whether a scheduled update may replace this plugin's content |
+| `installedAtUtc` | string (ISO 8601) | When the content currently on disk was materialised |
+| `fileCount` | int | Number of files the install recorded, so a modified count is interpretable |
+| `trustState` | string | Integrity state of the content on disk - see below |
+| `trustDetail` | string \| null | Why the trust state is what it is, in operator-readable terms; `null` when there is nothing to explain |
+| `updateState` | string | Update availability at the plugin's source - see below |
+| `availableVersion` | string \| null | Revision the source currently resolves to, when it was probed |
+| `updateProbeError` | string \| null | Why the update probe failed, when `updateState` is `"ProbeFailed"` |
+
+#### `trustState` - three states, not a boolean
+
+| Value | Meaning |
+|-------|---------|
+| `Unverified` | No content hash catalog exists for this plugin, so integrity cannot be attested. This is the expected state until the install-time trust catalog lands. |
+| `Verified` | Every file install recorded is present, and every hashed file matches its catalog entry. |
+| `Modified` | Content diverges from the installed record - a recorded file is missing, or a hashed file's content no longer matches the catalog. |
+
+**Why three states and not a boolean.** "We did not look" and "we looked and it is fine" are
+different answers, and collapsing them would present an unverifiable plugin as a trusted one. When
+several distinguishable states fold into one outcome there is no defect left to report - which is
+exactly the collapse this enum exists to prevent. A `Modified` plugin is *reported*, never silently
+repaired: re-materialising content would destroy the evidence an operator needs.
+
+Integrity is judged against the **recorded** file set, never against a directory scan. A file the
+user dropped alongside plugin content is not a modification of the plugin, and treating it as one
+would cry wolf on exactly the content removal this check is careful to preserve.
+
+#### `updateState` - five states, not a boolean
+
+| Value | Meaning |
+|-------|---------|
+| `Unknown` | The source was not probed, so update availability is genuinely unknown. This is the default. |
+| `Current` | The source resolves to the revision already on disk. |
+| `UpdateAvailable` | The source resolves to a different revision than the one on disk. |
+| `Pinned` | Updates are disabled for this plugin, so the source is not probed at all. |
+| `ProbeFailed` | The source could not be probed; `updateProbeError` says why. |
+
+**Why `Unknown` is not collapsed into "up to date".** Answering the update question costs a network
+round trip against the source, so the list view does not pay it: probing every source on every page
+render would make a list cost N git clones, and the answer would still be stale by the time it
+rendered. Reporting `Current` without having looked would be a claim rather than a finding.
+`Pinned` is likewise a complete and final answer rather than a placeholder for an unmade check - a
+pinned plugin would not be replaced by whatever the probe found.
+
+---
+
+## Telemetry Metrics
+
+Like `/api/plugins`, `/api/telemetry` is registered through the `IEndpointContributor` seam
+(`TelemetryEndpointContributor`) rather than as a gateway controller.
+
+### Get Metrics Snapshot
+
+**Endpoint:** `GET /api/telemetry/metrics`
+
+**Description:** Return a JSON snapshot of current instrument values, so operators and the portal can inspect hot-path metrics locally **without** an external OpenTelemetry collector. Only instruments on the canonical `BotNexus` meter scope are observed; the ASP.NET Core and HTTP instrumentation meters are ignored.
+
+Observable instruments (gauges) are sampled synchronously as part of the request, so gauge values
+reflect the state at the moment of the call rather than the last export interval.
+
+**Request:**
+```http
+GET /api/telemetry/metrics
+X-Api-Key: your-api-key
+```
+
+**Response:** 200 OK
+```json
+{
+  "generatedAt": "2026-09-01T18:04:21.552Z",
+  "scope": "BotNexus",
+  "instruments": [
+    {
+      "name": "botnexus.turns.total",
+      "kind": "counter",
+      "unit": "{turn}",
+      "description": "Agent turns started",
+      "measurements": [
+        {
+          "tags": { "agent.id": "farnsworth" },
+          "value": 412,
+          "count": null,
+          "sum": null,
+          "min": null,
+          "max": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `generatedAt` | string (ISO 8601) | UTC timestamp the snapshot was produced |
+| `scope` | string | The instrumentation scope the snapshot was collected from - always `BotNexus` |
+| `instruments` | object[] | Every instrument observed since collection started, ordered by instrument name |
+
+Each entry of `instruments`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Instrument name, e.g. `botnexus.turns.total` |
+| `kind` | string | One of `counter`, `updowncounter`, `histogram`, `gauge` |
+| `unit` | string \| null | Optional UCUM unit string reported by the instrument |
+| `description` | string \| null | Optional human-readable instrument description |
+| `measurements` | object[] | One row per distinct tag combination observed for this instrument |
+
+Each entry of `measurements`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tags` | object | The bounded tag dimensions attached to this measurement stream |
+| `value` | number | Counters and up/down counters: the running total. Gauges: the latest sampled value. Histograms: the sum of all recorded values |
+| `count` | int \| null | Number of recorded values - histograms only, `null` otherwise |
+| `sum` | number \| null | Sum of recorded values - histograms only, `null` otherwise |
+| `min` | number \| null | Smallest recorded value - histograms only, `null` otherwise |
+| `max` | number \| null | Largest recorded value - histograms only, `null` otherwise |
+
+**Empty snapshot when telemetry is disabled.** When no `MetricsSnapshotCollector` is registered, the
+endpoint still returns `200 OK` with a well-formed but empty snapshot - a current `generatedAt`, the
+canonical `scope`, and `"instruments": []`. It never returns `404` or `503`, so a UI consumer can
+render the metrics view unconditionally instead of branching on whether telemetry happens to be on:
+
+```json
+{
+  "generatedAt": "2026-09-01T18:04:21.552Z",
+  "scope": "BotNexus",
+  "instruments": []
+}
+```
+
+This is a deliberately lightweight in-process aggregator, not a full OpenTelemetry SDK: counters and
+up/down counters accumulate a running sum per tag-set, histograms accumulate count/sum/min/max, and
+observable gauges hold their latest sampled value. Accumulation spans the whole process lifetime and
+resets when the gateway restarts.
 
 ---
 
@@ -1909,6 +2285,41 @@ to continue an in-flight exchange; omit it to mint a fresh session and conversat
 
 ## System & Status
 
+### Version, Startup Time, and World Snapshot
+
+These read-only endpoints use the normal [gateway authentication](#authentication)
+policy. They are minimal API handlers, not MVC actions, so `?fields=` does not project
+their responses. Successful calls return `200 OK`.
+
+| Endpoint | Response | Meaning |
+|----------|----------|---------|
+| `GET /api/version` | `{ "version": "20260908010000", "commit": "abc1234" }` | `version` is the gateway assembly file's UTC last-write timestamp, formatted as `yyyyMMddHHmmss`; it is **not SemVer**. `commit` is nullable. The example values are illustrative. |
+| `GET /api/uptime` | `{ "startedAt": "2026-09-08T01:00:00+00:00" }` | A UTC timestamp captured during application setup, not an elapsed duration. It does not prove when the server began accepting requests. |
+| `GET /api/world` | A `WorldDescriptor` object | The descriptor built during application setup, not a live registry or satellite-health refresh. |
+
+The version handler obtains `commit` by running `git rev-parse --short HEAD` in the
+process's working directory. It returns `null` if no hash is obtained; the value is
+not embedded build provenance. Use `GET /api/gateway/info` below for the separate
+runtime/build-information contract, including `uptimeSeconds`.
+
+The world snapshot has these top-level fields:
+
+| Field | Meaning |
+|-------|---------|
+| `identity` | The resolved world identity. |
+| `hostedAgents` | Enabled configured agent IDs combined with IDs registered when the descriptor was built. |
+| `hostedUsers` | User IDs; the current builder leaves this list empty. |
+| `locations` | Locations resolved from platform configuration and built-in gateway/agent paths. |
+| `availableStrategies` | Execution strategies resolved from enabled agents, registered agents, and registered isolation strategies. |
+| `crossWorldPermissions` | Configured cross-world permission records. |
+| `satellites` | Configured satellite descriptors at setup time; use `/api/satellites` for live connection status. |
+
+Sources: [endpoint handlers](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Api/Program.cs),
+[descriptor builder](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Configuration/WorldDescriptorBuilder.cs),
+and [world contract](https://github.com/Sytone/botnexus/blob/main/src/domain/BotNexus.Domain/World/WorldDescriptor.cs).
+The linked contract defines nested record shapes; the table above is not a complete
+schema for those records.
+
 ### Gateway Information
 
 **Endpoint:** `GET /api/gateway/info`
@@ -2227,44 +2638,20 @@ X-Api-Key: your-api-key
 
 ### Doctor/Diagnostics
 
-> **Note:** The diagnostics endpoint is provided by the main BotNexus application host, not the Gateway API project.
-
-**Endpoint:** `GET /api/doctor`
-
-**Description:** Run comprehensive health diagnostics with auto-fix recommendations.
-
-**Request:**
-```http
-GET /api/doctor
-X-Api-Key: your-api-key
-```
-
-**Response:** 200 OK
-```json
-{
-  "timestamp": "2026-01-15T11:50:00Z",
-  "checks": [
-    {
-      "name": "Configuration File",
-      "category": "startup",
-      "status": "healthy",
-      "message": "Config file exists and is valid"
-    },
-    {
-      "name": "OAuth Tokens",
-      "category": "authentication",
-      "status": "warning",
-      "message": "Copilot token expires in 2 days",
-      "suggestedFix": "Run 'botnexus login' to refresh"
-    }
-  ],
-  "summary": {
-    "healthy": 11,
-    "warnings": 1,
-    "errors": 0
-  }
-}
-```
+> **Removed.** There is no `GET /api/doctor` endpoint. `doctor` exists only as a CLI command tree
+> (`botnexus doctor ...`, `src/gateway/BotNexus.Cli/Commands/Doctor/`); the literal `api/doctor`
+> appears nowhere in `src/`, `tests/` or `examples/`. The HTTP diagnostics surface is
+> `DiagnosticsController` at `api/diagnostics/*`, documented in the sections below:
+>
+> | Endpoint | Purpose |
+> |---|---|
+> | `GET /api/diagnostics/log-patterns` | Recurring warning/error patterns from the log ring buffer |
+> | `GET /api/diagnostics/memory-pressure` | Current memory-pressure assessment |
+> | `GET /api/diagnostics/memory-pressure/history` | Historical memory-pressure samples |
+> | `GET /api/diagnostics/threadpool` | Thread pool health metrics |
+> | `GET /api/diagnostics/activity` | Last activity timestamp and inactivity duration |
+> | `GET /api/diagnostics/loops` | Detected agent-loop anomalies |
+> | `GET /api/diagnostics/security-events` | Admin-gated security event snapshot (separate controller) |
 
 ---
 
@@ -2459,16 +2846,21 @@ X-Api-Key: your-api-key
   {
     "id": "sat_desktop_home",
     "displayName": "Home Desktop",
-    "owner": "jon",
+    "ownerUserId": "jon",
     "platform": "windows",
     "capabilities": ["notify", "canvas"],
     "status": "online",
-    "lastSeenUtc": "2026-06-10T14:30:00Z"
+    "lastSeen": "2026-06-10T14:30:00Z",
+    "connectionId": "connection-01"
   }
 ]
 ```
 
 ---
+
+The [satellite reference](./api/satellites.md#heartbeat-timeout) explains
+`gateway.satellites.<id>.staleTimeoutSeconds` and the transition to `offline`.
+The timeout is a configuration setting, not a field in this response.
 
 ### Get Satellite
 
@@ -2486,6 +2878,28 @@ X-Api-Key: your-api-key
 
 ---
 
+### Available Providers
+
+**Endpoint:** `GET /api/providers`
+
+Returns `200 OK` with an array from the model filter's available-provider list.
+This is a discovery call, not a credential or reachability test. Each row contains
+three strings with the same provider identifier:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | The provider identifier, not a separate friendly display name. |
+| `providerId` | The provider identifier. |
+| `id` | An alias of `providerId`. |
+
+For example, a returned row may be
+`{ "name": "anthropic", "providerId": "anthropic", "id": "anthropic" }`.
+The endpoint uses normal [gateway authentication](#authentication). As an MVC
+`OkObjectResult`, it supports [sparse fieldsets](#sparse-fieldsets-fields), unlike
+`/api/version`, `/api/uptime`, and `/api/world`.
+
+Source: [ProvidersController](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Api/Controllers/ProvidersController.cs).
+
 ### Provider Health Check
 
 **Endpoint:** `GET /api/providers/{id}/health`
@@ -2500,7 +2914,11 @@ X-Api-Key: your-api-key
 {
   "providerId": "anthropic",
   "status": "healthy",
-  "checkedAtUtc": "2026-06-12T10:00:00Z"
+  "latencyMs": 120,
+  "checkedAt": "2026-06-12T10:00:00Z",
+  "models": 3,
+  "hasCredentials": true,
+  "error": null
 }
 ```
 
@@ -2509,12 +2927,20 @@ X-Api-Key: your-api-key
 {
   "providerId": "anthropic",
   "status": "unhealthy",
-  "reason": "API key not configured",
-  "checkedAtUtc": "2026-06-12T10:00:00Z"
+  "latencyMs": 10000,
+  "checkedAt": "2026-06-12T10:00:00Z",
+  "models": 0,
+  "hasCredentials": false,
+  "error": "Health check timed out after 10 seconds."
 }
 ```
 
 ---
+
+The example values above are illustrative. The health action returns `404 Not Found`
+when the health-check service is unavailable or the provider is absent from the
+model filter. Its internal 10-second cancellation budget produces the timeout
+response shown above; caller cancellation follows the request cancellation path.
 
 ### Session Statistics
 
@@ -3109,7 +3535,7 @@ Every agent automatically gets the following tools by default:
 | `send_message` | Send messages via channels | Enabled | Yes |
 | `cron` | Schedule periodic tasks | Enabled | Yes |
 | `get_datetime` | Get current UTC and timezone-aware local date/time | Enabled | Yes |
-| `shell` | Execute shell commands | Enabled if `tools.exec.enable=true` | Yes |
+| `shell` | Execute shell commands | Enabled | Yes |
 
 ### Disabling Tools
 
@@ -3175,11 +3601,11 @@ If `maxTokens` or `temperature` are not specified (null), the provider uses its 
 
 ---
 
-## Configuration Files & Backups
+## Configuration & Backups
 
-### Config Structure
+### Configuration shape
 
-Configuration is stored in `~/.botnexus/config.json`:
+Use `botnexus config get`, `botnexus config set`, and the purpose-built provider and agent commands to manage platform settings. These commands work with both JSON-backed and SQLite-backed homes. The following JSON documents the configuration shape used by the API and by legacy JSON-backed installations:
 
 ```json
 {
@@ -3254,74 +3680,98 @@ Each tool call shows:
 
 ## Loop Detection & Iteration Limits
 
-### Configuration-Only Feature
+### Platform configuration boundary
 
-Agent loop detection and iteration limits are configured via `config.json` and the [Configuration Guide](configuration.md) — they are not exposed through REST API endpoints. This is intentional to ensure consistency and prevent accidental runtime misconfigurations.
+`MaxToolIterations` and `MaxRepeatedToolCalls` are not settings on the platform's
+[`AgentDefinitionConfig`](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Configuration/PlatformConfig.cs)
+or the agent-core [`AgentLoopConfig`](https://github.com/Sytone/botnexus/blob/main/src/agent/BotNexus.Agent.Core/Configuration/AgentLoopConfig.cs).
+The `MaxToolIterations` property in the standalone
+[`CodingAgentConfig` example](https://github.com/Sytone/botnexus/blob/main/examples/BotNexus.CodingAgent/CodingAgentConfig.cs)
+is not a platform agent setting. There is no platform binding for `MaxRepeatedToolCalls`.
+Do not add these keys or the obsolete `BotNexus/Agents/Named` recipe to platform configuration.
 
-### Settings
+The earlier duplicate-call counter, blocking algorithm, and tuning recommendations described here
+were not supported by those source contracts. They must not be relied on as a safety control.
+Runtime tool timeouts, pre-tool hooks, and retry settings are distinct mechanisms, not aliases for
+a universal tool-iteration limit or an identical-arguments call counter.
 
-Two settings control the agent loop behavior:
+### Separate delegated turn budgets
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `MaxToolIterations` | 40 | Max number of LLM calls in a single agent cycle |
-| `MaxRepeatedToolCalls` | 2 | Max times the same tool can be called with identical arguments |
+These options apply to delegated work, not all tool calls in a normal agent run:
 
-### Configuration Example
+| Source contract | Scope |
+|---|---|
+| [`SubAgentOptions.DefaultMaxTurns` and `MaxTurnsCeiling`](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Configuration/SubAgentOptions.cs) | Default turn budget and requested-turn ceiling for sub-agent runs. |
+| [`AgentExchangeOptions.MaxTurnsCeiling`](https://github.com/Sytone/botnexus/blob/main/src/gateway/BotNexus.Gateway.Configuration/AgentExchangeOptions.cs) | Upper bound on back-and-forth turns within a single `agent_converse` invocation. |
 
-```json
-{
-  "BotNexus": {
-    "Agents": {
-      "MaxToolIterations": 40,
-      "MaxRepeatedToolCalls": 2,
-      "Named": {
-        "careful-agent": {
-          "MaxToolIterations": 10,
-          "MaxRepeatedToolCalls": 1
-        },
-        "researcher": {
-          "MaxToolIterations": 100,
-          "MaxRepeatedToolCalls": 5
-        }
-      }
-    }
-  }
-}
-```
+Neither contract establishes a platform-wide duplicate-tool-call guard. Consult the owning source
+and the specific delegation surface rather than translating the retired knobs into similarly named settings.
 
-### How Loop Detection Works
+---
 
-When an agent repeatedly calls the same tool with identical arguments:
+## Secrets
 
-1. **First call:** Tool signature computed (`tool_name + normalized_arguments`)
-2. **Second call:** Signature compared to first; counter incremented to 2
-3. **Threshold reached:** If counter ≥ `MaxRepeatedToolCalls`, execution is blocked
-4. **LLM receives error:** Error returned to agent: `"Tool 'X' called N times with identical arguments"`
-5. **Agent recovers:** Agent can now try a different tool or modify arguments
+A write-only REST surface over the [file-backed secrets directory](./features/file-backed-secrets)
+(#3528). Each secret is one file under `~/.botnexus/secrets/`: the file name is the key, the file
+content is the value.
 
-**Example:**
+**There is deliberately no read-by-key action.** That is the feature, not a gap. The
+`ConfigSecretMerge` scheme used for schema-declared secrets has to keep a read/restore channel
+open so a redacted `***` can round-trip back to the real value on save; this store has no such
+channel. An architecture test asserts by reflection that no action here returns secret content, so
+a future refactor cannot quietly turn a documented security property into a convenience feature.
+Recovering a forgotten value requires filesystem access on the gateway host.
 
-```text
-Iteration 0: search_files("") → executes (count: 1)
-Iteration 1: search_files("") → executes (count: 2)
-Iteration 2: search_files("") → BLOCKED (count: 2 >= MaxRepeatedToolCalls: 2)
-```
+Keys must match `^[A-Za-z0-9._-]{1,128}$`; `.` and `..` are rejected outright. The charset is an
+allowlist, so `/`, `\` and `:` are not merely filtered but unrepresentable - a directory
+separator, a traversal segment and a drive-qualified path cannot be expressed. A rejected key
+writes nothing, anywhere.
 
-### Best Practices
+### GET /api/secrets
 
-- **Most agents (10-40 iterations):** Default settings work well
-- **Safety-critical agents:** Use `MaxToolIterations=10-20, MaxRepeatedToolCalls=1`
-- **Exploratory/research agents:** Use `MaxToolIterations=50+, MaxRepeatedToolCalls=3-5`
+**Description:** Lists stored secret keys with their timestamps and size, ordered by key. Every
+field is derived from the file name or its filesystem metadata - never from the file's content.
+There is no value, no prefix, no masked form (a mask leaks the length) and no hash (a hash is an
+offline-guessable oracle for a short secret).
 
-For detailed configuration guidance, see [Configuration Guide § Agent Iteration & Loop Detection](configuration.md#agent-iteration--loop-detection).
+**Response:** `200 OK` with an array of secret descriptors.
+
+### PUT /api/secrets/{key}
+
+**Description:** Creates a secret, or overwrites an existing one wholesale. No part of the previous
+value is read, returned, or merged, so the caller must supply the complete new value.
+
+**Request body:** `{ "value": "<complete new value>" }`
+
+**Response:** `200 OK` with the written secret's descriptor.
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | No body was supplied, or the key does not match the permitted charset. |
+
+The key is written to the log; the value never is.
+
+### DELETE /api/secrets/{key}
+
+**Description:** Deletes the secret file. The key stops appearing in the list immediately.
+
+| Status | Condition |
+|--------|-----------|
+| `204 No Content` | Deleted. |
+| `404 Not Found` | No secret with that key exists. |
+| `400 Bad Request` | The key does not match the permitted charset. |
+
+> Secrets are files, not configuration. They do not appear in `GET /api/config`, they are not
+> copied into the config backup set, and they are not part of the config revision digest - so
+> nothing about a secret can leak through the config document. They are protected by owner-only
+> filesystem permissions and are **not** encrypted at rest.
 
 ---
 
 ## Webhooks
 
 Webhooks let external systems deliver a message to an agent over signed HTTP. All
-routes live under pi/webhooks. This section is a summary; see the full
+routes live under `/api/webhooks`. This section is a summary; see the full
 [Webhooks API reference](api/webhooks.md) and the [Webhooks guide](guides/webhooks.md)
 for concepts, response modes, and worked HMAC signing examples.
 
@@ -3339,16 +3789,16 @@ for concepts, response modes, and worked HMAC signing examples.
 
 ### Inbound delivery
 
-`	ext
+```http
 POST /api/webhooks/{agentId}/{webhookId}
 X-BotNexus-Signature-256: sha256=<hex>
-`
+```
 
 Body: `{ "message": string, "responseMode": "async"|"sync"|"callback"|null,
 "agentAction": bool|null, "callbackUrl": string|null }`.
 
 - **async** (default): 202 + Location poll URL; agent runs in background.
-- **sync**: 200 with the agent response inline (≤120s, else downgrades to 202).
+- **sync**: 200 with the inline response when the run record is `Completed`; 503 if execution returns without a completed run. Caught queue-timeout or cancellation paths, when the caller has not cancelled, mark the run timed out and return 202 with a Location poll URL. Poll that URL: 202 is not proof of execution or continued background processing, and a queued request may never have been dispatched. Admission can be rejected before waiting. The handler requests cancellation after 120 seconds and links caller/shutdown cancellation; this is not a guarantee that processing stops at exactly 120 seconds. Caller cancellation is not handled by those 202 catches.
 - **callback**: 202; result POSTed to callbackUrl on completion.
 
 The signature is sha256= + lowercase hex of HMAC-SHA256(secret, rawBody). An
@@ -3367,7 +3817,7 @@ http://localhost:5005/hub/gateway
 
 **Transport:** SignalR negotiation (WebSocket / Server-Sent Events / Long Polling as available).
 
-**Authentication:** Subject to `GatewayAuthMiddleware` rules. In development mode (no API keys configured), connections are allowed without auth.
+**Authentication:** See [Authentication](#authentication) for gateway API-key middleware rules, including the optional [no-key Origin guard](#no-key-development-mode). Separately, `GatewayHub` applies the `SignalRHubAuth` authorization policy: registered authentication schemes require an authenticated user; with no schemes, that hub requirement permits anonymous callers. No configured API keys alone is not a guarantee that a connection is allowed. See [SignalR authorization](./api/signalr.md#authorization) for the hub policy and per-method scope guards.
 
 For the full hub method contract (client-to-server invocations and server-to-client events), see the [SignalR Hub Contract](./signalr-hub-contract.md).
 

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -19,7 +18,7 @@ namespace BotNexus.Extensions.ExecTool;
 public sealed class ExecTool : IAgentTool
 {
     private const int DefaultTimeoutMs = 120_000;
-    private const int MaxOutputBytes = 100 * 1024;
+    private const int MaxOutputBytes = OutputRetentionPolicy.MaxOutputBytes;
 
     /// <summary>
     /// Retention cap on captured child output, in bytes. Exposed internally so tests can drive a
@@ -28,19 +27,10 @@ public sealed class ExecTool : IAgentTool
     /// </summary>
     internal static int MaxOutputBytesForTest => MaxOutputBytes;
 
-    /// <summary>
-    /// Upper bound on the number of background-process entries retained in <see cref="BackgroundProcesses"/>.
-    /// When a new background process is registered, dead entries are pruned first; if the map is still
-    /// over this cap, the oldest entries (by start time) are evicted. This keeps the static registry
-    /// bounded so a long-running gateway does not accumulate stale PIDs indefinitely.
-    /// </summary>
-    internal const int MaxBackgroundProcesses = 256;
-
-    private static readonly ConcurrentDictionary<int, ProcessInfo> BackgroundProcesses = new();
-
     private readonly string? _workingDirectory;
     private readonly IFileSystem _fileSystem;
     private readonly IReadOnlyList<string>? _environmentPassThrough;
+    private readonly string _processOwner;
 
     /// <summary>
     /// Creates the tool bound to an agent workspace. <paramref name="workingDirectory"/> deliberately
@@ -62,7 +52,15 @@ public sealed class ExecTool : IAgentTool
         string? workingDirectory,
         IFileSystem? fileSystem = null,
         IReadOnlyList<string>? environmentPassThrough = null)
+        : this(workingDirectory, fileSystem, string.Empty, environmentPassThrough) { }
+
+    internal ExecTool(
+        string? workingDirectory,
+        IFileSystem? fileSystem,
+        string processOwner,
+        IReadOnlyList<string>? environmentPassThrough = null)
     {
+        _processOwner = processOwner;
         _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
             ? null
             : Path.GetFullPath(workingDirectory);
@@ -93,6 +91,8 @@ public sealed class ExecTool : IAgentTool
     public Tool Definition => new(
         Name,
         "Execute a command with advanced process management: timeouts, background mode, stdin piping, and environment variable merging. " +
+        "Background PIDs are manageable by this agent's process tool; no automatic completion wake is provided. " +
+        "timeoutMs and noOutputTimeoutMs apply only to foreground execution; background work requires child-native limits or process kill. " +
         "Commands run in the agent workspace by default - the same directory the shell tool uses - so workspace-relative " +
         "paths such as 'tmp/q.py' resolve correctly; pass workingDir to run elsewhere. " +
         "On Windows PowerShell: foreach/if/switch/while are STATEMENTS and cannot be piped from directly - wrap them in a " +
@@ -272,30 +272,25 @@ public sealed class ExecTool : IAgentTool
             SkillScriptPreflight.ThrowIfMissing(resolvedTarget);
         }
 
+        // #3569: diagnose a reclaimed sub-agent workspace before the process start fails with a
+        // bare "The directory name is invalid", which names no cause and invites a futile retry.
+        ReclaimedWorkspacePreflight.ThrowIfReclaimed(workingDir ?? _workingDirectory);
+
         var startInfo = new ProcessStartInfo
         {
             FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = input is not null,
+            RedirectStandardInput = background || input is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDir ?? _workingDirectory ?? string.Empty,
         };
 
-        if (launch.RawArgumentLine is { } rawArgumentLine)
-        {
-            // Windows .cmd/.bat shims only (#3568): hand cmd.exe the line verbatim. Going through
-            // ArgumentList here would re-escape the quotes and break the launch.
-            startInfo.Arguments = rawArgumentLine;
-        }
-        else
-        {
-            foreach (var arg in processArgs)
-            {
-                startInfo.ArgumentList.Add(arg);
-            }
-        }
+        // Windows .cmd/.bat shims (#3568) need the line handed to cmd.exe verbatim; everything else,
+        // including the .ps1 host invocation (#3710), goes through ArgumentList. The seam decides -
+        // looping over Args by hand here is precisely how a raw cmd payload gets re-escaped.
+        launch.ApplyArgumentsTo(startInfo);
 
 
         // Replace the inherited block with an allow-listed one BEFORE any caller override is
@@ -318,7 +313,10 @@ public sealed class ExecTool : IAgentTool
         // time, so a token cancelled during that window must not be allowed to spawn a child at all.
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var process = new Process { StartInfo = startInfo };
+        var process = new Process { StartInfo = startInfo };
+        var transferred = false;
+        try
+        {
 
         // #2726: a start failure is the one case where we KNOW nothing ran. Report it as a
         // not-dispatched result carrying explicit retry-safe guidance rather than letting the raw
@@ -327,20 +325,25 @@ public sealed class ExecTool : IAgentTool
         {
             if (!process.Start())
             {
-                return NotDispatchedResult($"Failed to start process '{fileName}'.");
+                return NotDispatchedResult(
+                    $"Failed to start process '{fileName}'. {launch.FormatLaunchFailureDetail(command[0])}.");
             }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
         {
-            return NotDispatchedResult($"Failed to start process '{fileName}': {ex.Message}");
+            // #3710: the raw OS text ("The system cannot find the path specified.") named neither the
+            // command nor a path, so the agent could not tell the tool, the workingDir and an argument
+            // apart. Name what was actually resolved and attempted.
+            return NotDispatchedResult(
+                $"Failed to start process '{fileName}': {ex.Message} " +
+                $"({launch.FormatLaunchFailureDetail(command[0])}).");
         }
 
         StartedTestHook?.Invoke(process);
 
-        // Cancellation observed after Start() - the child is live. Kill the entire process tree via the
-        // existing TryKill path and propagate; the process is never registered in BackgroundProcesses, so
-        // it cannot outlive its turn or count against MaxBackgroundProcesses.
-        if (cancellationToken.IsCancellationRequested)
+        // Foreground cancellation retains its existing disposition. Background startup cancellation
+        // is handled by the lifecycle owner below, which pins any unconfirmed termination.
+        if (!background && cancellationToken.IsCancellationRequested)
         {
             TryKill(process);
             throw new OperationCanceledException(cancellationToken);
@@ -349,16 +352,26 @@ public sealed class ExecTool : IAgentTool
         if (background)
         {
             var pid = process.Id;
-            BackgroundProcesses[pid] = new ProcessInfo(pid, command[0], DateTime.UtcNow);
-
-            // Keep the static registry bounded: drop dead PIDs and cap the retained count.
-            PruneBackgroundProcesses();
-
-            // Write stdin if provided, then detach
-            if (input is not null)
+            var managed = new BackgroundProcess(process, command[0], DateTimeOffset.UtcNow);
+            try
             {
-                await process.StandardInput.WriteAsync(input).ConfigureAwait(false);
-                process.StandardInput.Close();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (input is not null)
+                    await managed.WriteInitialInputAsync(input, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                BackgroundProcessRegistry.Instance.Register(_processOwner, managed);
+                transferred = true;
+            }
+            catch
+            {
+                managed.Kill();
+                if (managed.KillUnconfirmed)
+                {
+                    BackgroundProcessRegistry.Instance.Register(_processOwner, managed);
+                    transferred = true;
+                }
+                else managed.Dispose();
+                throw;
             }
 
             var result = JsonSerializer.Serialize(new { pid, status = "running" });
@@ -480,6 +493,11 @@ public sealed class ExecTool : IAgentTool
                 [new AgentToolContent(AgentToolContentType.Text, message)],
                 new ExecToolDetails(exitCode, termination, Disposition: disposition));
         }
+        }
+        finally
+        {
+            if (!transferred) process.Dispose();
+        }
     }
 
     /// <summary>
@@ -507,97 +525,13 @@ public sealed class ExecTool : IAgentTool
     /// <summary>
     /// Gets information about tracked background processes.
     /// </summary>
-    internal static IReadOnlyDictionary<int, ProcessInfo> GetBackgroundProcesses() => BackgroundProcesses;
+    internal static IReadOnlyDictionary<int, ProcessInfo> GetBackgroundProcesses() => BackgroundProcessRegistry.Instance.List(string.Empty)
+        .ToDictionary(p => p.Pid, p => new ProcessInfo(p.Pid, p.Command, p.StartedAt.UtcDateTime));
 
     /// <summary>
     /// Clears the background process tracking dictionary. For testing only.
     /// </summary>
-    internal static void ClearBackgroundProcesses() => BackgroundProcesses.Clear();
-
-    /// <summary>
-    /// Bounds the background-process registry using the default <see cref="MaxBackgroundProcesses"/> cap.
-    /// Drops dead PIDs and evicts the oldest entries when over the cap. Called after each background launch.
-    /// </summary>
-    internal static void PruneBackgroundProcesses()
-    {
-        PruneBackgroundProcesses(MaxBackgroundProcesses);
-    }
-
-    /// <summary>
-    /// Bounds the background-process registry against an explicit cap. First removes entries whose
-    /// underlying OS process is no longer alive (PID not found, or found but already exited). If the
-    /// map is still larger than <paramref name="maxRetained"/>, evicts the oldest remaining entries
-    /// (by start time) until it is within the cap. Safe to call concurrently. Exposed internally for tests.
-    /// </summary>
-    /// <param name="maxRetained">Maximum number of entries to retain after pruning dead PIDs.</param>
-    internal static void PruneBackgroundProcesses(int maxRetained)
-    {
-        // Phase 1: remove dead PIDs.
-        foreach (var kvp in BackgroundProcesses)
-        {
-            if (!IsPidAlive(kvp.Key))
-            {
-                BackgroundProcesses.TryRemove(kvp.Key, out _);
-            }
-        }
-
-        // Phase 2: enforce the size cap, oldest-first.
-        EvictOldestBackgroundProcesses(maxRetained);
-    }
-
-    /// <summary>
-    /// Evicts the oldest background-process entries (by start time) until the registry holds at most
-    /// <paramref name="maxRetained"/> entries. Does not perform liveness checks. Exposed internally so
-    /// the cap behaviour can be tested deterministically with seeded entries.
-    /// </summary>
-    internal static void EvictOldestBackgroundProcesses(int maxRetained)
-    {
-        var overflow = BackgroundProcesses.Count - maxRetained;
-        if (overflow <= 0)
-        {
-            return;
-        }
-
-        var oldest = BackgroundProcesses.Values
-            .OrderBy(p => p.StartedUtc)
-            .Take(overflow)
-            .ToList();
-
-        foreach (var info in oldest)
-        {
-            BackgroundProcesses.TryRemove(info.Pid, out _);
-        }
-    }
-
-    /// <summary>
-    /// Seeds a background-process entry directly. For testing only — lets tests populate the registry
-    /// (e.g. with synthetic or already-dead PIDs) without spawning real processes.
-    /// </summary>
-    internal static void RegisterBackgroundForTest(int pid, string command, DateTime startedUtc)
-        => BackgroundProcesses[pid] = new ProcessInfo(pid, command, startedUtc);
-
-    /// <summary>
-    /// Returns true when a process with the given PID is currently running. A PID that cannot be found,
-    /// or that is found but has already exited, is treated as not alive.
-    /// </summary>
-    private static bool IsPidAlive(int pid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            // No process with that PID is running.
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            // Process has already exited / terminated.
-            return false;
-        }
-    }
+    internal static void ClearBackgroundProcesses() => BackgroundProcessRegistry.Instance.Clear(string.Empty);
 
     private static string FormatOutput(string output)
     {
@@ -608,7 +542,7 @@ public sealed class ExecTool : IAgentTool
     /// Leading token every truncation banner starts with. Tests and callers match on this rather
     /// than on the full sentence so the wording can evolve without becoming unrecognisable.
     /// </summary>
-    internal const string TruncationBannerPrefix = "[output truncated:";
+    internal const string TruncationBannerPrefix = OutputRetentionPolicy.TruncationBannerPrefix;
 
     /// <summary>
     /// Renders the retention-cap banner for issue #2895.
@@ -624,143 +558,45 @@ public sealed class ExecTool : IAgentTool
     /// <param name="discardedBytes">Bytes produced by the child but dropped once the cap was hit.</param>
     internal static string FormatTruncationBanner(int retainedBytes, int discardedBytes)
     {
-        var produced = (long)retainedBytes + discardedBytes;
-
         // Collection is head-first: lines are appended until one no longer fits, after which every
-        // subsequent line is dropped. The surviving portion is therefore always the head.
-        return $"{TruncationBannerPrefix} retained {retainedBytes} bytes (head) of {produced} bytes produced, " +
-               $"discarded {discardedBytes} bytes (tail) at the {MaxOutputBytes / 1024}KB cap]";
+        // subsequent line is dropped. The surviving portion is therefore always the head. The
+        // wording itself is the shared one (#3704) so the process path cannot word it differently.
+        return OutputRetentionPolicy.FormatTruncationBanner(
+            retainedBytes,
+            discardedBytes,
+            RetainedOutputPortion.Head);
     }
 
     /// <summary>
-    /// A resolved launch descriptor: the executable to start plus EITHER a structured argument
-    /// list (the normal case) OR a raw command line that must be passed to the child verbatim.
+    /// Resolves the command array into a launch descriptor via the shared Windows shim seam.
     /// </summary>
     /// <remarks>
-    /// The raw form exists solely for the Windows <c>.cmd</c>/<c>.bat</c> shim path (issue #3568).
-    /// <c>cmd.exe /d /s /c</c> requires its payload wrapped in a literal outer quote pair, and
-    /// <see cref="ProcessStartInfo.ArgumentList"/> cannot express that: .NET applies CRT quoting to
-    /// every entry, so a payload containing quotes comes out escaped as <c>\"</c>. cmd.exe does not
-    /// recognise backslash-escaped quotes, so it treated the escaped quotes as part of the program
-    /// name and reported <c>'"C:\Program Files\nodejs\npm.cmd"' is not recognized</c> - a correct
-    /// path that could never launch. Setting <see cref="ProcessStartInfo.Arguments"/> directly is
-    /// the only way to hand cmd.exe the byte sequence it actually parses.
+    /// This used to be a second, independent copy of the PATH probe plus the cmd.exe quoting rules,
+    /// which is exactly the duplication #3642 consolidated into <see cref="WindowsShimLaunch"/> for
+    /// the MCP stdio transport. The copy still here was why #3568's <c>.cmd</c> fix did not extend to
+    /// <c>.ps1</c>: the seam and the copy could disagree. There is now one implementation (#3710).
     /// </remarks>
-    /// <param name="FileName">Executable to launch; never quoted (UseShellExecute=false).</param>
-    /// <param name="Args">Structured arguments; empty when <paramref name="RawArgumentLine"/> is set.</param>
-    /// <param name="RawArgumentLine">Verbatim command line, or null to use <paramref name="Args"/>.</param>
-    internal sealed record ExecLaunch(
-        string FileName,
-        IReadOnlyList<string> Args,
-        string? RawArgumentLine = null)
-    {
-        /// <summary>Two-value deconstruction for callers that do not care about the raw line.</summary>
-        public void Deconstruct(out string fileName, out IReadOnlyList<string> args)
-        {
-            fileName = FileName;
-            args = Args;
-        }
-    }
-
-    /// <summary>
-    /// Resolves command array into fileName and arguments, handling Windows .cmd/.bat shims.
-    /// </summary>
-    internal static ExecLaunch ResolveCommand(IReadOnlyList<string> command)
+    internal static ProcessLaunch ResolveCommand(IReadOnlyList<string> command)
         => ResolveCommand(command, new FileSystem());
 
-    internal static ExecLaunch ResolveCommand(
+    internal static ProcessLaunch ResolveCommand(
         IReadOnlyList<string> command,
         IFileSystem fileSystem)
     {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
         var exe = command[0];
-        var args = command.Count > 1 ? command.Skip(1).ToList() : new List<string>();
+        var args = command.Count > 1 ? command.Skip(1).ToList() : [];
 
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return new ExecLaunch(exe, args);
-        }
-
-        // On Windows, resolve .cmd/.bat files through cmd.exe
-        var resolved = ResolveWindowsExecutable(exe, fileSystem);
-        if (resolved is not null && IsWindowsBatchFile(resolved))
-        {
-            // Route through cmd.exe /d /s /c. The payload MUST be a raw line with a literal outer
-            // quote pair (#3568) - /s tells cmd.exe to strip exactly that outer pair and run the
-            // remainder verbatim, which is what makes an inner quoted path with spaces survive.
-            return new ExecLaunch(
-                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-                [],
-                BuildCmdRawArgumentLine(resolved, args));
-        }
-
-        return new ExecLaunch(resolved ?? exe, args);
+        return WindowsShimLaunch.Resolve(exe, args, fileSystem.File.Exists);
     }
 
     /// <summary>
     /// Builds the verbatim <c>cmd.exe</c> argument line for a resolved .cmd/.bat shim.
     /// </summary>
+    /// <remarks>Forwards to the shared seam; retained as the name existing callers and tests use.</remarks>
     internal static string BuildCmdRawArgumentLine(string resolved, IReadOnlyList<string> args)
-        => $"/d /s /c \"{BuildCmdCommandLine(resolved, args)}\"";
-
-    private static string? ResolveWindowsExecutable(string command, IFileSystem fileSystem)
-    {
-        if (Path.HasExtension(command))
-        {
-            return command;
-        }
-
-        // Look for common Windows script extensions
-        string[] extensions = [".exe", ".cmd", ".bat"];
-        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-
-        // Check current name first (might be in PATH as-is)
-        foreach (var ext in extensions)
-        {
-            var candidate = command + ext;
-
-            // Check in PATH directories
-            foreach (var dir in pathDirs)
-            {
-                var fullPath = Path.Combine(dir, candidate);
-                if (fileSystem.File.Exists(fullPath))
-                {
-                    return fullPath;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsWindowsBatchFile(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".cmd" or ".bat";
-    }
-
-    private static string BuildCmdCommandLine(string command, IReadOnlyList<string> args)
-    {
-        var sb = new StringBuilder();
-        sb.Append(QuoteForCmd(command));
-        foreach (var arg in args)
-        {
-            sb.Append(' ');
-            sb.Append(QuoteForCmd(arg));
-        }
-
-        return sb.ToString();
-    }
-
-    private static string QuoteForCmd(string arg)
-    {
-        if (!arg.Contains(' ') && !arg.Contains('"'))
-        {
-            return arg;
-        }
-
-        return $"\"{arg.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
-    }
+        => resolved.BuildCmdRawArgumentLine(args);
 
     private static void TryKill(Process process)
     {

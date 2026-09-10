@@ -5146,18 +5146,15 @@ details[open] > .thinking-summary::before {
     color: var(--error);
 }
 
-/* Dim the pushpin and folder glyphs so they read as inactive actions until they are used. */
-.conversation-pin-btn,
+/* Dim the pushpin glyph so it reads as an inactive action until it is used. */
+.conversation-pin-btn {
+    filter: grayscale(1) opacity(0.6);
+}
 
 .conversation-pin-btn:hover,
 .conversation-pin-btn.pinned {
     filter: none;
 }
-
-
-
-
-
 
 /* ── Conversation Group Headers ───────────────────────────────────────────────────────── */
 
@@ -6527,9 +6524,19 @@ h3.conversation-title.editable:hover {
 }
 
 /* ── Home / Activity dashboard (#1888) ─────────────────────────────────────── */
+/* The Activity table is the widest content in the portal - five columns over 35 rows - and a
+   1100px cap left 900px of a 2000px display idle (45%) while eight conversation names were
+   clipped to an ellipsis. Measured on the live table: raising the cap clears every clipped
+   conversation name by 1300px, so 100rem gives that with margin and still uses ~80% of a
+   2000px screen. Laptops gain too: at 1280px the dashboard was 1100px and is now the full
+   1280. Kept centred rather than full-bleed, matching the roster decision in #114.
+
+   NOTE: this does NOT fix the clipped Agents cells. Those hold sub-agent chips ~400px wide
+   because AgentLabel falls back to the raw agent id - see the comment there. No column width
+   fixes a 1730px cell; widening from 1300 to 1500 measured zero improvement. */
 .activity-dashboard {
     padding: 1.5rem;
-    max-width: 1100px;
+    max-width: 100rem;
     margin: 0 auto;
     width: 100%;
     box-sizing: border-box;
@@ -7100,12 +7107,6 @@ h3.conversation-title.editable:hover {
 /* #2441: "My sections" is nested under the agent chat section behind a collapsible
    header, so it needs no separator of its own and only a small indent to read as a
 
-
-
-
-
-
-
 .section-add-btn {
     background: none;
     border: 1px solid var(--sidebar-border);
@@ -7118,23 +7119,6 @@ h3.conversation-title.editable:hover {
 
 .section-add-btn:hover {
     background: var(--color-wash);
-}
-
-
-
-
-
-
-
-
-.section-name-input {
-    flex: 1 1 auto;
-    background: var(--color-scrim-soft);
-    border: 1px solid var(--sidebar-border);
-    border-radius: var(--radius-sm);
-    color: inherit;
-    font-size: var(--text-label);
-    padding: 0.1rem 0.3rem;
 }
 
 .section-create-row {
@@ -7153,12 +7137,6 @@ h3.conversation-title.editable:hover {
     font-size: var(--text-caption);
     padding: 0.1rem 0.35rem;
 }
-
-
-
-
-
-
 
 /* Tools iframe host route /tools/{id} (#2234) */
 .tool-host-page {
@@ -7677,7 +7655,6 @@ h3.conversation-title.editable:hover {
         margin-left: 0;
     }
 }
-
 
 .home-starter-title {
     margin: 0;

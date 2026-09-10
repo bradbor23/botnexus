@@ -160,6 +160,12 @@ public sealed class CronScheduler(
     /// because a still-live run holds the conversation's write stripe and the archive is then
     /// guaranteed to fail. Aborting the delete on that guaranteed failure is what produced the
     /// unbounded retry loop.
+    /// #3521: the archive is also skipped when the job merely ADOPTED the conversation instead of
+    /// minting it. Ownership is the typed pair <c>(Source == Cron, SourceId == jobId)</c> stamped at
+    /// creation by <c>ConversationFactory.CreateForCron</c>; anything else is somebody else's thread
+    /// - in the reported incident, a human's 6,324-message default conversation. The skip logs at
+    /// Information (an adopted binding is a normal state, not a fault) and must NOT throw, or it
+    /// would re-enter the #3517 retry loop it was written alongside.
     /// </remarks>
     public async Task DeleteJobAsync(JobId jobId, CancellationToken cancellationToken = default)
     {
@@ -200,11 +206,36 @@ public sealed class CronScheduler(
             {
                 using var scope = _scopeFactory.CreateScope();
                 var conversations = scope.ServiceProvider.GetRequiredService<IConversationStore>();
-                await conversations.ArchiveAsync(existing.ConversationId.Value, "cron-delete-after-run", jobId.Value, "system", cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Archived conversation '{ConversationId}' for deleted cron job '{JobId}'.",
-                    existing.ConversationId.Value,
-                    jobId);
+
+                // #3521: archive ONLY a conversation this job owns. `ConversationId` records where
+                // the job writes, which is not the same claim as "this job minted it" - #2412 also
+                // binds a job to a conversation that already existed. Ownership is read from the
+                // conversation's own write-once provenance rather than inferred from the id, because
+                // an id prefix is a convention and provenance is a fact.
+                //
+                // Every failure mode here is fail-OPEN by design: an unreadable row, a store that
+                // throws on the read, or a non-owned binding all SKIP the archive and let the delete
+                // proceed. Throwing would re-arm the unbounded MaybeDeleteOneShotJobAsync retry loop
+                // of #3517, and leaving a conversation active is trivially recoverable whereas
+                // archiving a human's thread is not.
+                if (!await OwnsConversationAsync(conversations, existing.ConversationId.Value, jobId, cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogInformation(
+                        "Not archiving conversation '{ConversationId}' for cron job '{JobId}': the job ADOPTED this "
+                        + "conversation rather than minting it (its provenance is not Source=Cron with SourceId='{JobId}'). "
+                        + "The job is being deleted; the conversation is left active because it belongs to whoever created it.",
+                        existing.ConversationId.Value,
+                        jobId,
+                        jobId);
+                }
+                else
+                {
+                    await conversations.ArchiveAsync(existing.ConversationId.Value, "cron-delete-after-run", jobId.Value, "system", cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "Archived conversation '{ConversationId}' for deleted cron job '{JobId}'.",
+                        existing.ConversationId.Value,
+                        jobId);
+                }
             }
             catch (Exception ex)
             {
@@ -220,6 +251,60 @@ public sealed class CronScheduler(
         await DeleteOwnedRunSessionsAsync(existing, cancellationToken).ConfigureAwait(false);
 
         await _cronStore.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #3521: whether <paramref name="conversationId"/> was MINTED by <paramref name="jobId"/>, as
+    /// opposed to merely bound to it by the #2412 mid-conversation default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ownership is the write-once pair <see cref="Conversation.Source"/> ==
+    /// <see cref="ConversationSource.Cron"/> AND <see cref="Conversation.SourceId"/> == the job id,
+    /// exactly as <c>ConversationFactory.CreateForCron</c> stamps it. The <c>SourceId</c> half is
+    /// load-bearing: without it, deleting job A would happily archive a conversation minted by job B.
+    /// </para>
+    /// <para>
+    /// Returns <c>false</c> - never throws - when the conversation cannot be read or the store
+    /// itself fails. A delete must not be blocked by an ownership check that could not be evaluated,
+    /// and an unarchived conversation is a recoverable state while a wrongly archived human thread
+    /// and an unbounded retry loop (#3517) are not.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> OwnsConversationAsync(
+        IConversationStore conversations,
+        ConversationId conversationId,
+        JobId jobId,
+        CancellationToken cancellationToken)
+    {
+        Conversation? conversation;
+        try
+        {
+            conversation = await conversations.GetAsync(conversationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(
+                ex,
+                "Could not read conversation '{ConversationId}' to determine whether cron job '{JobId}' owns it; "
+                + "skipping the archive rather than risking one that was never the job's to make.",
+                conversationId,
+                jobId);
+            return false;
+        }
+
+        if (conversation is null)
+        {
+            // Already hard-deleted, or a dangling binding. Nothing to archive either way.
+            _logger.LogInformation(
+                "Conversation '{ConversationId}' bound to cron job '{JobId}' no longer exists; nothing to archive.",
+                conversationId,
+                jobId);
+            return false;
+        }
+
+        return conversation.Source == ConversationSource.Cron
+               && string.Equals(conversation.SourceId, jobId.Value, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -459,12 +544,71 @@ public sealed class CronScheduler(
             {
                 var (job, expression) = entry;
                 var tz = CronTimeZoneResolver.Resolve(job.TimeZone, _logger, job.Id);
-                await RunActionAsync(job, CronTriggerType.Scheduled, now, ct).ConfigureAwait(false);
+
+                // #3659: per-entry isolation. Parallel.ForEachAsync propagates the FIRST unhandled
+                // body exception and cancels the remaining partitions, so before this guard a single
+                // SQLITE_BUSY escaping RecordRunStartAsync silently dropped every other due job in
+                // the tick - and the drop was invisible, because the only signal was one anonymous
+                // "Cron scheduler tick failed." line naming no job. This is the same policy #2410
+                // already gave the reaper: a failure here must never abort the tick.
+                try
+                {
+                    await RunActionAsync(job, CronTriggerType.Scheduled, now, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    // Attributed to the job it belongs to (AC2), so the lost work is identifiable
+                    // from the log line alone.
+                    _logger.LogError(
+                        ex,
+                        "Cron job '{JobId}' ('{JobName}') failed during the tick fan-out. Other due jobs in this tick are unaffected.",
+                        job.Id,
+                        job.Name);
+
+                    // Best-effort attribution in run history too. RunActionAsync records its own
+                    // terminal bookkeeping for anything that fails INSIDE the run; a throw from the
+                    // run-start write happens before any run row exists, so without this the failure
+                    // would appear in history as if the job had never been due.
+                    try
+                    {
+                        await _cronStore.RecordRunFinalizationAsync(
+                            job.Id,
+                            now,
+                            CronRunStatus.Error,
+                            ex.Message,
+                            ct).ConfigureAwait(false);
+                    }
+                    catch (Exception recordEx) when (!ct.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            recordEx,
+                            "Failed to record the tick-fan-out failure of cron job '{JobId}' in run history.",
+                            job.Id);
+                    }
+                }
 
                 // #2133: reschedule via the narrow next_run_at write. RunActionAsync already
                 // persisted the run's terminal LastRun* bookkeeping and any conversation pin
                 // through their own narrow writes, so no whole-record round-trip is needed here.
-                await _cronStore.SetNextRunAtAsync(job.Id, expression.NextRun(now, tz), ct).ConfigureAwait(false);
+                //
+                // #3659 (AC3): this runs on the failure path too. Skipping it would leave the job's
+                // NextRunAt in the past, so it would re-fire on the very next tick and keep failing
+                // against the same contention - while the guard above is what stops the failure
+                // being fatal to the tick, this is what stops it becoming a hot loop. Guarded in
+                // turn, because the reschedule write can contend for exactly the same reason the
+                // run-start write did.
+                try
+                {
+                    await _cronStore.SetNextRunAtAsync(job.Id, expression.NextRun(now, tz), ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Failed to reschedule cron job '{JobId}' ('{JobName}') after its tick fan-out entry. It keeps its previous NextRunAt and will be retried on a subsequent tick.",
+                        job.Id,
+                        job.Name);
+                }
             }).ConfigureAwait(false);
     }
 
@@ -888,13 +1032,16 @@ public sealed class CronScheduler(
     /// Whether <paramref name="job"/> is past its <see cref="CronJob.ExpiresAt"/> instant (#2634).
     /// </summary>
     /// <remarks>
-    /// A <c>null</c> expiry is <b>never</b> expired: NULL means "no expiry", so a job that does not
-    /// carry the field behaves exactly as it does today (AC4). The comparison is inclusive
-    /// (<c>&gt;=</c>) so the expiry instant itself is already past -- "stops executing after that
-    /// instant" must not leave a one-tick window where a fire still lands.
+    /// A thin adapter that binds the scheduler's <see cref="TimeProvider"/> to the one shared
+    /// predicate in <see cref="CronJobExpiry"/>. The comparison itself was extracted there by #3546
+    /// so <see cref="MissedRunDetectionService"/> could reach it: the scanner previously ignored
+    /// expiry entirely because this method was private, and a second inline <c>ExpiresAt</c>
+    /// comparison would only have re-created the divergence. Both scheduler call sites - the
+    /// due-scan early-out and the fire-time gate - still call this method, so there is exactly one
+    /// comparison in the assembly.
     /// </remarks>
     private bool IsExpired(CronJob job)
-        => job.ExpiresAt is { } expiresAt && _timeProvider.GetUtcNow() >= expiresAt;
+        => CronJobExpiry.IsExpired(job, _timeProvider.GetUtcNow());
 
     /// <summary>
     /// Opt-in scheduler-driven one-shot removal (#2634): deletes the <b>job</b> after its first
@@ -2036,7 +2183,10 @@ public sealed class CronScheduler(
             // #2552: the declarative surface goes through the same shared boundary as the API so
             // the two cannot drift. A config-declared job with a credential-bearing or non-http(s)
             // webhook URL is skipped loudly rather than materialised into the store.
-            if (!CronWebhookUrl.TryNormalize(configuredJob.WebhookUrl, out var normalizedWebhookUrl, out var webhookRejectionReason))
+            // #3779: and with the same operator-configured blocked-host list, read off the very
+            // options instance being reconciled - so a host the operator blocked cannot enter the
+            // store through the declarative door after being refused at the API one.
+            if (!CronWebhookUrl.TryNormalize(configuredJob.WebhookUrl, options.WebhookBlockedHosts, out var normalizedWebhookUrl, out var webhookRejectionReason))
             {
                 // #2745: log the rule-specific reason so an operator can tell a blocked address
                 // class apart from a scheme/credentials rejection without reading the source.

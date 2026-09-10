@@ -57,12 +57,19 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // watchdog behind.
     // #3625 ratchet: CrossWorldFederationControllerTests' single finite wait (a 25ms Task.Delay
     // poll loop) was replaced with an awaited signal, so its baseline entry was removed entirely.
-    // Ratcheted again: DefaultAgentRegistryTests' two 20ms sleeps were the visible half of a real
-    // race in InMemoryActivityBroadcaster - SubscribeAsync did not register the subscriber until
-    // first enumeration, so the sleeps were waiting for something that had not been asked to
-    // happen. Fixing the broadcaster removed the need for both, and the entry with them.
-    private const int ExpectedBaselineEntryCount = 62;
-    private const int ExpectedBaselineViolationCount = 83;
+    // Both sides ratcheted this independently: upstream's #3820 replaced DefaultSubAgentManager-
+    // TimeoutTests' two finite waits with an awaited dispatch signal, and our fix to
+    // InMemoryActivityBroadcaster.SubscribeAsync removed DefaultAgentRegistryTests' two 20ms sleeps
+    // (they were waiting on a subscriber that had not been registered yet). Both entries are gone,
+    // so the counts below are read off the merged baseline, not carried over from either branch.
+    // #111 follow-up ratchet: the remaining drop is not a rewrite. Reading the baseline site by site
+    // showed roughly two thirds of it was never debt - a fake that is slow on purpose, a backoff
+    // against a real resource, or spacing against a live API - and those now say so with
+    // delay-is-not-a-signal. One more was a Task.Delay inside a STRING, in an assertion message
+    // telling the reader NOT to add a delay; the scanner masks string literals now. The count simply
+    // stopped counting correct code.
+    private const int ExpectedBaselineEntryCount = 61;
+    private const int ExpectedBaselineViolationCount = 81;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.

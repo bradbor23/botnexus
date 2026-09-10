@@ -15,10 +15,12 @@ namespace BotNexus.Gateway.Configuration;
 /// <remarks>
 /// <para><b>Explicit-null semantics (#2705).</b> config.json has THREE distinct states per key:
 /// key absent, key present with value <c>null</c>, and key present with a value.
-/// <see cref="AgentConfigMerger" /> depends on that distinction in six places
-/// (<c>memory</c>, <c>search</c>, <c>temporalDecay</c>, <c>heartbeat</c>, <c>quietHours</c>,
-/// <c>fileAccess</c>): an explicit null means <em>suppress the inherited world default</em>,
-/// whereas absence means <em>inherit it</em>.</para>
+/// <see cref="BotNexus.Gateway.Configuration.Store.ConfigValueState" /> is the canonical model of
+/// that distinction today: the agent-level merger that originally consumed it was removed with the
+/// configuration reset (#3515), but the states did not go with it - an explicit null still means
+/// <em>suppress the inherited value</em>, whereas absence still means <em>inherit it</em>, and the
+/// store layer (<see cref="BotNexus.Gateway.Configuration.Store.ConfigDocumentFlattener" /> reading,
+/// <see cref="BotNexus.Gateway.Configuration.Store.ConfigDocumentPatcher" /> writing) preserves it.</para>
 /// <para>The writer therefore guarantees that <b>an explicit null present in the document on disk
 /// survives a whole-document write</b>. This is a deliberate contract, not an implementation
 /// accident: the typed <see cref="PlatformConfig" /> graph cannot represent "present and null"
@@ -80,6 +82,12 @@ public sealed class PlatformConfigWriter
     /// </remarks>
     private readonly Writers.IConfigurationWriter _writer;
 
+    /// <summary>
+    /// Store consulted for the pristine document when no config file exists. Null for file-only
+    /// installations, which is every caller that has not been given a store.
+    /// </summary>
+    private readonly IConfigStore? _pristineStore;
+
     public PlatformConfigWriter(string configPath, IFileSystem fileSystem, ConfigBackupService? backup = null)
         : this(configPath, fileSystem, backup, writer: null)
     {
@@ -97,10 +105,31 @@ public sealed class PlatformConfigWriter
         IFileSystem fileSystem,
         ConfigBackupService? backup,
         Writers.IConfigurationWriter? writer)
+        : this(configPath, fileSystem, backup, writer, pristineStore: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a writer that can recover its pristine document from <paramref name="pristineStore"/>
+    /// when no config file exists.
+    /// </summary>
+    /// <param name="pristineStore">
+    /// Store consulted for the before-document when the config file is absent. <see langword="null"/>
+    /// keeps the file-only behaviour. Supplying it is what makes a store-only installation safe; see
+    /// <see cref="ReadRootAsync"/> for why an empty fallback is actively dangerous rather than merely
+    /// incomplete.
+    /// </param>
+    public PlatformConfigWriter(
+        string configPath,
+        IFileSystem fileSystem,
+        ConfigBackupService? backup,
+        Writers.IConfigurationWriter? writer,
+        IConfigStore? pristineStore)
     {
         _configPath = configPath;
         _fileSystem = fileSystem;
         _backup = backup;
+        _pristineStore = pristineStore;
         _writer = writer ?? new Writers.JsonConfigurationWriter(configPath, fileSystem, backup);
     }
 
@@ -281,19 +310,21 @@ public sealed class PlatformConfigWriter
             // and an absent property are the same CLR state. So a whole-document write through
             // the typed model erases every explicit null in config.json.
             //
-            // That is not cosmetic. AgentConfigMerger treats absent / explicit-null / value as
-            // THREE distinct states in six places (memory, search, temporalDecay, heartbeat,
-            // quietHours, fileAccess): explicit null means "suppress the inherited default",
-            // absence means "inherit it". Erasing the null therefore flips the setting to the
-            // opposite of what the operator wrote, silently, on a write they did not initiate.
+            // That is not cosmetic. ConfigValueState models absent / explicit-null / value as
+            // THREE distinct states, and the store layer preserves them end to end
+            // (ConfigDocumentFlattener reading, ConfigDocumentPatcher writing): explicit null means
+            // "suppress the inherited value", absence means "inherit it". Erasing the null therefore
+            // flips the setting to the opposite of what the operator wrote, silently, on a write they
+            // did not initiate. The agent-level merger that first depended on this was removed with
+            // the configuration reset (#3515); the tri-state itself was not.
             //
             // Two rejected alternatives, recorded so they are not "simplified" back in:
             //  - Dropping WhenWritingNull globally would spray nulls for every unset optional
             //    property across the whole document - a far larger behaviour change than the
-            //    defect warrants, and it would not help the keys the merger reads anyway,
-            //    because the typed model cannot tell "operator wrote null" from "never set".
-            //  - Changing the merger's meaning of null is wrong: the merger is correct and six
-            //    call sites depend on it.
+            //    defect warrants, and it would not help the tri-state keys anyway, because the
+            //    typed model cannot tell "operator wrote null" from "never set".
+            //  - Redefining what a JSON null means in config.json is wrong: the reader and the
+            //    store both treat it as an explicit suppression, and both are correct.
             // Instead the preservation is scoped precisely to keys that were explicitly null in
             // the SOURCE document, and only where the regenerated document left them absent - a
             // real value in the new document always wins.
@@ -770,13 +801,43 @@ public sealed class PlatformConfigWriter
                 section.Remove(key);
         }, $"before-{sectionName}-remove", ct, namedSections: [sectionName]);
 
+    /// <summary>
+    /// Reads the pristine document every mutation diffs against.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The authoritative store is the source when configured and populated. The file is the fallback
+    /// when no store document exists, matching the runtime configuration pipeline's store-last,
+    /// store-wins precedence. A JSON mirror may exist beside an enabled store; reading that lower-
+    /// precedence mirror first would make a mutation derive from configuration the runtime does not
+    /// actually use.
+    /// </para>
+    /// <para>
+    /// <b>Why this is not merely a tidy-up.</b> This document is the <em>before</em> side of
+    /// <see cref="ConfigDocumentDiffer"/>. Returning an empty object when a populated store exists
+    /// does not fail - it makes the differ compute every stored key as an addition and no key as a
+    /// removal, so a one-field edit produces a change set spanning the entire configuration. That is
+    /// silently wrong output from a successful-looking write, the same detection story as #3547: a
+    /// 200, no error-shaped log line, and a wrong result. Sourcing the pristine document from the
+    /// store is what makes a store-only installation safe (#3823).
+    /// </para>
+    /// </remarks>
     private async Task<JsonObject> ReadRootAsync(CancellationToken ct)
     {
-        if (!_fileSystem.File.Exists(_configPath))
-            return new JsonObject();
+        if (_pristineStore is not null)
+        {
+            var entries = await _pristineStore.ReadEntriesAsync(ct);
+            if (entries.Count > 0)
+                return ConfigDocumentRehydrator.Rehydrate(entries);
+        }
 
-        var json = await _fileSystem.File.ReadAllTextAsync(_configPath, ct);
-        return JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+        if (_fileSystem.File.Exists(_configPath))
+        {
+            var json = await _fileSystem.File.ReadAllTextAsync(_configPath, ct);
+            return JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+        }
+
+        return new JsonObject();
     }
 
     /// <summary>

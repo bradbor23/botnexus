@@ -90,7 +90,6 @@ public class ResponsesStreamEngineTests
             emitError: (_, _, _, _) => { },
             onParsedEvent: null,
             resolveConfiguredServiceTier: null,
-            normalizeTextDelta: null,
             ct: CancellationToken.None);
 
         return await TestAwait.SignaledAsync(stream.GetResultAsync(), "the provider stream to produce its result");

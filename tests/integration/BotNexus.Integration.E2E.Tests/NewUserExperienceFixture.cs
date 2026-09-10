@@ -94,8 +94,8 @@ public sealed class NewUserExperienceFixture : IAsyncLifetime
             PackVersion = E2ECliPack.BuildPackageVersion(runId);
             var sandboxFamilyRoot = Path.Combine(Path.GetTempPath(), "botnexus-e2e");
 
-            // Reclaim sandboxes abandoned by a run that was killed rather than finished.
-            // Nothing else reaps them: a gigabyte had accumulated before this was added.
+            // Reclaim sandboxes abandoned by a run that was killed rather than finished. Nothing
+            // else reaps them: a gigabyte of these had accumulated before this was added.
             BotNexus.Integration.Testing.SandboxProcessGuard.ReapStaleSandboxes(sandboxFamilyRoot);
 
             SandboxRoot = Path.Combine(sandboxFamilyRoot, runId);

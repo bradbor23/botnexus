@@ -1067,6 +1067,40 @@ public sealed class SqliteConversationStore : IConversationStore
         return summaries;
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<PendingAskUserCheckpoint>> GetPendingAskUserCheckpointsAsync(CancellationToken ct = default)
+    {
+        using var activity = ActivitySource.StartActivity("conversation.get_pending_ask_user_checkpoints", ActivityKind.Internal);
+
+        await EnsureCreatedAsync(ct).ConfigureAwait(false);
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(ct).ConfigureAwait(false);
+
+        await using var command = connection.CreateCommand();
+        // #3660: filter in SQL and project two columns. Deliberately NOT routed through
+        // MaterializeOrderedAsync - that path is correct but hydrates the entire conversation
+        // aggregate for every id it is handed, which is exactly the cost this query removes.
+        // On the store that motivated the issue this reads 3 rows instead of 3,964.
+        // #3663: the WHERE clause is composed from PendingAskUserPredicate, the same constant the
+        // partial index is built from. SQLite silently declines a partial index whose WHERE does not
+        // subsume the query's, and that decline is invisible - the query still returns correct rows,
+        // just via a full scan. Sharing one string makes divergence impossible by construction.
+        command.CommandText =
+            $"SELECT id, pending_ask_user_json FROM conversations WHERE {PendingAskUserPredicate} ORDER BY updated_at DESC";
+
+        var checkpoints = new List<PendingAskUserCheckpoint>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            checkpoints.Add(new PendingAskUserCheckpoint(
+                ConversationId.From(reader.GetString(0)),
+                reader.GetString(1)));
+        }
+
+        activity?.SetTag("botnexus.conversation.pending_ask_user_count", checkpoints.Count);
+        return checkpoints;
+    }
+
     /// <summary>
     /// Loads the participant rosters for every active conversation in a single query so
     /// <see cref="GetSummariesAsync"/> can attach them without an N+1 per-conversation lookup.
@@ -1241,7 +1275,34 @@ public sealed class SqliteConversationStore : IConversationStore
         parentIndexCommand.CommandText =
             "CREATE INDEX IF NOT EXISTS idx_conversations_parent ON conversations(parent_conversation_id);";
         await parentIndexCommand.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+        // #3663: partial index for the startup pending-ask_user reconciliation lookup (#3660).
+        // On the store that motivated the issue the predicate matches 3 rows of 3,968, so the index
+        // holds 3 entries and the lookup costs O(pending) rather than O(conversations):
+        // SCAN conversations 7.48ms -> SCAN ... USING INDEX idx_conversations_pending_ask_user 0.01ms.
+        // Write amplification is confined to conversations that actually have a pending checkpoint,
+        // because a row outside the predicate is never entered into the index at all.
+        await using var pendingIndexCommand = connection.CreateCommand();
+        pendingIndexCommand.CommandText = PendingAskUserIndexDdl;
+        await pendingIndexCommand.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The single source of truth for the pending-ask_user filter. Used verbatim both in the
+    /// <see cref="GetPendingAskUserCheckpointsAsync"/> query and in the partial index's WHERE clause
+    /// so the index predicate always subsumes the query predicate (#3663 AC3).
+    /// </summary>
+    internal const string PendingAskUserPredicate =
+        "pending_ask_user_json IS NOT NULL AND pending_ask_user_json <> ''";
+
+    /// <summary>
+    /// Partial-index DDL for the pending-ask_user lookup. Idempotent, run on every open, so an
+    /// existing database acquires the index on next boot without a versioned migration step.
+    /// </summary>
+    internal const string PendingAskUserIndexName = "idx_conversations_pending_ask_user";
+
+    internal const string PendingAskUserIndexDdl =
+        $"CREATE INDEX IF NOT EXISTS {PendingAskUserIndexName} ON conversations(id) WHERE {PendingAskUserPredicate};";
 
     // Additive `conversations` columns in application order. The `kind` column maps NULL to
     // ConversationKind.HumanAgent on load; `world_id` is NOT NULL DEFAULT '' and lazy-backfilled
