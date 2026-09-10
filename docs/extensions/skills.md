@@ -166,6 +166,18 @@ So no step here asks a trace to identify parameters. The division of labour is:
 - the **operator** rules on the result, because "does this vary between runs" is a question about
   intent that neither of the other two can answer.
 
+#### Record on the turn *after* the work
+
+The recorder reads **persisted session history**, not the agent's own context. A tool call is not
+written there until its turn completes, so an agent that finishes a task and asks for `steps` in the
+same turn sees none of them — verified live: a turn that ran `bash` then asked for `steps` got zero,
+and asking again on the very next turn returned that same call with its arguments.
+
+That is a constraint of reading history rather than a defect, and reading history is the point: it
+is what makes a recording survive compaction, and what stops a proposal being checked against the
+agent's account of itself. It also fails safely — `propose` validates against the same empty trace
+and refuses, so nothing can be recorded from a run that is not on record. Both messages say so.
+
 #### What keeps a proposal honest
 
 Every declared parameter must record the literal value this run used, and that value is checked

@@ -54,7 +54,10 @@ public sealed class SkillRecordToolTests
         SkillDraftStore Drafts,
         MockFileSystem FileSystem);
 
-    private static Harness Build(bool withTrace = true, SkillsConfig? config = null)
+    private static Harness Build(
+        bool withTrace = true,
+        SkillsConfig? config = null,
+        IReadOnlyList<RecordedStep>? steps = null)
     {
         var fs = new MockFileSystem();
         var settings = config ?? new SkillsConfig { AllowSkillCreation = true };
@@ -68,7 +71,7 @@ public sealed class SkillRecordToolTests
             fs);
 
         ISessionTraceSource? trace = withTrace
-            ? new SkillRecorderTests.FakeTraceSource(Run())
+            ? new SkillRecorderTests.FakeTraceSource(steps ?? Run())
             : null;
 
         return new Harness(new SkillRecordTool(writer, drafts, trace, settings, "test-agent"), drafts, fs);
@@ -101,6 +104,37 @@ public sealed class SkillRecordToolTests
 
         text.ShouldContain("bash");
         text.ShouldContain("Recorded steps");
+    }
+
+    [Fact]
+    public async Task Steps_WithNothingRecorded_ExplainsThatThisTurnIsNotInHistoryYet()
+    {
+        // Found on the live instance, not in a unit test: a turn that ran bash and then asked for
+        // its own steps got ZERO, because a call is not written to session history until the turn
+        // completes. Asking again on the next turn returned it. Reading history rather than the
+        // in-flight run is deliberate — it is what makes a recording survive compaction — so the
+        // empty state has to explain the timing instead of reading as "the feature does nothing".
+        var harness = Build(steps: []);
+
+        var text = Text(await harness.Tool.ExecuteAsync("call", Args("steps")));
+
+        text.ShouldNotStartWith("Error:");
+        text.ShouldContain("THIS turn");
+        text.ShouldContain("next turn");
+    }
+
+    [Fact]
+    public async Task Propose_WithNothingRecorded_GivesTheSameExplanationAndStagesNothing()
+    {
+        // The agent that ignores the hint from `steps` hits this instead. It must fail CLOSED and
+        // say the same thing, or the obvious recovery is to invent the steps.
+        var harness = Build(steps: []);
+
+        var text = await ProposeAsync(harness);
+
+        text.ShouldStartWith("Error:");
+        text.ShouldContain("next turn");
+        harness.Drafts.TryLoad("add-film").ShouldBeNull();
     }
 
     // ── propose ──────────────────────────────────────────────────────────────
