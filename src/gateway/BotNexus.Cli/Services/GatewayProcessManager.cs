@@ -342,11 +342,19 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
 
         if (handle is null)
         {
+            // Say which evidence was actually gathered. "no PID file" alone was reported even when
+            // the caller had supplied no binary path, so nothing had been searched for - and it
+            // read identically to a genuine, thorough "nothing is running".
             var reason = staleReason ?? "no PID file";
-            _logger.LogInformation("Gateway is not running ({Reason})", reason);
+            var searched = !string.IsNullOrWhiteSpace(gatewayBinaryPath);
+            var detail = searched
+                ? $"{reason}, and no process is running {Path.GetFileNameWithoutExtension(gatewayBinaryPath)}"
+                : $"{reason}, and no binary path was supplied to search by";
+
+            _logger.LogInformation("Gateway is not running ({Reason})", detail);
             return new GatewayStopResult(
                 Success: true,
-                Message: $"Gateway is not running ({reason})",
+                Message: $"Gateway is not running ({detail})",
                 Outcome: GatewayStopOutcome.NotRunning);
         }
 
