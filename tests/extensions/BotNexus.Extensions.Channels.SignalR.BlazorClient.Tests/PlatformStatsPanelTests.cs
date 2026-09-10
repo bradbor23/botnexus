@@ -239,6 +239,55 @@ public sealed class PlatformStatsPanelTests : IDisposable
             TimeSpan.FromSeconds(15));
     }
 
+    /// <summary>
+    /// /platform opts into an already-open loop list. Without this the parameter could be dropped
+    /// or renamed and every existing test would stay green, because none of them set it - the page
+    /// would silently go back to opening on a collapsed disclosure.
+    /// </summary>
+    [Fact]
+    public void LoopsInitiallyExpanded_renders_the_loop_list_open_on_first_render()
+    {
+        var started = DateTimeOffset.UtcNow;
+        _httpHandler.SetupResponse("/api/stats", StatsJsonWithLoops(("farnsworth", "c_abc", "s_1", started)));
+
+        var cut = _ctx.Render<PlatformStatsPanel>(p => p.Add(c => c.LoopsInitiallyExpanded, true));
+
+        // Open without anyone having clicked the disclosure.
+        cut.Find("[data-testid='active-loops-toggle']").GetAttribute("aria-expanded").ShouldBe("true");
+        cut.FindAll("[data-testid='active-loop-details']").Count.ShouldBe(1);
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid='active-loop-row']").Count.ShouldBe(1));
+    }
+
+    /// <summary>
+    /// The parameter SEEDS the disclosure; it does not pin it open. Pins the reason the seed lives
+    /// in OnInitialized rather than OnParametersSet: seeding on every parameter set would reopen
+    /// the list under an operator who had just closed it, on any parent re-render or poll.
+    /// </summary>
+    [Fact]
+    public void An_operator_can_collapse_an_initially_expanded_list_and_a_refresh_leaves_it_closed()
+    {
+        var started = DateTimeOffset.UtcNow;
+        _httpHandler.SetupResponse("/api/stats", StatsJsonWithLoops(("farnsworth", "c_abc", "s_1", started)));
+
+        var cut = _ctx.Render<PlatformStatsPanel>(p => p.Add(c => c.LoopsInitiallyExpanded, true));
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid='active-loop-row']").Count.ShouldBe(1));
+
+        cut.Find("[data-testid='active-loops-toggle']").Click();
+        cut.Find("[data-testid='active-loops-toggle']").GetAttribute("aria-expanded").ShouldBe("false");
+        cut.FindAll("[data-testid='active-loop-details']").ShouldBeEmpty();
+
+        // A later poll returns different data; the operator's collapsed choice must survive it.
+        _httpHandler.SetupResponse("/api/stats", StatsJsonWithLoops(
+            ("farnsworth", "c_abc", "s_1", started),
+            ("nova", "c_def", "s_2", started)));
+
+        cut.WaitForAssertion(
+            () => cut.Find("[data-testid='stat-active-loops']").TextContent.ShouldContain("2"),
+            TimeSpan.FromSeconds(15));
+        cut.Find("[data-testid='active-loops-toggle']").GetAttribute("aria-expanded").ShouldBe("false");
+        cut.FindAll("[data-testid='active-loop-details']").ShouldBeEmpty();
+    }
+
     /// <summary>AC5 sad path: a failed refresh keeps the known rows and flags them as stale.</summary>
     [Fact]
     public void Failed_refresh_keeps_known_rows_and_surfaces_a_refresh_error()
