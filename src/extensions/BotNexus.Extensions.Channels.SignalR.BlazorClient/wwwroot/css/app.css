@@ -6684,6 +6684,42 @@ h3.conversation-title.editable:hover {
 .activity-table th:nth-child(4), .activity-table td:nth-child(4) { width: 9%; }
 .activity-table th:nth-child(5), .activity-table td:nth-child(5) { width: 12%; }
 
+/* The Agents column gets more room, but only once it is free.
+   The total is fixed, so under `table-layout: fixed` every pixel Agents gains comes
+   straight out of Conversation. Measured on the live table (36 rows) by counting cells
+   whose content overflows its box:
+
+   | viewport | table   | 50/20 split          | 44/26 split          |
+   |----------|---------|----------------------|----------------------|
+   | 1280px   | 1232px  | conv 0, agents 11    | conv 12, agents 5    |
+   | 1440px   | 1392px  | conv 0, agents 11    | conv  6, agents 3    |
+   | 1600px   | 1552px  | conv 0, agents  5    | conv  0, agents 1    |
+
+   So below 1600px the trade LOSES - twelve clipped conversation names to save six
+   Agents cells - and at 1600px it costs nothing. 1600px is exactly where
+   .activity-dashboard reaches its 100rem cap and the table stops growing, which is why
+   Conversation has slack to give from there on and not before.
+
+   24%, not 26%, and the difference is margin rather than optimality. Measured at 1600px
+   against two independent content sets - the live table's 36 rows, and a replica built
+   from the same rules with different titles:
+
+   | split | live table        | replica           |
+   |-------|-------------------|-------------------|
+   | 50/20 | conv 0, agents 5  | conv 0, agents 5  |
+   | 46/24 | conv 0, agents 2  | conv 0, agents 3  |
+   | 44/26 | conv 0, agents 1  | conv 2, agents 2  |
+
+   26% buys one more Agents cell on today's data and sits exactly on the cliff: the
+   replica's slightly longer titles already clip there. 24% is the widest Agents column
+   that leaves Conversation clean in BOTH, so it is the value with room for a title to
+   grow. Column widths are content-sensitive, and one snapshot is not enough to tune
+   them against. */
+@media (min-width: 1600px) {
+    .activity-table th:nth-child(1), .activity-table td:nth-child(1) { width: 46%; }
+    .activity-table th:nth-child(2), .activity-table td:nth-child(2) { width: 24%; }
+}
+
 .activity-table thead th {
     text-align: left;
     padding: 0.5rem 0.75rem;
