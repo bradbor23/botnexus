@@ -16,6 +16,12 @@ name: "Deploy: Documentation"
 # The split is by event, not by content: `build` runs everywhere, `deploy` is skipped on
 # pull_request, and the two Pages-specific steps are skipped with it. A PR therefore never
 # needs Pages credentials and can never publish.
+#
+# The `build` JOB always runs on a PR and decides for itself whether to build, rather than
+# being filtered out by `paths`. That is what makes it safe to mark REQUIRED on main: GitHub
+# does not treat a filtered-out required check as skipped, it waits for it forever, and with
+# enforce_admins on that blocks every PR that happens to touch no documentation - including
+# an admin's.
 
 on:
   push:
@@ -25,14 +31,14 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/deploy-docs.yml'
+  # NO `paths` filter on the pull_request side, deliberately. A required check that does not
+  # run is not skipped - it sits "Expected - waiting for status to be reported" forever, and
+  # with enforce_admins on that blocks everyone including an admin. So the job always runs and
+  # decides for itself whether there is anything to build. Same reasoning as
+  # .github/workflows/docs-impact.yml: run everywhere, exit early.
+  #
+  # This also keeps the gate self-gating for free - a PR editing this file runs it.
   pull_request:
-    paths:
-      - 'docs/**'
-      - 'package.json'
-      - 'package-lock.json'
-      # The gate is gated: a PR that edits this file re-runs it, so the check cannot be
-      # disarmed by a change that never has to prove itself.
-      - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
 # Least privilege at the top; the two jobs that genuinely need Pages ask for it themselves.
@@ -66,11 +72,39 @@ jobs:
           node-version: '20'
           cache: npm
 
+      # Decides whether this PR can possibly affect the site. A push to main skips this and
+      # always builds, because the push trigger is already filtered to the same paths.
+      - name: Does this change affect the docs site?
+        id: scope
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          # Three dots. `git diff A B` compares the two TIPS, so anything merged to main after
+          # this branch was cut would count as a file this PR changed - the bug fixed in #95.
+          # `A...B` diffs from the merge base, which needs fetch-depth: 0 above.
+          if ! changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
+            echo "::error::Could not diff $BASE_SHA...$HEAD_SHA; refusing to report a pass on an unknown change set."
+            exit 1
+          fi
+          echo "Changed files: $(printf '%s\n' "$changed" | grep -c . || true)"
+          if printf '%s\n' "$changed" | grep -qE '^(docs/|package(-lock)?\.json$|\.github/workflows/deploy-docs\.yml$)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Docs site inputs touched; building."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing that can reach the docs site; skipping the build."
+          fi
+
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || steps.scope.outputs.relevant == 'true'
         run: npm ci
 
       # THE GATE. Exits non-zero on a dead link, which is the whole point of running it here.
       - name: Build VitePress site
+        if: github.event_name != 'pull_request' || steps.scope.outputs.relevant == 'true'
         run: npm run docs:build
 
       # Pages-only from here down. `base` is hardcoded in docs/.vitepress/config.mts and this
