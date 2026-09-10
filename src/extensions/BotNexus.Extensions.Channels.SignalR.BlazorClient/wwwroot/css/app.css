@@ -6775,6 +6775,26 @@ h3.conversation-title.editable:hover {
     white-space: nowrap;
 }
 
+/* The Agents cell is a LIST of chips, not a single value, so it may wrap where the rest of
+   the row may not. `.activity-row td` sets nowrap + ellipsis table-wide, which is correct
+   for a title or a timestamp - but truncating one of five agent chips does not shorten a
+   value, it silently drops an agent from the column whose entire job is naming them.
+   Wrapping is what the title cell already does for its purpose line, so ragged row heights
+   are an established shape on this table rather than a new one.
+
+   Measured on the live table (36 rows): clipped Agents cells 2 -> 0 at a 2000px viewport
+   and 11 -> 0 at 1280px. The cost is height, and it is small where the column is wide -
+   two rows grew, table +25px (+1.5%) at 2000px - and real where it is narrow: eleven rows
+   grew, table +109px (+6%), tallest row 57px -> 104px at 1280px. Hiding an agent is worse
+   than a tall row, so this is not gated on width.
+
+   `overflow: hidden` is deliberately left in place. A single chip wider than the whole
+   column still degrades exactly as it does today, rather than bleeding into the next
+   column - wrapping only helps when there is a break opportunity between chips. */
+.activity-row td.activity-cell-agents {
+    white-space: normal;
+}
+
 .activity-agent-chip {
     display: inline-block;
     padding: 0.1rem 0.45rem;
