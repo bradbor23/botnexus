@@ -150,6 +150,7 @@ public sealed class LlmSessionCompactorResilienceTests
 
         // Wait out the cooldown, then it should attempt again (no longer short-circuits): the LLM
         // call runs, fails (empty), and the result snapshots the history → EntriesPreserved > 0.
+        // delay-is-not-a-signal: backoff between retries against a real external resource
         await Task.Delay(TimeSpan.FromMilliseconds(1200));
 
         var afterCooldown = await compactor.CompactAsync(session, options);

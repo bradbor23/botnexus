@@ -85,6 +85,7 @@ public sealed class DelayToolTests
     [Fact]
     public async Task DelayTool_CancellationReturnsInfoNotError()
     {
+        // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
         var tool = CreateDelayTool(delay: static (duration, token) => Task.Delay(duration, token));
         using var cts = new CancellationTokenSource();
         cts.CancelAfter(TimeSpan.FromMilliseconds(50));

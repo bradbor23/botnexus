@@ -177,6 +177,7 @@ public sealed class ToolExecutorTaintTests
             CancellationToken cancellationToken = default, AgentToolUpdateCallback? onUpdate = null)
         {
             if (delayMs > 0)
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(delayMs, cancellationToken);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "ok")]);
         }

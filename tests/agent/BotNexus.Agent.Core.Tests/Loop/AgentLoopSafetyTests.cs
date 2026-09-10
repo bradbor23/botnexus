@@ -196,6 +196,7 @@ public sealed class AgentLoopSafetyTests
         public Task<IReadOnlyDictionary<string, object?>> PrepareArgumentsAsync(IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken = default) => Task.FromResult(arguments);
         public async Task<AgentToolResult> ExecuteAsync(string toolCallId, IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken = default, AgentToolUpdateCallback? onUpdate = null)
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         }

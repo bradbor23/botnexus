@@ -974,6 +974,7 @@ public sealed class StreamingSessionHelperTests
     private static async IAsyncEnumerable<AgentStreamEvent> StallAfterFirst()
     {
         yield return new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "partial" };
+        // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
         await Task.Delay(TimeSpan.FromSeconds(30)); // Will be cut short by watchdog
         yield return new AgentStreamEvent { Type = AgentStreamEventType.MessageEnd };
     }

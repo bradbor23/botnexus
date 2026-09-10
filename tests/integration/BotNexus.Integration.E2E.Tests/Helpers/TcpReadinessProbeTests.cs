@@ -51,11 +51,13 @@ public sealed class TcpReadinessProbeTests
 
         _ = Task.Run(async () =>
         {
+            // delay-is-not-a-signal: the listener starts late on purpose - that is the scenario
             await Task.Delay(200);
             var listener = new TcpListener(IPAddress.Loopback, port);
             listener.Start();
             listenerStarted.SetResult();
             // Keep listening for the duration of the test
+            // delay-is-not-a-signal: holds the fake listener open for the test's duration
             await Task.Delay(5000);
             listener.Stop();
         });

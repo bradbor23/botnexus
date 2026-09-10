@@ -79,6 +79,7 @@ public sealed class ToolExecutorSecurityTests
     {
         var tool = CreateTool("hang", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });

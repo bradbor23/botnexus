@@ -81,6 +81,7 @@ public sealed class GitHubModelsIntegrationTests : IAsyncLifetime
     {
         // Arrange: give the model a tool and ask it something that requires the tool
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate limit spacing
 
         var weatherTool = new Tool(
@@ -117,6 +118,7 @@ public sealed class GitHubModelsIntegrationTests : IAsyncLifetime
     {
         // Arrange
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate limit spacing
 
         var context = new Context(
@@ -155,6 +157,7 @@ public sealed class GitHubModelsIntegrationTests : IAsyncLifetime
     {
         // Arrange: use a very specific system prompt constraint
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate limit spacing
 
         var context = new Context(
@@ -174,6 +177,7 @@ public sealed class GitHubModelsIntegrationTests : IAsyncLifetime
     {
         // Arrange: multi-turn conversation where second message references first
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate limit spacing
 
         var messages = new Message[]
@@ -209,6 +213,7 @@ public sealed class GitHubModelsIntegrationTests : IAsyncLifetime
     {
         // Arrange: simulate one agent loop iteration with tool call + result
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate limit spacing
 
         var calculatorTool = new Tool(

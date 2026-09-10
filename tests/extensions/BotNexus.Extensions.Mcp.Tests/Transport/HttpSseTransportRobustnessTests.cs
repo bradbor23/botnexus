@@ -92,6 +92,7 @@ public sealed class HttpSseTransportRobustnessTests
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(delay, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

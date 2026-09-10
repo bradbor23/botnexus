@@ -244,6 +244,7 @@ public class BoundedHttpContentIdleTimeoutTests
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(_gap, cancellationToken).ConfigureAwait(false);
             if (_index >= _payload.Length)
                 return 0;

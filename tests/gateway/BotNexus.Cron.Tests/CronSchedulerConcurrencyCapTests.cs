@@ -163,6 +163,7 @@ public sealed class CronSchedulerConcurrencyCapTests
 
             try
             {
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(hold, cancellationToken).ConfigureAwait(false);
                 Interlocked.Increment(ref _executions);
             }

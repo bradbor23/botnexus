@@ -209,6 +209,7 @@ public sealed class ExtensionBootFixture : IAsyncLifetime
             {
                 // Gateway not up yet; retry until deadline.
             }
+            // delay-is-not-a-signal: backoff between retries against a real external resource
             await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
         return false;

@@ -19,6 +19,7 @@ public sealed class ToolExecutorTimeoutTests
     {
         var tool = CreateTool("hang", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });
@@ -43,6 +44,7 @@ public sealed class ToolExecutorTimeoutTests
     {
         var hangTool = CreateTool("hang", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });
@@ -73,6 +75,7 @@ public sealed class ToolExecutorTimeoutTests
     {
         var tool = CreateTool("hang", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });
@@ -115,6 +118,7 @@ public sealed class ToolExecutorTimeoutTests
     {
         var tool = CreateTool("slowtool", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });
@@ -136,6 +140,7 @@ public sealed class ToolExecutorTimeoutTests
     {
         var tool = CreateTool("hang", async ct =>
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });

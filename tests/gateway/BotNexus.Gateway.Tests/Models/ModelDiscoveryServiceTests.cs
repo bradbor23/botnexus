@@ -202,6 +202,7 @@ public sealed class ModelDiscoveryServiceTests
 
         public async Task<IReadOnlyList<LlmModel>?> DiscoverModelsAsync(CancellationToken cancellationToken = default)
         {
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(_delay, cancellationToken);
             return [new LlmModel("slow-model", "Slow", "test", "slow-provider", "", false, ["text"], new ModelCost(0,0,0,0), 128000, 32000)];
         }

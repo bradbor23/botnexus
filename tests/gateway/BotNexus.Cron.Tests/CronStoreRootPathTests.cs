@@ -49,6 +49,7 @@ public sealed class CronStoreRootPathTests
             }
             catch (IOException)
             {
+                // delay-is-not-a-signal: backoff between retries against a real external resource
                 Thread.Sleep(100);
             }
             catch (UnauthorizedAccessException)

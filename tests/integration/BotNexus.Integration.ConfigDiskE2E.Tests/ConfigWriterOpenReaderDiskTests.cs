@@ -73,6 +73,7 @@ public sealed class ConfigWriterOpenReaderDiskTests
 
                     // Hold the handle briefly so the writer's replace window overlaps a live
                     // reader; without this the race is too narrow to reproduce reliably.
+                    // delay-is-not-a-signal: widens the race window deliberately so it reproduces at all
                     Thread.Sleep(1);
                 }
                 catch (IOException)

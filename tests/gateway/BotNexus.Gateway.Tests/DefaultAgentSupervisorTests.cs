@@ -29,6 +29,7 @@ public sealed class DefaultAgentSupervisorTests
         strategy.Setup(s => s.CreateAsync(It.IsAny<AgentDescriptor>(), It.IsAny<AgentExecutionContext>(), It.IsAny<CancellationToken>()))
             .Returns(async () =>
             {
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(40);
                 return handle.Object;
             });
@@ -201,6 +202,7 @@ public sealed class DefaultAgentSupervisorTests
         strategy.Setup(s => s.CreateAsync(It.IsAny<AgentDescriptor>(), It.IsAny<AgentExecutionContext>(), It.IsAny<CancellationToken>()))
             .Returns(async () =>
             {
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(50); // Simulate slow creation so other callers queue up
                 throw new InvalidOperationException("Creation failed!");
             });

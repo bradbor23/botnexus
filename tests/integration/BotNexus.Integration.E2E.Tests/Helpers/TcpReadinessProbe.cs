@@ -51,6 +51,7 @@ internal static class TcpReadinessProbe
                 // Port not yet listening — back off and retry.
             }
 
+            // delay-is-not-a-signal: backoff between retries against a real external resource
             await Task.Delay(Math.Min(delayMs, maxDelayMs), cancellationToken);
             delayMs = Math.Min(delayMs * 2, maxDelayMs);
         }

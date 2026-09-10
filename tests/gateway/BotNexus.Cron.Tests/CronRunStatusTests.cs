@@ -180,6 +180,7 @@ public sealed class CronRunStatusTests
     {
         public string ActionType { get; } = actionType;
         public async Task ExecuteAsync(CronExecutionContext context, CancellationToken cancellationToken)
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             => await Task.Delay(delay, cancellationToken);
     }
 

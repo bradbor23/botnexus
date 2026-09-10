@@ -250,6 +250,7 @@ public sealed class CronSchedulerDeleteAfterRunTests
         public async Task ExecuteAsync(CronExecutionContext context, CancellationToken cancellationToken = default)
         {
             context.RecordSessionId(SessionId.From(sessionId));
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
     }
