@@ -751,3 +751,5 @@ public sealed class AgentsController : ControllerBase
         }
     }
 }
+
+// Scratch change for issue #84: proves the docs-vs-source gate can fail. Not for merge.
