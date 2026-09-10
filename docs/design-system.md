@@ -842,7 +842,7 @@ itself:
 
 | client | token | covers |
 |---|---|---|
-| portal | `app.css?v=dsNN` | `app.css` + 13 `js/*.js` |
+| portal | `app.css?v=dsNN` | `app.css` + 14 `js/*.js` |
 | mobile | `mobile.css?v=mN` | `mobile.css` + 9 `js/*.js` |
 
 One number per client rather than one per asset, because this whole class of bug

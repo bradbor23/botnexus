@@ -190,19 +190,71 @@ The agent sees names, kinds, addresses, usernames, descriptions and tags — and
 it lives. A `database` location shows **no address at all**, because for a database the address is
 the connection string, and the connection string is the credential.
 
+### Narrow a location to certain agents
+
+`list_locations` is one grant covering every location. When a target should be visible to some
+agents and not others, scope it on the location itself with `agents`:
+
+```json
+"gateway": {
+  "locations": {
+    "proxmox-main": {
+      "type": "remote-node",
+      "endpoint": "https://pve.example.lan:8006",
+      "credentialRef": "keyring:proxmox-token",
+      "agents": ["infra"]
+    }
+  }
+}
+```
+
+The field is deliberately three-state — **absent**, **present**, and **present but empty** — and
+the distinction between the last two catches people out the same way `toolIds` does:
+
+| `agents` | Who sees the location |
+|---|---|
+| *omitted* | Every agent. This is the default, and the behaviour every location had before the field existed. |
+| `["infra", "ops"]` | Only those agents. Ids are matched case-insensitively. |
+| `["*"]` | Every agent, stated explicitly. |
+| `[]` | **Nobody.** An empty list is a real answer, not an unset one. |
+
+Scoping is applied by the `list_locations` tool: an agent outside the list does not see the target
+in its output at all — absent rather than redacted, because a redacted row still tells the agent
+the host exists. It is a filter on what an agent is told, not on what the operator surfaces show;
+the Configuration page and the locations API still list every location.
+
+This is a visibility control, not a second credential boundary: the credential was never in the
+agent's context to begin with. Use it to keep an agent's `list_locations` output relevant, and to
+avoid telling an unrelated agent your hypervisor's address.
+
 ## Acting on a target — read this before you plan around it
 
 **There is currently no tool that authenticates to a target on an agent's behalf.** Registering a
 location and granting `list_locations` gets an agent as far as knowing your Proxmox host exists and
 where it is. Nothing yet takes `credentialRef`, resolves it, and makes the call.
 
-That tool is the next piece of work. Until it exists, the two ways to get an agent acting on a
-server both have the same cost, and it is the cost this whole design exists to avoid:
+That tool is the next piece of work. Until it exists, the ways to get an agent acting on a server
+are these:
 
-**Option A — `shell` plus `curl`, credential in the environment.** Works today. But the token is in
-the gateway's environment, the agent has a shell, and therefore the agent can read the token. Every
-guarantee above is void for that agent. Reasonable for a throwaway experiment on a host you do not
-care about; not something to leave wired to an inbound channel.
+**Option A — `shell` plus `curl`, credential in the environment.** This no longer works by default,
+and that is deliberate. A tool subprocess used to inherit the gateway's whole environment, so any
+agent holding `shell` or `exec` could read every variable the gateway runs under — provider API
+keys included, and whatever you exported for your own `env:` references. Since that was closed, the
+`shell` and `exec` children are built **from an empty environment** and populated from a fixed
+allow-list (`PATH`, `HOME`, `TMPDIR`, locale, and similar — nothing that authenticates anything).
+
+So `curl -H "Authorization: Bearer $TOKEN"` inside a `shell` call now sends an empty header rather
+than your token. To deliberately hand a specific variable through, name it:
+
+```json
+"gateway": {
+  "toolEnvironmentPassThrough": ["MY_HOMELAB_TOKEN"]
+}
+```
+
+That is an explicit, per-name decision to give every agent with a shell custody of that value, and
+it carries exactly the cost the rest of this page exists to avoid. There is no switch that restores
+wholesale inheritance, because wholesale inheritance is the defect rather than a setting.
 
 **Option B — an MCP server that holds the credential.** The credential lives in the MCP server's
 own configuration rather than in BotNexus, and the agent calls verbs. This keeps the property —
@@ -236,6 +288,8 @@ Worth stating as plainly as the guarantees:
 - `env:`, `file:` and `sqlite:` are not encrypted at rest.
 - A malicious *tool* is outside the model. Tools are trusted code — that is precisely why the
   credential lives there and not in the agent's context.
+- Anything you add to `gateway.toolEnvironmentPassThrough` is readable by every agent that can run
+  a shell. The allow-list exists so that this is a decision you make per name, not one you inherit.
 
 The property being defended is narrower and more useful than "secrets are safe": a credential does
 not enter an agent's context, so text that reaches that context cannot carry it back out.

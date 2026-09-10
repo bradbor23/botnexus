@@ -6,14 +6,15 @@ Skills are modular knowledge packages that enhance agent capabilities without co
 
 1. [What are skills?](#what-are-skills)
 2. [Quick start](#quick-start)
-3. [SKILL.md format](#skillmd-format)
-4. [Skill directory structure](#skill-directory-structure)
-5. [Skill placement](#skill-placement)
-6. [Agent configuration](#agent-configuration)
-7. [How skills load](#how-skills-load)
-8. [Agent skill tool](#agent-skill-tool)
-9. [Best practices](#best-practices)
-10. [Complete example](#complete-example)
+3. [Skills that ship with BotNexus](#skills-that-ship-with-botnexus)
+4. [SKILL.md format](#skillmd-format)
+5. [Skill directory structure](#skill-directory-structure)
+6. [Skill placement](#skill-placement)
+7. [Agent configuration](#agent-configuration)
+8. [How skills load](#how-skills-load)
+9. [Agent skill tool](#agent-skill-tool)
+10. [Best practices](#best-practices)
+11. [Complete example](#complete-example)
 
 ---
 
@@ -67,6 +68,40 @@ EOF
 ```
 
 The skill is now discoverable. Agents can list it with the `skills` tool and load it when they need git guidance.
+
+---
+
+## Skills that ship with BotNexus
+
+Two skills live in this repository. Neither is installed automatically — skills live under
+`~/.botnexus/`, which is user data, so an operator decides whether an agent gets one. Each has an
+install script that copies it into place:
+
+| Skill | What it does | Install |
+|---|---|---|
+| `botnexus-guide` | Teaches an agent the platform it is running on — agents, conversations vs sessions, channels, tools, cron, extensions and configuration. Its reference files are copies of `docs/user-guide`. | `scripts/install-guide-skill.sh` |
+| `get-to-know-you` | Interviews the person the agent works for and records what it learns to agent memory, so the agent stops asking the same questions. | `scripts/install-interview-skill.sh` |
+
+Both take `--home <dir>` to install into a non-default BotNexus home. Only
+`install-interview-skill.sh` also takes `--agent <agent-id>`:
+
+```bash
+# Global - every agent can load it
+scripts/install-interview-skill.sh
+
+# Scoped to one agent instead
+scripts/install-interview-skill.sh --agent my-assistant
+
+# Install into a non-default home
+scripts/install-guide-skill.sh --home /srv/botnexus
+```
+
+**Prefer `--agent` for `get-to-know-you`.** Installed globally it is loadable by every agent,
+including unattended cron workers that have nobody to interview.
+
+**`botnexus-guide` is a copy, not a link.** Its reference files are snapshots of the user guide
+taken at install time, so re-run `scripts/install-guide-skill.sh` after upgrading or the agent will
+answer from the previous version's documentation.
 
 ---
 
