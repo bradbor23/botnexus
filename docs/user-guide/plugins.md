@@ -281,7 +281,7 @@ skills/
 - Skill names must not contain a double hyphen.
 - Plugin skills lose a name collision with a global, agent or workspace skill, so namespace yours.
 
-See the [Skills guide](skills.md) for the full `SKILL.md` format.
+See the [Skills guide](../skills.md) for the full `SKILL.md` format.
 
 ## Carrying an extension
 
@@ -397,6 +397,6 @@ no partial state behind.
 
 ## Next steps
 
-- [Skills](skills.md) — the `SKILL.md` format in full
+- [Skills](../skills.md) — the `SKILL.md` format in full
 - [Extensions](extensions.md) — writing the code a plugin can carry
 - [Troubleshooting](troubleshooting.md)
