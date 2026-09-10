@@ -86,8 +86,8 @@ public class TestObservationWindowTests : ArchitectureTest
     // 200ms SeamGate wait - is the first site to claim the justification marker: its expiry IS the
     // assertion, but it reports the condition as SeamDeadlockException, which the automatic
     // TimeoutException exemption cannot see.
-    private const int ExpectedBaselineEntryCount = 32;
-    private const int ExpectedBaselineViolationCount = 107;
+    private const int ExpectedBaselineEntryCount = 30;
+    private const int ExpectedBaselineViolationCount = 99;
 
     /// <summary>
     /// Rejects short observation windows on the shared polling helpers, which carry no legacy debt.

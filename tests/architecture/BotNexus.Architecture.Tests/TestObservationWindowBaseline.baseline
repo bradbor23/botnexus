@@ -14,8 +14,6 @@ tests/agent/BotNexus.Agent.Providers.Copilot.Tests/CopilotWireReplayTests.cs|1
 tests/agent/BotNexus.Agent.Providers.Copilot.Tests/Messages/CopilotMessagesProviderParityTests.cs|5
 tests/agent/BotNexus.Agent.Providers.Copilot.Tests/Messages/CopilotMessagesThinkingMappingTests.cs|1
 tests/agent/BotNexus.Agent.Providers.Copilot.Tests/Responses/CopilotResponsesProviderParityTests.cs|6
-tests/agent/BotNexus.Agent.Providers.Copilot.Tests/Responses/CopilotResponsesTransportTests.cs|7
-tests/agent/BotNexus.Agent.Providers.Core.Tests/Streaming/CompletionsTextDeltaNormalizationTests.cs|1
 tests/agent/BotNexus.Agent.Providers.Core.Tests/Streaming/ContentFilterStopReasonParityTests.cs|2
 tests/agent/BotNexus.Agent.Providers.Core.Tests/Streaming/RefusalContentNormalizationTests.cs|2
 tests/agent/BotNexus.Agent.Providers.Core.Tests/Streaming/ResponsesStreamAssemblyConformanceTests.cs|2

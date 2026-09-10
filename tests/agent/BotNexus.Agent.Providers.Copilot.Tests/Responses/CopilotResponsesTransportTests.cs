@@ -131,7 +131,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
         var model = MapModel(["/responses", "ws:/responses"]);
 
-        var result = await provider.Stream(model, BuildContext(), Options()).GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await provider.Stream(model, BuildContext(), Options()).GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         socket.ConnectCount.ShouldBe(1);
         handler.RequestCount.ShouldBe(1);
@@ -146,7 +146,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -164,7 +164,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -183,7 +183,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -205,7 +205,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(0);
         result.ErrorMessage.ShouldNotBeNull();
@@ -236,7 +236,7 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -265,7 +265,7 @@ public sealed class CopilotResponsesTransportTests
             socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         result.ErrorMessage.ShouldNotBeNull();
         result.ErrorMessage!.ShouldContain("1011");
@@ -390,7 +390,7 @@ public sealed class CopilotResponsesTransportTests
             new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         // Exactly one provider call: the WebSocket connect, and no SSE retry behind it.
         socket.ConnectCount.ShouldBe(1);
@@ -420,7 +420,7 @@ public sealed class CopilotResponsesTransportTests
             socket);
 
         await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         var entries = logger.Entries;
         entries.ShouldContain(
@@ -444,7 +444,7 @@ public sealed class CopilotResponsesTransportTests
             new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -460,7 +460,7 @@ public sealed class CopilotResponsesTransportTests
             new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
         var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
         handler.RequestCount.ShouldBe(1);
         result.StopReason.ShouldNotBe(StopReason.Error);
