@@ -106,13 +106,23 @@
     // Poll cadence for the live counts. Short enough to feel live, long enough to stay cheap.
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Renders the active-loop list already open on first render. Off by default, so the Home
+    /// page's status strip stays one line; /platform sets it, because a page whose whole purpose is
+    /// platform state should not hide its only substantive content behind a click.
+    /// </summary>
+    [Parameter]
+    public bool LoopsInitiallyExpanded { get; set; }
+
     private readonly CancellationTokenSource _cts = new();
     private PlatformStats _stats = new();
     private bool _loadError;
     private bool _refreshError;
     private bool _loaded;
     // Disclosure state is component-owned and never reset by a poll, so a refresh cannot collapse
-    // the operator's chosen view (AC5).
+    // the operator's chosen view (AC5). LoopsInitiallyExpanded only SEEDS it, in OnInitialized -
+    // seeding from OnParametersSet instead would re-open the list under an operator who had just
+    // closed it, every time the parent re-rendered.
     private bool _loopsExpanded;
     private Timer? _timer;
 
@@ -136,6 +146,8 @@
             return $"{(int)age.TotalMinutes}m {age.Seconds}s";
         return $"{(int)age.TotalHours}h {age.Minutes}m";
     }
+
+    protected override void OnInitialized() => _loopsExpanded = LoopsInitiallyExpanded;
 
     protected override async Task OnInitializedAsync()
     {

@@ -7505,6 +7505,23 @@ h3.conversation-title.editable:hover {
     }
 }
 
+/* Chrome for the status bar that hosts the strip. Shared, because the strip renders
+   on two surfaces and the panel deliberately carries no chrome of its own: Home
+   composes this onto .home-summary (which also holds the agent roster count) and
+   /platform wraps the bare panel in it. One definition so the two cannot drift.
+   Kept chrome-only - no display/gap - so each surface keeps its own layout. */
+.stats-bar {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-sizing: border-box;
+}
+
+/* No width rule for the standalone case on purpose: .platform-stats-panel is a
+   block-level flex container, so it already fills the bar. A `.stats-bar >` rule
+   would also match on Home, where the panel must stay flex-sized. */
+
 /* ── Home landing page (#2037) ─────────────────────────────────────────────── */
 .home-page {
     display: flex;
@@ -7527,10 +7544,6 @@ h3.conversation-title.editable:hover {
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 0.5rem 1rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius);
-    background: var(--surface);
 }
 
 /* Takes the slack so the roster count sits at the right edge. The basis is 0, not
