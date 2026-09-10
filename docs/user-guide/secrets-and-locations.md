@@ -292,4 +292,10 @@ Worth stating as plainly as the guarantees:
   a shell. The allow-list exists so that this is a decision you make per name, not one you inherit.
 
 The property being defended is narrower and more useful than "secrets are safe": a credential does
-not enter an agent's context, so text that reaches that context cannot carry it back out.
+not enter an agent's context **and is not reachable from a command the agent runs**, so text that
+reaches that context cannot carry it back out.
+
+The second clause is newer than the first. Until tool subprocesses were given an empty environment,
+an agent holding `shell` could read an `env:` credential straight out of its own process — the
+property held in the context and leaked through the shell. If you meet an older copy of this
+sentence without that clause, it is describing the weaker guarantee.
