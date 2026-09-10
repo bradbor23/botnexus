@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Gateway.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,15 +58,26 @@ public sealed class MemoryPressureMonitorTests
     [Fact]
     public void GetHistory_ReturnsNewestFirst()
     {
-        _monitor.CaptureSnapshot();
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        Thread.Sleep(10);
-        _monitor.CaptureSnapshot();
+        // The monitor stamps snapshots from an injected clock, so move it rather than sleep.
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        var monitor = new MemoryPressureMonitor(NullLogger<MemoryPressureMonitor>.Instance, clock: clock);
 
-        var history = _monitor.GetHistory(2);
+        monitor.CaptureSnapshot();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        monitor.CaptureSnapshot();
+
+        var history = monitor.GetHistory(2);
 
         Assert.Equal(2, history.Count);
-        Assert.True(history[0].CapturedAt >= history[1].CapturedAt);
+
+        // The EXACT gap, not just an ordering. `>=` passed even when both snapshots shared a
+        // timestamp, and `>` passes on any host whose wall clock ticks between two calls - neither
+        // proves the monitor stamps from the clock it was given. One second is only possible if it
+        // does, so this fails immediately if the injected clock is ever bypassed.
+        (history[0].CapturedAt - history[1].CapturedAt).ShouldBe(
+            TimeSpan.FromSeconds(1),
+            "snapshots must be stamped from the injected clock, newest first.");
     }
 
     [Fact]

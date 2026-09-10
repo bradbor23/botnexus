@@ -29,11 +29,21 @@ public sealed class MemoryPressureMonitor
     /// </summary>
     /// <param name="logger">Logger instance for pressure events.</param>
     /// <param name="maxSnapshots">Maximum number of snapshots to retain (default 100).</param>
-    public MemoryPressureMonitor(ILogger<MemoryPressureMonitor> logger, int maxSnapshots = 100)
+    /// <param name="clock">
+    /// Stamps each snapshot. Defaults to <see cref="TimeProvider.System"/>; tests substitute a manual
+    /// clock so "newest first" can be asserted without sleeping for the wall clock to advance.
+    /// </param>
+    public MemoryPressureMonitor(
+        ILogger<MemoryPressureMonitor> logger,
+        int maxSnapshots = 100,
+        TimeProvider? clock = null)
     {
         _logger = logger;
         _maxSnapshots = maxSnapshots;
+        _clock = clock ?? TimeProvider.System;
     }
+
+    private readonly TimeProvider _clock;
 
     /// <summary>
     /// Captures a point-in-time memory pressure snapshot and adds it to the history ring buffer.
@@ -72,7 +82,7 @@ public sealed class MemoryPressureMonitor
 
         var snapshot = new MemoryPressureSnapshot
         {
-            CapturedAt = DateTimeOffset.UtcNow,
+            CapturedAt = _clock.GetUtcNow(),
             WorkingSetBytes = workingSet,
             GcCommittedBytes = gcCommitted,
             TotalAvailableBytes = totalAvailable,

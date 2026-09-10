@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Domain.Primitives;
 using BotNexus.Agent.Core;
 using BotNexus.Agent.Core.Configuration;
@@ -140,13 +141,14 @@ public sealed class InProcessAgentHandleTests
         // Before the fix, that path never updated the activity tracker, so the
         // liveness watchdog logged false FATAL "possible deadlock" alerts while
         // cron jobs were actively executing. PromptAsync must record activity.
-        var tracker = new ActivityTracker();
+        // ActivityTracker already takes a TimeProvider, so the clock can simply be moved rather
+        // than waited out - no sleep, and the gap is exact instead of "at least 15ms".
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        var tracker = new ActivityTracker(clock);
         var (_, handle) = CreateHandle(provider: null, activityTracker: tracker);
 
-        // Rewind the tracker so we can prove RecordActivity() moved it forward.
         var before = tracker.LastActivityUtc;
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(15);
+        clock.Advance(TimeSpan.FromSeconds(1));
 
         await handle.PromptAsync("hello");
 
@@ -159,12 +161,12 @@ public sealed class InProcessAgentHandleTests
         // The interactive path streams agent events; each one is proof of liveness.
         // The handle's event subscription must record activity so a long-running
         // turn keeps the watchdog's "no activity" window fresh (#1320).
-        var tracker = new ActivityTracker();
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        var tracker = new ActivityTracker(clock);
         var (_, handle) = CreateHandle(provider: null, activityTracker: tracker);
 
         var before = tracker.LastActivityUtc;
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(15);
+        clock.Advance(TimeSpan.FromSeconds(1));
 
         await foreach (var _ in handle.StreamAsync("hello"))
         {
