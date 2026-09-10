@@ -2373,6 +2373,10 @@ html, body, #app {
    the per-message caps below decide what actually uses the room. */
 .chat-panel {
     --chat-column: 96rem;
+    /* The reading measure for prose in the transcript. `ch` is font-relative and a custom
+       property resolves on the element that USES it, so each transcript-flow element gets
+       ~68 characters of its own type size rather than one fixed pixel width. */
+    --chat-measure: 68ch;
 }
 
 .messages-container {
@@ -2395,7 +2399,7 @@ html, body, #app {
        170 at 2000, against a comfortable 65-75. The ch term is what stops it; the
        percentage still governs narrow screens, where 68ch is never the binding constraint
        (and a media query further down widens these to 95% there). */
-    max-width: min(85%, 68ch);
+    max-width: min(85%, var(--chat-measure));
 }
 
 /* Reference material is scanned rather than read, so it may use the column that prose
@@ -3572,7 +3576,11 @@ html, body, #app {
 
 .thinking-block {
     align-self: flex-start;
-    max-width: 85%;
+    /* Same reading measure as .message. It is a sibling in the transcript flow rendering the
+       same kind of prose, and a bare 85% left it running ~163 characters inside the capped
+       column - the one place the #118 cap missed. Plain text (@msg.ThinkingContent), never
+       markdown, so it needs no :has() break-out. */
+    max-width: min(85%, var(--chat-measure));
     background: var(--color-wash);
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius);
@@ -3613,6 +3621,12 @@ details[open] > .thinking-summary::before {
 
 .thinking-content {
     margin-top: 0.4rem;
+    /* The measure belongs HERE, not only on .thinking-block. `ch` resolves against the
+       element that uses it, and the block inherits 16px while this text renders at 13px -
+       so the same token on the block gave 101 characters against 81 for body prose. Applied
+       at the smaller size it lands on the same measure. The block keeps its own cap as an
+       outer bound; being align-self: flex-start it shrink-wraps to this anyway. */
+    max-width: var(--chat-measure);
     font-size: var(--text-label);
     color: var(--text-muted);
     font-style: italic;
@@ -3634,7 +3648,9 @@ details[open] > .thinking-summary::before {
     padding: 0.3rem 0.75rem;
     background: var(--color-wash);
     border-radius: var(--radius);
-    max-width: 80%;
+    /* Also plain text in the transcript flow. These notices are usually short enough that the
+       measure never binds, but 80% of the column is ~154 characters when one is not. */
+    max-width: min(80%, var(--chat-measure));
 }
 
 /* ── Chat header actions (toggles, config, new chat) ────────────────── */
