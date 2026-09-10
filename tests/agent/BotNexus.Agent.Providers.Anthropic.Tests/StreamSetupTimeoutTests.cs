@@ -57,7 +57,9 @@ public class StreamSetupTimeoutTests
         };
 
         var stream = provider.Stream(model, context, options);
-        var result = await stream.GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            stream.GetResultAsync(),
+            "the provider stream to produce its result");
 
         result.StopReason.ShouldBe(StopReason.Stop);
         result.Content.ShouldNotBeEmpty();
@@ -77,7 +79,9 @@ public class StreamSetupTimeoutTests
         };
 
         var stream = provider.Stream(model, context, options);
-        var result = await stream.GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            stream.GetResultAsync(),
+            "the provider stream to produce its result");
 
         result.StopReason.ShouldBe(StopReason.Stop);
     }

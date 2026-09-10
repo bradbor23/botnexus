@@ -93,7 +93,7 @@ public class ResponsesStreamEngineTests
             normalizeTextDelta: null,
             ct: CancellationToken.None);
 
-        return await stream.GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        return await TestAwait.SignaledAsync(stream.GetResultAsync(), "the provider stream to produce its result");
     }
 
     /// <summary>

@@ -59,7 +59,9 @@ public class CompletionsTextDeltaNormalizationTests
             inspectChunk: null,
             normalizeTextDelta: normalize);
 
-        var result = await stream.GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            stream.GetResultAsync(),
+            "the provider stream to produce its result");
         return string.Concat(result.Content.OfType<TextContent>().Select(t => t.Text));
     }
 
