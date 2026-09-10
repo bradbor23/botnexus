@@ -556,9 +556,15 @@ public static class ActivityDashboardProjection
     /// that side. Nothing usable at all yields the original id: an unreadable label beats a label
     /// that quietly invents structure that was not there.
     /// </para>
+    /// <para>
+    /// Declared as a <c>this string</c> extension because #2925 requires it: a general-purpose
+    /// string-to-string transformation must be discoverable from the value, not from a class name
+    /// you have to already know. <c>StringTransformationExtensionArchitectureTests</c> enforces it,
+    /// and caught the first version of this method as a static helper.
+    /// </para>
     /// </remarks>
     /// <param name="agentId">The unresolved agent id.</param>
-    public static string AgentDisplayFallback(string agentId)
+    public static string ToAgentDisplayLabel(this string agentId)
     {
         if (string.IsNullOrWhiteSpace(agentId))
             return agentId;

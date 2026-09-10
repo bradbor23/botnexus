@@ -572,7 +572,7 @@
         var agent = Store.GetAgent(agentId);
         if (agent is { DisplayName.Length: > 0 })
             return agent.DisplayName;
-        return ActivityDashboardProjection.AgentDisplayFallback(agentId);
+        return agentId.ToAgentDisplayLabel();
     }
 
     /// <summary>

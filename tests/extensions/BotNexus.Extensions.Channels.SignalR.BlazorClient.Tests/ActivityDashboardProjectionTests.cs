@@ -2219,70 +2219,67 @@ public sealed class ActivityDashboardProjectionTests
         Assert.Equal(before.ConversationCount, after.ConversationCount);
     }
 
-    // ── AgentDisplayFallback ────────────────────────────────────────────────
+    // ── ToAgentDisplayLabel ────────────────────────────────────────────────
     // A sub-agent id rendered verbatim was ~400px of chip: one Activity cell measured 1730px of
     // content inside a 310px column, which no column width recovers. These pin the shortening AND
     // the fail-open cases, because the risk in a parser like this is that it silently mangles ids
     // it was never meant to touch.
 
     [Fact]
-    public void AgentDisplayFallback_shortens_a_sub_agent_id_to_parent_and_role()
+    public void ToAgentDisplayLabel_shortens_a_sub_agent_id_to_parent_and_role()
     {
-        var label = ActivityDashboardProjection.AgentDisplayFallback(
-            "assistant--subagent--coder--49c606cd1ee6485bbaac3acdf57dc2dc");
+        var label = "assistant--subagent--coder--0000000011112222333344445555aaaa".ToAgentDisplayLabel();
 
         Assert.Equal("assistant \u2192 coder", label);
     }
 
     [Fact]
-    public void AgentDisplayFallback_leaves_an_ordinary_agent_id_untouched()
+    public void ToAgentDisplayLabel_leaves_an_ordinary_agent_id_untouched()
     {
         // The overwhelmingly common case: this method must be a no-op for configured agents.
-        Assert.Equal("alpha", ActivityDashboardProjection.AgentDisplayFallback("alpha"));
-        Assert.Equal("beta-manager", ActivityDashboardProjection.AgentDisplayFallback("beta-manager"));
-        Assert.Equal("agent--with--dashes", ActivityDashboardProjection.AgentDisplayFallback("agent--with--dashes"));
+        Assert.Equal("alpha", "alpha".ToAgentDisplayLabel());
+        Assert.Equal("beta-manager", "beta-manager".ToAgentDisplayLabel());
+        Assert.Equal("agent--with--dashes", "agent--with--dashes".ToAgentDisplayLabel());
     }
 
     [Fact]
-    public void AgentDisplayFallback_keeps_a_role_that_carries_no_correlation_id()
+    public void ToAgentDisplayLabel_keeps_a_role_that_carries_no_correlation_id()
     {
-        Assert.Equal("assistant \u2192 coder", ActivityDashboardProjection.AgentDisplayFallback("assistant--subagent--coder"));
+        Assert.Equal("assistant \u2192 coder", "assistant--subagent--coder".ToAgentDisplayLabel());
     }
 
     [Fact]
-    public void AgentDisplayFallback_does_not_mistake_a_short_hex_looking_role_for_an_id()
+    public void ToAgentDisplayLabel_does_not_mistake_a_short_hex_looking_role_for_an_id()
     {
         // "cafe" is valid hex. The length gate is what stops a real role being deleted, so it is
         // pinned separately from the happy path.
-        Assert.Equal("assistant \u2192 cafe", ActivityDashboardProjection.AgentDisplayFallback("assistant--subagent--cafe"));
-        Assert.Equal("assistant \u2192 cafe", ActivityDashboardProjection.AgentDisplayFallback(
-            "assistant--subagent--cafe--49c606cd1ee6485bbaac3acdf57dc2dc"));
+        Assert.Equal("assistant \u2192 cafe", "assistant--subagent--cafe".ToAgentDisplayLabel());
+        Assert.Equal("assistant \u2192 cafe", "assistant--subagent--cafe--0000000011112222333344445555aaaa".ToAgentDisplayLabel());
     }
 
     [Fact]
-    public void AgentDisplayFallback_keeps_a_multi_segment_role()
+    public void ToAgentDisplayLabel_keeps_a_multi_segment_role()
     {
-        Assert.Equal("assistant \u2192 deep research", ActivityDashboardProjection.AgentDisplayFallback(
-            "assistant--subagent--deep--research--49c606cd1ee6485bbaac3acdf57dc2dc"));
+        Assert.Equal("assistant \u2192 deep research", "assistant--subagent--deep--research--0000000011112222333344445555aaaa".ToAgentDisplayLabel());
     }
 
     [Theory]
     [InlineData("assistant--subagent--", "assistant")]
-    [InlineData("assistant--subagent--49c606cd1ee6485bbaac3acdf57dc2dc", "assistant")]
-    [InlineData("--subagent--coder--49c606cd1ee6485bbaac3acdf57dc2dc", "coder")]
+    [InlineData("assistant--subagent--0000000011112222333344445555aaaa", "assistant")]
+    [InlineData("--subagent--coder--0000000011112222333344445555aaaa", "coder")]
     [InlineData("--subagent--", "--subagent--")]
-    public void AgentDisplayFallback_fails_open_when_only_one_side_parses(string agentId, string expected)
+    public void ToAgentDisplayLabel_fails_open_when_only_one_side_parses(string agentId, string expected)
     {
         // Whichever half parsed is better than the raw id; nothing usable at all returns the id
         // rather than inventing structure. Same posture as RoleLabel.
-        Assert.Equal(expected, ActivityDashboardProjection.AgentDisplayFallback(agentId));
+        Assert.Equal(expected, agentId.ToAgentDisplayLabel());
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void AgentDisplayFallback_passes_through_blank_input(string agentId)
+    public void ToAgentDisplayLabel_passes_through_blank_input(string agentId)
     {
-        Assert.Equal(agentId, ActivityDashboardProjection.AgentDisplayFallback(agentId));
+        Assert.Equal(agentId, agentId.ToAgentDisplayLabel());
     }
 }
