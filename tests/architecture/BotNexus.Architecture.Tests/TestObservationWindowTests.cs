@@ -65,7 +65,7 @@ public class TestObservationWindowTests : ArchitectureTest
     ];
 
     /// <summary>
-    /// The raw deadline form, fenced since #107 and baselined: 136 call sites predate the rule.
+    /// The raw deadline form, fenced since #107 and baselined: 107 call sites predate the rule.
     /// </summary>
     private static readonly string[] RawDeadlineForms = ["WaitAsync"];
 
@@ -78,13 +78,16 @@ public class TestObservationWindowTests : ArchitectureTest
     // #111 ratchet: TelegramChannelAdapterTests' 19 five-second deadlines all waited on a signal the
     // stub handler or the mock dispatcher already raised, so every one became a SignaledAsync call
     // and the file left the baseline entirely.
+    // #111 ratchet: every remaining five-second deadline - the value behind all three failures this
+    // fence was built for (#75, #103, main at 6c215e2c). All 29 were the same case: a wait on a signal
+    // the fixture already raises. Nothing at 5s or below survives in the baseline.
     // #111 ratchet: the eight sub-five-second deadlines, the shortest in the baseline. Seven waited
     // on a signal and became SignaledAsync calls. The eighth - ConversationLostUpdateSeamTests'
     // 200ms SeamGate wait - is the first site to claim the justification marker: its expiry IS the
     // assertion, but it reports the condition as SeamDeadlockException, which the automatic
     // TimeoutException exemption cannot see.
-    private const int ExpectedBaselineEntryCount = 42;
-    private const int ExpectedBaselineViolationCount = 136;
+    private const int ExpectedBaselineEntryCount = 32;
+    private const int ExpectedBaselineViolationCount = 107;
 
     /// <summary>
     /// Rejects short observation windows on the shared polling helpers, which carry no legacy debt.
@@ -120,9 +123,16 @@ public class TestObservationWindowTests : ArchitectureTest
             if (sites.Count <= allowed)
                 continue;
 
+            // Every site is listed, not just the ones past the allowance. The baseline records a
+            // COUNT, not which lines it forgave, so Skip(allowed) names whichever sites happen to
+            // fall last in file order - which is rarely the one just added. Reporting a line the
+            // author did not touch sends them to the wrong place; listing all of them, and saying
+            // how many are pre-existing, sends them to the right one.
             offenders.Add(
-                $"{path}: {sites.Count} short deadline(s), baseline allows {allowed}. Offending lines: " +
-                string.Join("; ", sites.Skip(allowed).Select(site => $"L{site.Line} waits only {site.Seconds:0.##}s")));
+                $"{path}: {sites.Count} short deadline(s), baseline allows {allowed}. " +
+                $"All {sites.Count} in this file (the baseline does not record which {allowed} it " +
+                "forgives, so look for the one you added): " +
+                string.Join("; ", sites.Select(site => $"L{site.Line} waits only {site.Seconds:0.##}s")));
         }
 
         offenders.ShouldBeEmpty(

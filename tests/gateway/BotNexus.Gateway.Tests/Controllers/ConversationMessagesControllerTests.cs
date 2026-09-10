@@ -352,7 +352,7 @@ public sealed class ConversationMessagesControllerTests
 
     private async Task<InboundMessage> AwaitAcceptedAsync()
     {
-        return await _accepted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        return await TestAwait.SignaledAsync(_accepted.Task, "the controller to accept an inbound message");
     }
 
     private async Task<PostConversationMessageResponse> PostAcceptedAsync(
