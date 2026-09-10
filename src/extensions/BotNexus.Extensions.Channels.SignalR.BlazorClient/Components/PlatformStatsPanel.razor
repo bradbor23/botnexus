@@ -8,10 +8,18 @@
     sub-agents, with peak / total-completed loop counters for context. Kept deliberately minimal so
     it can sit on the portal dashboard without pulling in extra services - it talks to /api/stats
     directly via HttpClient and refreshes on a light timer while mounted.
+
+    Layout: a single-row status strip, not a stacked card. On the Home page (#2037) this sits above
+    the conversation starter, so every row it occupies is a row taken from the primary surface; the
+    idle panel is therefore one line tall and the four counters read left-to-right. The "Platform"
+    heading is sr-only: the counter labels already say what they are, and /platform carries its own
+    visible page heading, so a second visible one only cost vertical space. Peak / completed are
+    wrapped in their own group because they are historical context rather than live state, and the
+    stylesheet mutes them as a set.
 *@
 
 <section class="platform-stats-panel" data-testid="platform-stats-panel">
-    <h3 class="platform-stats-title">Platform</h3>
+    <h3 class="platform-stats-title sr-only">Platform</h3>
 
     @if (_loadError)
     {
@@ -20,7 +28,7 @@
     else
     {
         <div class="platform-stats-grid">
-            <div class="platform-stat" data-testid="stat-active-loops">
+            <div class="platform-stat platform-stat-interactive" data-testid="stat-active-loops">
                 <button type="button"
                         class="platform-stat-disclosure"
                         data-testid="active-loops-toggle"
@@ -36,13 +44,15 @@
                 <span class="platform-stat-value">@_stats.ActiveSubAgents</span>
                 <span class="platform-stat-label">Active sub-agents</span>
             </div>
-            <div class="platform-stat" data-testid="stat-peak-loops">
-                <span class="platform-stat-value">@_stats.PeakAgentLoops</span>
-                <span class="platform-stat-label">Peak loops</span>
-            </div>
-            <div class="platform-stat" data-testid="stat-total-loops">
-                <span class="platform-stat-value">@_stats.TotalCompletedLoops</span>
-                <span class="platform-stat-label">Completed loops</span>
+            <div class="platform-stats-secondary">
+                <div class="platform-stat" data-testid="stat-peak-loops">
+                    <span class="platform-stat-value">@_stats.PeakAgentLoops</span>
+                    <span class="platform-stat-label">Peak loops</span>
+                </div>
+                <div class="platform-stat" data-testid="stat-total-loops">
+                    <span class="platform-stat-value">@_stats.TotalCompletedLoops</span>
+                    <span class="platform-stat-label">Completed loops</span>
+                </div>
             </div>
         </div>
         @if (_loopsExpanded)
