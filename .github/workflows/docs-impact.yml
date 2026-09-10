@@ -1,6 +1,6 @@
 name: "CI: Docs impact"
 
-# The docs-vs-source trigger, split out of "CI: Docs lint" (issue #84).
+# The docs-vs-source trigger, split out of "CI: Docs lint" (issue #4123).
 #
 # It lived in that workflow, whose trigger is `paths: ['docs/**', ...]`. So it only RAN on a PR
 # that had already changed documentation - and when it ran, its own first satisfying branch is
@@ -62,10 +62,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # Three dots, not two. `git diff A B` compares the two TIPS, so every file that landed
-          # on main after this branch was cut counts as a file this PR changed. Demonstrated on
-          # #96: a PR whose only change was a controller was told it "also changes documentation
-          # (2 file(s))" and passed, because #94 had merged two docs pages into main in the
-          # meantime. `git diff A...B` diffs from the merge base, which is what the PR changed.
+          # on main after this branch was cut counts as a file this PR changed. Demonstrated on a
+          # scratch PR: its only change was a controller, and it was told it "also changes
+          # documentation (2 file(s))" and passed, because two unrelated docs pages had merged to
+          # main while it sat open. The gate fails OPEN whenever the base has drifted past any
+          # docs commit. `git diff A...B` diffs from the merge base, which is what the PR changed.
           # This is why the job needs fetch-depth: 0 - the merge base has to be reachable.
           $changed = @(git diff --name-only "$env:BASE_SHA...$env:HEAD_SHA")
           if ($LASTEXITCODE -ne 0) {

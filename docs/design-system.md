@@ -757,6 +757,15 @@ handles it. If you find yourself wanting "white here but dark there", you want a
 9. **Chrome spacing uses density tokens**, not fixed values.
 10. **Check both themes before calling a screen done.**
 
+### Enforced by tests
+
+Conventions nothing checks have already drifted, so these fail loudly on the things
+that otherwise fail silently: no two icons declaring the same id (with both names in
+the message), every `url(#...)` resolving inside its own icon, every stroke being
+overridable, the tone overrides being declared after the tones, and every toned icon
+having a rule. When you add to the system, add the fence with it.
+
+
 ### Deliberate exceptions
 
 | Exception | Why |

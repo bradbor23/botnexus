@@ -1,5 +1,6 @@
 using System.IO.Abstractions;
 using System.IO.Abstractions.TestingHelpers;
+using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Agents;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,7 +22,17 @@ public sealed class SubAgentWorkspaceSweeperTests
     {
         _agentsRoot = _fileSystem.Path.Combine(_fileSystem.Path.GetTempPath(), "botnexus-sweep-tests", "agents");
         _fileSystem.Directory.CreateDirectory(_agentsRoot);
-        _sweeper = new SubAgentWorkspaceSweeper(_fileSystem, NullLogger.Instance);
+        // #3569 added a mandatory liveness gate ahead of deletion. These #2237 cases are all about
+        // the AGE rules, so they run against a probe that reports every workspace dead - isolating
+        // the age behaviour they were written to pin. Liveness itself is covered by
+        // SubAgentWorkspaceSweeperLivenessTests.
+        _sweeper = new SubAgentWorkspaceSweeper(_fileSystem, NullLogger.Instance, new AllDeadProbe());
+    }
+
+    /// <summary>Reports every workspace as not-live, so age rules are tested in isolation.</summary>
+    private sealed class AllDeadProbe : ISubAgentWorkspaceLivenessProbe
+    {
+        public bool IsLive(string workspaceDirectoryName) => false;
     }
 
     private string AddSubAgentDir(string name, DateTime lastWriteUtc, long fileBytes = 0)
@@ -36,6 +47,28 @@ public sealed class SubAgentWorkspaceSweeperTests
 
         _fileSystem.Directory.SetLastWriteTimeUtc(dir, lastWriteUtc);
         return dir;
+    }
+
+    /// <summary>
+    /// #3845 AC2: the reap must take the sub-agent's SQLite memory store with it. Every reaped
+    /// directory retains a 56 KB initialised store, and 40 of them had accumulated on the live host.
+    /// The sweeper deletes recursively so this holds today - the test exists so a future change to
+    /// selective deletion cannot silently start stranding stores again.
+    /// </summary>
+    [Fact]
+    public void Sweep_RemovesMemoryStoreAlongsideTheReapedWorkspace()
+    {
+        var dir = AddSubAgentDir("farnsworth--subagent--coder--store01", NowUtc - TimeSpan.FromHours(48));
+        var storePath = _fileSystem.Path.Combine(dir, "data", "memory.sqlite");
+        _fileSystem.Directory.CreateDirectory(_fileSystem.Path.Combine(dir, "data"));
+        _fileSystem.File.WriteAllBytes(storePath, new byte[57344]);
+        _fileSystem.Directory.SetLastWriteTimeUtc(dir, NowUtc - TimeSpan.FromHours(48));
+
+        var result = _sweeper.Sweep(_agentsRoot, TimeSpan.FromHours(24), TimeSpan.FromHours(1), NowUtc);
+
+        result.Removed.ShouldBe(1);
+        _fileSystem.File.Exists(storePath).ShouldBeFalse();
+        _fileSystem.Directory.Exists(dir).ShouldBeFalse();
     }
 
     [Fact]

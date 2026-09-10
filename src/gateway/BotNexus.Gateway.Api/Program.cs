@@ -235,6 +235,12 @@ builder.Services.Configure<CronOptions>(options =>
 
     options.Enabled = cron.Enabled;
     options.TickIntervalSeconds = cron.TickIntervalSeconds;
+    // #3779: the operator-configured webhook blocked-host list must reach BOTH the API create/update
+    // seam and the scheduler's config reconciliation. Binding it here - onto the single CronOptions
+    // both already read - is what stops either seam constructing its own copy of the policy.
+    options.WebhookBlockedHosts = cron.WebhookBlockedHosts is null
+        ? []
+        : [.. cron.WebhookBlockedHosts.Where(host => !string.IsNullOrWhiteSpace(host)).Select(host => host.Trim())];
     options.Jobs = cron.Jobs?
         .ToDictionary(
             pair => pair.Key,
@@ -508,28 +514,30 @@ builder.Services.AddSingleton<LlmClient>(serviceProvider =>
             if (!providerConfig.Enabled)
                 continue;
 
-            var apiName = string.IsNullOrWhiteSpace(providerConfig.Api)
+            var apiName = string.IsNullOrWhiteSpace(providerConfig.ResolveChatApi())
                 ? "openai-completions"
-                : providerConfig.Api!;
+                : providerConfig.ResolveChatApi()!;
             // For openai-completions a BaseUrl is required (the HTTP endpoint). For other
             // apis (e.g. integration-mock) BaseUrl is provider-specific (catalog file path,
             // possibly empty) — skip the BaseUrl gate.
             if (apiName == "openai-completions" && string.IsNullOrWhiteSpace(providerConfig.BaseUrl))
                 continue;
 
-            if (providerConfig.Models is { Count: > 0 })
+            if (providerConfig.ResolveChatModels() is { Count: > 0 } chatModels)
             {
-                foreach (var modelId in providerConfig.Models)
+                foreach (var modelId in chatModels)
                 {
                     // PBI6 (#1707): a dynamic (config-declared) model carries a valid capability set
                     // so the agent + conversation pickers offer only valid thinking/context choices.
                     // Explicit declarations win; anything omitted is inferred from the model family.
+                    // #2854: read through the resolvers so a nested `chat` object wins over the
+                    // deprecated flat twin, per field.
                     var caps = DynamicModelCapabilities.Infer(
                         modelId,
-                        declaredReasoning: providerConfig.Reasoning,
-                        declaredExtraHighThinking: providerConfig.SupportsExtraHighThinking,
-                        declaredExtendedContext: providerConfig.SupportsExtendedContextWindow,
-                        declaredInput: providerConfig.Input);
+                        declaredReasoning: providerConfig.ResolveChatReasoning(),
+                        declaredExtraHighThinking: providerConfig.ResolveChatSupportsExtraHighThinking(),
+                        declaredExtendedContext: providerConfig.ResolveChatSupportsExtendedContextWindow(),
+                        declaredInput: providerConfig.ResolveChatInput());
                     models.Register(providerName, new LlmModel(
                         Id: modelId,
                         Name: modelId,
@@ -539,7 +547,7 @@ builder.Services.AddSingleton<LlmClient>(serviceProvider =>
                         Reasoning: caps.Reasoning,
                         Input: caps.Input,
                         Cost: new ModelCost(0, 0, 0, 0),
-                        ContextWindow: providerConfig.ContextWindow ?? 128000,
+                        ContextWindow: providerConfig.ResolveChatContextWindow() ?? 128000,
                         MaxTokens: 32000,
                         SupportsExtraHighThinking: caps.SupportsExtraHighThinking,
                         SupportsExtendedContextWindow: caps.SupportsExtendedContextWindow));
@@ -731,7 +739,26 @@ var gatewayStartedAtUtc = DateTimeOffset.UtcNow;
 app.MapGet("/api/uptime", () => Results.Ok(new { startedAt = gatewayStartedAtUtc }));
 app.MapGet("/api/world", () => Results.Ok(worldDescriptor));
 
-LogGatewayStartup(app, builder.Environment, startupPlatformConfig, worldDescriptor, listenUrl);
+// #3660: the readiness banner must not be emitted until Kestrel is actually listening.
+// Calling LogGatewayStartup inline here logged "Gateway startup complete" *before* app.Run()
+// started the server and before the blocking IHostedService pass had finished, so during a slow
+// start the log asserted readiness while the port was still closed - which is precisely why a
+// 3.5-minute startup stall was diagnosed as a crash. ApplicationStarted fires after the server
+// has bound its addresses, so the banner now describes a gateway that can accept connections.
+// Pinned by GatewayStartupReadinessOrderingArchitectureTests.
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        LogGatewayStartup(app, builder.Environment, startupPlatformConfig, worldDescriptor, listenUrl);
+    }
+    catch (Exception ex)
+    {
+        // The banner is diagnostics: a failure assembling it must never take down a gateway
+        // that has already successfully bound its port.
+        app.Logger.LogWarning(ex, "Failed to emit the gateway startup banner (continuing).");
+    }
+});
 
 // Crash observability (#1901): install the last-chance fault handler, warn if the previous run
 // terminated uncleanly, and manage the clean-shutdown marker. All wiring is defensive - a
@@ -762,20 +789,27 @@ void InstallCrashObservability(WebApplication application)
             new System.IO.Abstractions.FileSystem(),
             dataDirectory);
         var previousRun = marker.DetectPreviousRun();
-        if (!previousRun.WasClean)
+        // Clause 3 of #3680: with no stamp of any kind there is nothing useful to say about when
+        // the gateway was last alive, so the builder omits the timestamp clause entirely rather
+        // than printing a placeholder that reads like a transient lookup failure.
+        var uncleanWarning = BotNexus.Gateway.Diagnostics.CleanShutdownMarker.BuildUncleanWarning(previousRun);
+        if (uncleanWarning is not null)
         {
-            var lastKnown = previousRun.LastKnownUtc?.ToString("o") ?? "unknown";
-            application.Logger.LogWarning(
-                "previous gateway run terminated uncleanly (last-known clean-shutdown timestamp: {LastKnownTimestamp})",
-                lastKnown);
+            application.Logger.LogWarning("{UncleanTerminationWarning}", uncleanWarning);
         }
+
+        // MarkRunning clears the shutdown marker AND seeds the liveness stamp for this run; the
+        // timer then refreshes it so a hard kill leaves a recent last-alive instant behind.
         marker.MarkRunning();
+        var livenessRefresh = marker.StartLivenessRefresh();
 
         // 3. On graceful shutdown, write the clean-shutdown marker so the next boot knows this run
         //    ended cleanly and does NOT emit the unclean-termination warning.
         var lifetime = application.Services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
         lifetime?.ApplicationStopped.Register(() =>
         {
+            try { livenessRefresh.Dispose(); }
+            catch { /* best effort - stopping the refresh timer must never block shutdown */ }
             try { marker.MarkCleanShutdown(); }
             catch { /* best effort - a missed marker only risks a false unclean warning */ }
         });

@@ -286,6 +286,8 @@ internal static class AnthropicStreamParser
         {
             case "text_delta":
                 var text = delta.GetProperty("text").GetString() ?? "";
+                // Empty fragments carry no content; whitespace (including a lone LF) does (#3301).
+                if (text.Length == 0) break;
                 textAccumulators[index].Append(text);
                 textDeltaCounts[index] = textDeltaCounts.GetValueOrDefault(index) + 1;
                 stream.Push(new TextDeltaEvent(index, text, partial));
@@ -356,7 +358,9 @@ internal static class AnthropicStreamParser
                     "anthropic-messages",
                     "sse",
                     textDeltaCounts.GetValueOrDefault(index),
-                    logger);
+                    logger,
+                    stream,
+                    () => buildMessage(model, contentBlocks, usage, StopReason.Stop, null, responseId));
                 contentBlocks.Add(new TextContent(accumulated, signature));
                 var textPartial = buildMessage(model, contentBlocks, usage, StopReason.Stop, null, responseId);
                 stream.Push(new TextEndEvent(index, accumulated, textPartial));

@@ -413,6 +413,23 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             });
         }
 
+        // Register first: the existing registry liveness probe must own the directory as soon as
+        // it exists. Provision once here, before any handle/tool exposure; path resolution and
+        // tool retries must never resurrect a terminal workspace. Custom workspace managers keep
+        // their existing lifecycle; this is the file-backed production manager's admission seam.
+        if (_workspaceManager is FileAgentWorkspaceManager fileWorkspaces)
+        {
+            try
+            {
+                fileWorkspaces.ProvisionSubAgentWorkspace(childAgentId.Value);
+            }
+            catch
+            {
+                _registry.Unregister(childAgentId);
+                throw;
+            }
+        }
+
         // Materialize and persist the child conversation + session before handle creation. Handle
         // creation can reach the model immediately, so this is the last safe point to guarantee that
         // every later tool write-ahead has a durable parent row (#2113). Since #2338 the child owns
@@ -658,7 +675,9 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     Archetype: SubAgentArchetype.General,
                     BaseDescriptor: targetDescriptor,
                     ChildAgentId: AgentId.From($"{request.ParentAgentId}--subagent--{mirror.TargetAgentId.Value}--{uniqueId}"),
-                    Name: null,
+                    // #3570: the run label, NOT a descriptor customisation. Everything below stays
+                    // null because Mirror remains strict pass-through of the target's descriptor.
+                    Name: string.IsNullOrWhiteSpace(mirror.RunName) ? null : mirror.RunName,
                     ModelOverride: null,
                     ApiProviderOverride: null,
                     ToolIds: null,
@@ -1034,24 +1053,28 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         if (info.ParentSessionId != requestingSessionId)
             return false;
 
-        if (SubAgentStatusPolicy.IsTerminal(info.Status))
+        // Publish the winning terminal disposition before cancellation can run callbacks or wake
+        // the timeout-completion path. A stale read followed by an unconditional update lets kill
+        // overwrite a completed run, or lets cancellation audit a timeout for a successful kill.
+        if (!record.TryMarkKilled(out var updatedInfo))
             return false;
 
-        record.CancelTimeout();
-
-        await CleanupChildAgentAsync(subAgentId, info.ChildSessionId, ct);
-
-        if (!TryUpdateSubAgent(
-            subAgentId,
-            current => current with
-            {
-                Status = SubAgentStatus.Killed,
-                CompletedAt = DateTimeOffset.UtcNow,
-                ResultSummary = "Sub-agent was killed by parent session."
-            },
-            out var updatedInfo))
+        try
         {
-            return false;
+            record.CancelTimeout();
+        }
+        catch (AggregateException ex)
+        {
+            // Cancellation invokes third-party callbacks. The kill already owns the terminal
+            // disposition; a callback failure must be visible but cannot strand owned resources.
+            _logger.LogWarning(ex,
+                "Sub-agent '{SubAgentId}' cancellation callback failed; the kill remains authoritative and cleanup will be attempted.",
+                subAgentId);
+        }
+        finally
+        {
+            // Teardown is owned by the winning kill, not by the caller's cancellation lifetime.
+            await CleanupChildAgentAsync(subAgentId, info.ChildSessionId, SubAgentStatus.Killed, CancellationToken.None);
         }
 
         _logger.LogInformation(
@@ -1091,7 +1114,11 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
     }
 
     /// <inheritdoc />
-    public async Task OnCompletedAsync(string subAgentId, string resultSummary, CancellationToken ct = default)
+    public async Task OnCompletedAsync(
+        string subAgentId,
+        string resultSummary,
+        SubAgentRunOutcome? outcome = null,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subAgentId);
 
@@ -1107,20 +1134,39 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         const string emptyResponseDiagnostic = "Sub-agent failed because it returned an empty final response.";
         var hasFinalResponse = !string.IsNullOrWhiteSpace(resultSummary);
 
+        // #3565: text alone no longer decides success. A run that produced prose while every tool
+        // it invoked errored - or whose terminal assistant message carried a provider error - is a
+        // FAILURE, and must present as one to the parent. `outcome` is null only when the caller
+        // could not observe the run's timeline at all, in which case the historical text-only
+        // behaviour is preserved exactly.
+        var runFailed = outcome?.HasFailure == true;
+
         // Normalize pathological token-per-line whitespace at the earliest point so
         // the record, session persistence, LLM parent context, and every channel all
         // observe the same clean content (#2150). Done before the record is updated
         // rather than only at dispatch time to avoid a divergent persisted summary.
         var normalizedResultSummary = SubAgentSummaryNormalizer.Normalize(resultSummary);
 
+        // AC3: the text delivered to the parent names the sub-agent and the underlying tool error,
+        // so the parent can act without opening the child transcript. The run's own words are kept
+        // BELOW the diagnostic rather than discarded - they are often the only description of what
+        // was attempted - but they can no longer stand alone as an unqualified success.
+        var terminalSummary = runFailed
+            ? DescribeFailedRun(subAgentId, outcome!, hasFinalResponse ? normalizedResultSummary : null)
+            : hasFinalResponse ? normalizedResultSummary : emptyResponseDiagnostic;
+
+        var terminalStatus = hasFinalResponse && !runFailed
+            ? SubAgentStatus.Completed
+            : SubAgentStatus.Failed;
+
         if (!TryUpdateSubAgent(
                 subAgentId,
                 current => current.Status == SubAgentStatus.Running
                     ? current with
                     {
-                        Status = hasFinalResponse ? SubAgentStatus.Completed : SubAgentStatus.Failed,
+                        Status = terminalStatus,
                         CompletedAt = DateTimeOffset.UtcNow,
-                        ResultSummary = hasFinalResponse ? normalizedResultSummary : emptyResponseDiagnostic
+                        ResultSummary = terminalSummary
                     }
                     : current,
                 out var updated) || updated.Status == SubAgentStatus.Killed)
@@ -1163,6 +1209,60 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         // sync with the live entry the way the old separate _childAgentIds map could —
         // the synthetic-fallback workaround that drift required is no longer needed (#1385).
         var childAgentId = record.ChildAgentId;
+
+        // #3703: the lifecycle activity is published AFTER dispatch, not before, because a
+        // completion whose announcement never reached the parent is not a completion the parent
+        // can act on. Publishing SubAgentCompleted first made the delivery-failed case
+        // indistinguishable from the delivered one on the activity stream as well as on the
+        // record. The teardown `finally` below is unchanged and still runs on every path.
+        if (!string.IsNullOrWhiteSpace(parentAgentId.Value))
+        {
+            try
+            {
+                // Dispatch half: deliver the completion follow-up to the parent session.
+                await DispatchCompletionFollowUpAsync(subAgentId, normalizedSummary, updated, parentAgentId, childAgentId, ct);
+            }
+            finally
+            {
+                // Teardown half: always release the child agent/session, even if dispatch threw.
+                await CleanupChildAgentAsync(subAgentId, updated.ChildSessionId, updated.Status, CancellationToken.None);
+            }
+
+            // Re-read the record so the activity payload carries the delivery verdict that
+            // DispatchCompletionFollowUpAsync just latched onto it.
+            if (_records.TryGetValue(subAgentId, out var afterDispatch))
+                updated = afterDispatch.Info;
+        }
+
+        await PublishTerminalLifecycleActivityAsync(subAgentId, updated, parentAgentId.Value);
+    }
+
+    /// <summary>
+    /// Publishes the single lifecycle activity that describes how a terminal sub-agent run ended,
+    /// taking BOTH the run's own status and the completion-delivery verdict into account (#3703).
+    /// <para>
+    /// A delivery failure is reported as <see cref="GatewayActivityType.SubAgentFailed"/> even when
+    /// the child's own work succeeded: from the supervisor's point of view a result it was never
+    /// handed is indistinguishable from a result that was never produced, and the one thing it must
+    /// not receive is a clean <see cref="GatewayActivityType.SubAgentCompleted"/>.
+    /// </para>
+    /// </summary>
+    private async Task PublishTerminalLifecycleActivityAsync(
+        string subAgentId,
+        SubAgentInfo updated,
+        string? parentAgentId)
+    {
+        if (updated.CompletionDelivery == SubAgentCompletionDelivery.Failed)
+        {
+            await PublishLifecycleActivityAsync(
+                GatewayActivityType.SubAgentFailed,
+                "subagent_delivery_failed",
+                updated,
+                parentAgentId,
+                $"Sub-agent '{subAgentId}' finished but its completion could not be delivered to the parent session.");
+            return;
+        }
+
         // #2725: HandedOff is a success disposition, so it publishes the completed activity
         // alongside Completed rather than falling through to no lifecycle event at all.
         if (updated.Status is SubAgentStatus.Completed or SubAgentStatus.HandedOff)
@@ -1171,7 +1271,7 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 GatewayActivityType.SubAgentCompleted,
                 "subagent_completed",
                 updated,
-                parentAgentId.Value,
+                parentAgentId,
                 $"Sub-agent '{subAgentId}' completed.");
         }
         else if (SubAgentStatusPolicy.IsUnsuccessfulTermination(updated.Status))
@@ -1180,31 +1280,22 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 GatewayActivityType.SubAgentFailed,
                 "subagent_failed",
                 updated,
-                parentAgentId.Value,
+                parentAgentId,
                 $"Sub-agent '{subAgentId}' failed.");
-        }
-
-        if (string.IsNullOrWhiteSpace(parentAgentId.Value))
-            return;
-
-        try
-        {
-            // Dispatch half: deliver the completion follow-up to the parent session.
-            await DispatchCompletionFollowUpAsync(subAgentId, normalizedSummary, updated, parentAgentId, childAgentId, ct);
-        }
-        finally
-        {
-            // Teardown half: always release the child agent/session, even if dispatch threw.
-            await CleanupChildAgentAsync(subAgentId, updated.ChildSessionId, CancellationToken.None);
         }
     }
 
     /// <summary>
     /// Dispatch half of completion handling: builds the completion follow-up message and delivers
-    /// it to the parent session via <see cref="_dispatcher"/>, recording wake telemetry. Delivery
-    /// failures are logged and swallowed (the record-teardown in <see cref="OnCompletedAsync"/>
-    /// still runs). Separated from the record-teardown so the two concerns are independently
-    /// readable (#1565).
+    /// it to the parent session via <see cref="_dispatcher"/>, recording wake telemetry. Separated
+    /// from the record-teardown so the two concerns are independently readable (#1565).
+    /// <para>
+    /// #3703: a delivery failure is still swallowed here - the teardown in
+    /// <see cref="OnCompletedAsync"/> must run regardless - but it is no longer ONLY logged. The
+    /// verdict is latched onto the record as <see cref="SubAgentInfo.CompletionDelivery"/> so
+    /// <c>list_subagents</c>, <c>manage_subagent status</c> and the lifecycle activity can all
+    /// tell a stranded parent from a woken one.
+    /// </para>
     /// </summary>
     /// <param name="subAgentId">The completing sub-agent's id.</param>
     /// <param name="normalizedSummary">The normalized result summary.</param>
@@ -1269,9 +1360,16 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     ["subAgentId"] = subAgentId
                 }
             }, ct);
+
+            TryUpdateSubAgent(subAgentId, current => current with
+            {
+                CompletionDelivery = SubAgentCompletionDelivery.Delivered,
+                CompletionDeliveryError = null
+            });
         }
         catch (Exception ex)
         {
+            // Observability is ADDED to, not replaced: the counter keeps its existing producer.
             GatewayTelemetry.SubAgentWakeDeliveryFailed.Add(1,
                 new KeyValuePair<string, object?>("botnexus.parent.agent.id", parentAgentId),
                 new KeyValuePair<string, object?>("botnexus.parent.session.id", updated.ParentSessionId),
@@ -1281,6 +1379,14 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                 "Failed delivering completion follow-up for sub-agent '{SubAgentId}' to parent session '{ParentSessionId}'.",
                 subAgentId,
                 updated.ParentSessionId);
+
+            // The record is the only durable trace the parent can still query. Without this the
+            // run reads as a clean Completed and the supervisor waits forever (#3703).
+            TryUpdateSubAgent(subAgentId, current => current with
+            {
+                CompletionDelivery = SubAgentCompletionDelivery.Failed,
+                CompletionDeliveryError = ex.Message
+            });
         }
     }
 
@@ -1339,7 +1445,7 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             }
             else
             {
-                await OnCompletedAsync(subAgentId, response.Content);
+                await OnCompletedAsync(subAgentId, response.Content, SubAgentRunOutcome.From(response));
             }
         }
         catch (Exception) when (record.BudgetExhausted)
@@ -1527,6 +1633,54 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         }
     }
 
+    /// <summary>
+    /// Builds the failure text a parent receives when a sub-agent run narrated an answer but its
+    /// tools failed, or its terminal assistant message carried a provider error (#3565, AC3).
+    /// </summary>
+    /// <remarks>
+    /// The sub-agent id and the underlying error are both named so the parent can act without
+    /// opening the child transcript. The run's own words are appended rather than dropped: they are
+    /// frequently the only record of what was attempted, and discarding them would trade one
+    /// information loss for another. Vocabulary deliberately mirrors the existing
+    /// <c>emptyResponseDiagnostic</c> shape ("Sub-agent failed because ...") so the diagnostics on
+    /// this path stay recognisable as one family.
+    /// </remarks>
+    /// <param name="subAgentId">The run whose failure is being described.</param>
+    /// <param name="outcome">The measured tool/provider outcome of the run.</param>
+    /// <param name="narratedSummary">The run's own final text, or null when it produced none.</param>
+    internal static string DescribeFailedRun(
+        string subAgentId,
+        SubAgentRunOutcome outcome,
+        string? narratedSummary)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        var reason = outcome.FailedToolCount > 0
+            ? $"{outcome.FailedToolCount} tool invocation{(outcome.FailedToolCount == 1 ? string.Empty : "s")} failed"
+            : "the provider ended its final turn with an error";
+
+        var detail = outcome.FailedToolCount > 0
+            ? outcome.LastToolError
+            : outcome.TerminalError;
+
+        var text = $"Sub-agent '{subAgentId}' failed because {reason}.";
+
+        if (!string.IsNullOrWhiteSpace(detail))
+            text += $" Last error: {detail}";
+
+        if (!string.IsNullOrWhiteSpace(narratedSummary))
+        {
+            text += Environment.NewLine
+                + Environment.NewLine
+                + "The sub-agent nevertheless reported the following, which must NOT be treated as a "
+                + "confirmed result:"
+                + Environment.NewLine
+                + narratedSummary;
+        }
+
+        return text;
+    }
+
     private static string DescribeStatus(SubAgentStatus status)
         => status switch
         {
@@ -1586,7 +1740,11 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         }
     }
 
-    private async Task CleanupChildAgentAsync(string subAgentId, SessionId childSessionId, CancellationToken ct)
+    private async Task CleanupChildAgentAsync(
+        string subAgentId,
+        SessionId childSessionId,
+        SubAgentStatus terminalStatus,
+        CancellationToken ct)
     {
         // The cleanup body must run at most once per sub-agent: it stops the child agent,
         // removes the dynamic deny-list, unregisters the descriptor and reclaims the
@@ -1633,9 +1791,20 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         {
             if (_workspaceManager.TryCleanupWorkspace(childAgentId.Value))
             {
-                _logger.LogDebug(
-                    "Cleaned up temporary workspace for child agent '{ChildAgentId}'.",
-                    childAgentId);
+                // #3670 AC4: the lifecycle route is an audit event, not a debug breadcrumb. It is
+                // logged at Information using the vocabulary the backstop sweep also emits, so one
+                // operator query returns every reclamation from either route and the suffix says
+                // which mechanism acted. Previously this was a Debug line with unrelated wording:
+                // invisible in production and unjoinable with the sweeper's trail.
+                //
+                // It is emitted only when TryCleanupWorkspace actually removed something. A line
+                // logged unconditionally would report phantom reclamations for an already-absent
+                // directory. Sharing adds access to the parent; the child still owns an isolated
+                // cwd, and cleanup must never remove the parent's workspace.
+                _logger.LogInformation(
+                    SubAgentWorkspaceReclamationAudit.LifecycleTemplate,
+                    childAgentId.Value,
+                    terminalStatus);
             }
         }
         catch (Exception ex)
@@ -1835,6 +2004,35 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             }
         }
 
+        /// <summary>
+        /// Claims a still-live run for kill before its cancellation callbacks can claim completion.
+        /// Competing terminal transitions and duplicate kills cannot overwrite the winning state.
+        /// </summary>
+        public bool TryMarkKilled(out SubAgentInfo updatedInfo)
+        {
+            while (true)
+            {
+                var current = Info;
+                if (SubAgentStatusPolicy.IsTerminal(current.Status))
+                {
+                    updatedInfo = current;
+                    return false;
+                }
+
+                var killed = current with
+                {
+                    Status = SubAgentStatus.Killed,
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    ResultSummary = "Sub-agent was killed by parent session."
+                };
+                if (ReferenceEquals(Interlocked.CompareExchange(ref _info, killed, current), current))
+                {
+                    updatedInfo = killed;
+                    return true;
+                }
+            }
+        }
+
         /// <summary>Returns true exactly once — the first caller wins the completion gate.</summary>
         public bool TryBeginCompletion() => Interlocked.CompareExchange(ref _completionProcessed, 1, 0) == 0;
 
@@ -1871,8 +2069,16 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
             var cts = Interlocked.Exchange(ref _timeoutCts, null);
             if (cts is null)
                 return;
-            cts.Cancel();
-            cts.Dispose();
+            try
+            {
+                cts.Cancel();
+            }
+            finally
+            {
+                // The field has already been exchanged to null, so no other path can dispose
+                // this source if a registered cancellation callback throws.
+                cts.Dispose();
+            }
         }
 
         /// <summary>Disposes the timeout source without cancelling (used by the run loop's finally). Idempotent.</summary>

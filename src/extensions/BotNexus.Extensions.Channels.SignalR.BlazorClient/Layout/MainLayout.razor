@@ -1336,6 +1336,17 @@
         await JS.InvokeVoidAsync("localStorage.setItem", ActivityFilterKey, filter.ToString());
     }
 
+    // #2325: the "move to section" menu is a row affordance. An assigned conversation no longer has
+    // a default-list row, so the menu is projected onto its section member row instead - the
+    // affordance moves with the conversation rather than disappearing when it is assigned.
+    private RenderFragment RenderSectionMemberActions(AgentState agent, string conversationId) => __builder =>
+    {
+        @if (!agent.IsReadOnly && agent.Conversations.TryGetValue(conversationId, out var conversation) && !conversation.IsDefault)
+        {
+            @RenderSectionButton(conversation)
+            @RenderSectionMenu(agent, conversation)
+        }
+    };
 
 
     private RenderFragment RenderConversationItem(AgentState agent, ConversationState conversation) => __builder =>
@@ -1378,6 +1389,7 @@
                    and all three sat on the title. Flex + gap cannot drift out of step. The
                    section menu stays outside the strip: it positions against the row. *@
                 <div class="conversation-row-actions">
+                    @RenderSectionButton(conversation)
                     <button class="conversation-pin-btn @(conversation.IsPinned ? "pinned" : "")" data-testid="conversation-pin-btn"
                             title="@(conversation.IsPinned ? "Unpin conversation" : "Pin conversation to top")"
                             aria-label="@(conversation.IsPinned ? "Unpin conversation" : "Pin conversation to top")"
@@ -1396,10 +1408,62 @@
                               Size="16" Class="bn-icon-inherit" />
                     </button>
                 </div>
+                @RenderSectionMenu(agent, conversation)
             }
         </div>
     };
 
+    // #2324: the sections feature (#2124) shipped with no way to put a conversation *into* a section -
+    // SectionsApiClient.AssignAsync had zero UI call sites. This is the interim inline affordance the
+    // issue sanctions: a per-row folder button opening a small "move to section" menu. The richer
+    // right-click context menu (#2326) and inline section rendering (#2325) are separate work; when
+    // #2326 lands, this menu's Assign/Unassign handlers are the reusable seam it can call.
+    private RenderFragment RenderSectionButton(ConversationState conversation) => __builder =>
+    {
+        var isOpen = string.Equals(_sectionMenuConversationId, conversation.ConversationId, StringComparison.Ordinal);
+        <button class="conversation-section-btn" data-testid="conversation-section-btn"
+                title="Move to section"
+                aria-label="Move to section"
+                aria-haspopup="menu"
+                aria-expanded="@(isOpen ? "true" : "false")"
+                @onclick:stopPropagation="true"
+                @onclick="() => ToggleSectionMenu(conversation.ConversationId)">
+            <Icon Name="move" Size="16" />
+        </button>
+    };
+
+    // The menu is a sibling of the actions strip, not a child of it: it positions against
+    // .conversation-list-item, and nesting it inside an absolutely positioned strip would
+    // re-anchor it to the strip instead.
+    private RenderFragment RenderSectionMenu(AgentState agent, ConversationState conversation) => __builder =>
+    {
+        var isOpen = string.Equals(_sectionMenuConversationId, conversation.ConversationId, StringComparison.Ordinal);
+        @if (isOpen)
+        {
+            var sections = SectionsState.Sections;
+            var currentSectionId = GetAssignedSectionId(conversation.ConversationId);
+            <div class="conversation-section-menu" data-testid="conversation-section-menu" role="menu">
+                <button class="conversation-section-menu-item @(currentSectionId is null ? "active" : "")"
+                        role="menuitem"
+                        data-testid="conversation-section-menu-none"
+                        @onclick:stopPropagation="true"
+                        @onclick="() => UnassignConversationSectionAsync(agent.AgentId, conversation.ConversationId)">None</button>
+                @foreach (var section in sections)
+                {
+                    <button class="conversation-section-menu-item @(string.Equals(currentSectionId, section.SectionId, StringComparison.Ordinal) ? "active" : "")"
+                            role="menuitem"
+                            data-testid="conversation-section-menu-item"
+                            data-section-id="@(section.SectionId)"
+                            @onclick:stopPropagation="true"
+                            @onclick="() => AssignConversationSectionAsync(agent.AgentId, conversation.ConversationId, section.SectionId)">@(section.Name)</button>
+                }
+                @if (sections.Count == 0)
+                {
+                    <div class="conversation-section-menu-empty" data-testid="conversation-section-menu-empty">No sections yet.</div>
+                }
+            </div>
+        }
+    };
 
     // The menu is a sibling of the actions strip, not a child of it: it positions against
     // .conversation-list-item, and nesting it inside an absolutely positioned strip would
