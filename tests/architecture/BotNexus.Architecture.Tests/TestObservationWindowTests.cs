@@ -63,14 +63,11 @@ namespace BotNexus.Architecture.Tests;
 public class TestObservationWindowTests : ArchitectureTest
 {
     /// <summary>
-    /// Helpers and forms whose <c>TimeSpan</c> argument is an observation budget. None of these
-    /// carries a baseline: a new short window fails outright.
+    /// Shared with the sibling timing fence. Both consumed private copies of this array and
+    /// drifted apart, which is how a newly added helper went unfenced - see
+    /// <see cref="TestWaitHelperNames"/>.
     /// </summary>
-    private static readonly string[] WaitHelpers =
-    [
-        "WaitUntilAsync", "WaitForAsync", "WaitForOutboundAsync", "WaitForConditionAsync",
-        "EventuallyAsync", "WaitForStatusAsync", "PollUntilAsync", "SignaledAsync", "WaitAsync"
-    ];
+    private static readonly string[] WaitHelpers = TestWaitHelperNames.BudgetedWaits;
 
     private const int MinimumObservationSeconds = 15;
 
