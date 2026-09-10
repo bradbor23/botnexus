@@ -161,7 +161,9 @@ public static class SkillDraftValidator
         if (steps.Count == 0)
             errors.Add(
                 "This session recorded no tool calls, so there is nothing to build a skill from. " +
-                "A skill proposed here would be prose with no run behind it.");
+                "A skill proposed here would be prose with no run behind it. If the work just " +
+                "happened in THIS turn, its calls are not in session history yet — propose again " +
+                "on the next turn.");
 
         return new DraftValidation(
             errors,

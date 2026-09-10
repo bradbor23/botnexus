@@ -39,6 +39,30 @@ public sealed class SkillRecordTool(
     SkillsConfig config,
     string? createdBy = null) : IAgentTool
 {
+    /// <summary>
+    /// What to say when the trace is empty. Almost always the same cause, and it is not "nothing
+    /// happened": a tool call made in the CURRENT turn has not been written to session history yet,
+    /// so an agent that finishes a task and immediately asks for its own steps sees none of them.
+    /// </summary>
+    /// <remarks>
+    /// Verified on the live instance: a turn that ran <c>bash</c> and then asked for <c>steps</c>
+    /// got zero; asking again in the very next turn returned that same call with its arguments.
+    /// Reading persisted history rather than the in-flight run is deliberate — it is what makes a
+    /// recording survive compaction and what stops a proposal being checked against the agent's own
+    /// account of itself — so this is a real constraint to explain, not a bug to paper over.
+    /// The failure is at least safe in the other direction: <c>propose</c> validates against the
+    /// same empty trace and refuses, so nothing can be recorded from a run that is not on record.
+    /// </remarks>
+    private const string EmptyTraceGuidance =
+        "No tool calls are recorded for this session yet.\n\n" +
+        "If you have just finished the work you want to record, this is expected: the calls you " +
+        "made THIS turn are not written to session history until the turn completes, and the " +
+        "recorder reads history rather than your own context — that is what makes a recording " +
+        "survive compaction and keeps it checkable. Ask again on your next turn and they will be " +
+        "here.\n\n" +
+        "If this session genuinely ran no tools, there is nothing to record: a skill proposed here " +
+        "would be prose with no run behind it.";
+
     /// <summary>Per-step argument budget in the <c>steps</c> listing.</summary>
     private const int MaxArgumentChars = 600;
 
@@ -61,6 +85,9 @@ public sealed class SkillRecordTool(
         "Turn a task you just completed into a reusable skill, by proposing which values were " +
         "parameters and having the operator confirm before anything is installed. Use it when a " +
         "non-trivial task succeeded and the same task will be asked again with different specifics. " +
+        "Call it on a turn AFTER the work finished, not in the same turn: the recorder reads " +
+        "persisted session history, and this turn's own tool calls are not written there until the " +
+        "turn completes. " +
         "The cycle is: 'steps' to read back what this session actually ran; 'propose' to draft the " +
         "skill with {{placeholders}} and say which literals were parameters and why; 'review' to " +
         "show the operator exactly what would be installed and get a confirmation token; 'confirm' " +
@@ -153,7 +180,7 @@ public sealed class SkillRecordTool(
             return failure;
 
         if (steps.Count == 0)
-            return Ok("This session has recorded no tool calls yet, so there is nothing to record as a skill.");
+            return Ok(EmptyTraceGuidance);
 
         var sb = new StringBuilder();
         sb.AppendLine($"## Recorded steps for session {trace!.SessionId.Value}");
