@@ -280,12 +280,62 @@ credential internally, exposes an explicit verb allow-list, and is read-only by 
 A resolution failure always names the **reference**, never the value. If you ever see a credential
 in a log, that is a bug worth reporting.
 
+## Nothing here is encrypted at rest
+
+Worth its own heading, because "stored securely" is the claim this does **not** make.
+
+Everything BotNexus keeps lives in plain files under `~/.botnexus`:
+
+| | |
+|---|---|
+| `sessions.sqlite` | every conversation, in full — usually the largest and most revealing file in the tree |
+| `agents/<id>/data/memory.sqlite` | what each agent has distilled about you and your systems |
+| `secrets/*`, `secrets.sqlite` | the credentials themselves, when using `file:` or `sqlite:` refs |
+| `cron.sqlite`, `webhooks.sqlite`, … | schedules, endpoints, device tokens |
+
+Anyone who can read those files reads all of it. There is no database password and no application
+key, and adding one would buy less than it appears to: the gateway has to open these unattended, so
+any key it uses must sit on the same host, readable by the same user as the data. Database
+encryption defends **offline media** — a backup, a snapshot, a stolen or discarded disk — and not
+someone with access to the running host.
+
+### What to do about it
+
+**Set file permissions, and check them.** The gateway does not enforce these; a fresh install can
+leave stores group- and world-readable while the credentials beside them are locked down. What you
+want:
+
+```bash
+chmod 700 ~/.botnexus ~/.botnexus/secrets
+chmod 600 ~/.botnexus/*.sqlite* ~/.botnexus/secrets/*
+find ~/.botnexus/agents -maxdepth 2 -type d -name data -exec chmod 700 {} +
+find ~/.botnexus/agents -name 'memory.sqlite*' -exec chmod 600 {} +
+```
+
+The `-wal` and `-shm` siblings matter as much as the `.sqlite` file: the write-ahead log holds the
+most recent writes, so locking only the database leaves the newest content readable.
+
+**Modes travel, which is the real reason to set them.** `tar`, `rsync -a`, `zfs send` and most
+backup tools preserve permissions. A mode that is harmless behind a restrictive home directory
+becomes meaningful the moment the archive is extracted somewhere else — and "somewhere else" is
+precisely the offline threat.
+
+**Encrypt the volume, not the database.** Full-disk or dataset-level encryption on the host covers
+every file listed above, including the credentials, rather than one of them. It is the control that
+addresses the threat that database encryption is usually reached for.
+
+**On a shared or multi-user host, treat all of this as readable by every account on it** and place
+the credentials outside BotNexus entirely — an MCP server holding its own configuration, or
+`keyring:` backed by the OS credential store, which is the one option here whose protection does not
+end at file permissions.
+
 ## What this design does not protect against
 
 Worth stating as plainly as the guarantees:
 
 - Anything running as the gateway user can read what the gateway can read. This is not a vault.
-- `env:`, `file:` and `sqlite:` are not encrypted at rest.
+- `env:`, `file:` and `sqlite:` are not encrypted at rest, and neither is anything else BotNexus
+  stores — see [the section above](#nothing-here-is-encrypted-at-rest).
 - A malicious *tool* is outside the model. Tools are trusted code — that is precisely why the
   credential lives there and not in the agent's context.
 - Anything you add to `gateway.toolEnvironmentPassThrough` is readable by every agent that can run
