@@ -361,6 +361,7 @@ public abstract class ConversationStoreContractTests
         await store.CreateAsync(conv);
 
         var before = (await store.GetAsync(conv.ConversationId))!.UpdatedAt;
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(50); // Ensure time advances
         await store.TouchAsync(conv.ConversationId);
 

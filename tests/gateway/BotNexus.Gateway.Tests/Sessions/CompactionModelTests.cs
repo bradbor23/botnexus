@@ -51,6 +51,7 @@ public sealed class CompactionModelTests
     {
         var session = new GatewaySession { SessionId = BotNexus.Domain.Primitives.SessionId.From("session-a"), AgentId = BotNexus.Domain.Primitives.AgentId.From("agent-a") };
         var initialUpdatedAt = session.UpdatedAt;
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         Thread.Sleep(10);
 
         session.ReplaceHistory([new SessionEntry { Role = MessageRole.User, Content = "new-content" }]);

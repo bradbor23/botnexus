@@ -820,6 +820,7 @@ public sealed class SqliteConversationStoreTests
         _ = await store.GetAsync(conversation.ConversationId);
         var before = (await store.GetAsync(conversation.ConversationId))!.UpdatedAt;
 
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(5); // ensure clock advances at least 1ms
         await store.TouchAsync(conversation.ConversationId);
 

@@ -145,6 +145,7 @@ public sealed class InProcessAgentHandleTests
 
         // Rewind the tracker so we can prove RecordActivity() moved it forward.
         var before = tracker.LastActivityUtc;
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(15);
 
         await handle.PromptAsync("hello");
@@ -162,6 +163,7 @@ public sealed class InProcessAgentHandleTests
         var (_, handle) = CreateHandle(provider: null, activityTracker: tracker);
 
         var before = tracker.LastActivityUtc;
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(15);
 
         await foreach (var _ in handle.StreamAsync("hello"))

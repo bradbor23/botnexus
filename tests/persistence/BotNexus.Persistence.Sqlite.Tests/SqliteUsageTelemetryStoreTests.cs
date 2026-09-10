@@ -87,6 +87,7 @@ public sealed class SqliteUsageTelemetryStoreTests : IDisposable
         await using var store = NewStore();
 
         await store.IncrementAsync("skills", "first", "use");
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(10);
         await store.IncrementAsync("skills", "second", "use");
 

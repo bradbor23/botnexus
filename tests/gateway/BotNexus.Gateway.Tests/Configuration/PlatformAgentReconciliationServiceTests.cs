@@ -131,6 +131,7 @@ public sealed class PlatformAgentReconciliationServiceTests : IDisposable
             writer, BundledPlatformAgents.All, NullLogger<PlatformAgentReconciliationService>.Instance);
 
         var before = File.GetLastWriteTimeUtc(_configPath);
+        // delay-is-not-a-signal: must cross a filesystem timestamp tick so a rewrite would be observable at all; a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(20);
 
         await service.StartAsync(CancellationToken.None);
@@ -226,6 +227,7 @@ public sealed class PlatformAgentReconciliationServiceTests : IDisposable
         var afterFirst = await File.ReadAllBytesAsync(_configPath);
         var mtimeAfterFirst = File.GetLastWriteTimeUtc(_configPath);
         var backupsAfterFirst = BackupCount();
+        // delay-is-not-a-signal: must cross a filesystem timestamp tick so a rewrite would be observable at all; a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(20);
 
         await service.StartAsync(CancellationToken.None);

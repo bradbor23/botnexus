@@ -132,6 +132,7 @@ public sealed class InMemorySatelliteRegistryTests
         registry.MarkOnline("sat1", "conn-123");
         var firstSeen = registry.GetById("sat1")!.LastSeen;
 
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         Thread.Sleep(10); // ensure time advances
         registry.RecordHeartbeat("sat1");
 
