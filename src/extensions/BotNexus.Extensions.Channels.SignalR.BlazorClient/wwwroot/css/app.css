@@ -892,25 +892,17 @@ html, body, #app {
     display: none;
 }
 
-/* And the same column counts as .agent-card-grid, at the same breakpoints. */
+/* And the same track rule as .agent-card-grid, so the placeholder columns cannot drift from
+   the real ones. Note the skeleton page keeps its own 60rem cap, so on a wide display the
+   placeholders still occupy a 960px band and the cards widen out when Blazor takes over;
+   reconciling that is a separate change to .boot-skeleton-page's geometry. */
 .boot-skeleton-cards {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 20rem));
+    justify-content: center;
     gap: 1rem;
     margin-top: 0.9rem;
     overflow: hidden;
-}
-
-@media (min-width: 600px) {
-    .boot-skeleton-cards {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (min-width: 900px) {
-    .boot-skeleton-cards {
-        grid-template-columns: repeat(3, 1fr);
-    }
 }
 
 .boot-skeleton-messages {
@@ -5656,10 +5648,15 @@ h3.conversation-title.editable:hover {
 /* ── Home agent roster / Agent Dashboard ───────────────────────────── */
 
 .home-agent-roster {
-    width: min(100%, 72rem);
-    margin: 1rem auto 3rem;
-    padding-top: 1.5rem;
+    /* Was min(100%, 72rem), which never did anything: 72rem cannot apply inside the page's
+       60rem cap. Now a sibling of .home-page, so 100% is the whole canvas. The 1.5rem inline
+       padding replaces the page padding this section used to sit inside, which keeps the grid's
+       gutters identical: at 375px the grid measures 279px either way. */
+    width: 100%;
+    margin: 1rem 0 3rem;
+    padding: 1.5rem 1.5rem 0;
     border-top: 1px solid var(--border);
+    box-sizing: border-box;
 }
 
 .home-agent-roster-heading {
@@ -5698,22 +5695,30 @@ h3.conversation-title.editable:hover {
     font-size: var(--text-body);
 }
 
+/* Cards grow in NUMBER, not in size. The track tops out at 21rem, so extra width becomes
+   another column rather than stretched cards, and justify-content centres the result at any
+   width - which is why this needs no breakpoints at all and the three @media overrides that
+   used to cap it at three columns are gone.
+
+   The cap is 20rem, not 21rem, and the difference is load-bearing. auto-fit counts repetitions
+   using the track's MAX size, not its min, so a 21rem (336px) cap fits only ONE track into the
+   672px grid at a 768px viewport - a regression from the two columns the old 600px breakpoint
+   gave. 20rem (320px) fits two there (2x320 + 16 gap = 656) and changes nothing above it:
+   measured 1 / 2 / 3 / 4 / 5 columns at 375 / 768 / 1280 / 1600 / 2000px, against 1 / 2 / 3 / 3 / 3
+   before.
+
+   min(17rem, 100%) is the floor guard: a bare 17rem minimum overflows any container narrower
+   than 17rem, which is a real 320px phone. The explicit minimum also fixes a pre-existing
+   overflow - `1fr` means minmax(auto, 1fr), so a long unbreakable agent name could push a
+   track past its share, measured as columns of 286/260/335px inside an 864px grid.
+
+   Both consumers gain: the Home roster, and the chat page's agent picker (Home.razor renders
+   AgentDashboard with no width cap at all, so its three columns spanned the whole canvas). */
 .agent-card-grid {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 20rem));
+    justify-content: center;
     gap: 1rem;
-}
-
-@media (min-width: 600px) {
-    .agent-card-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (min-width: 900px) {
-    .agent-card-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
 }
 
 .agent-card {
@@ -7523,6 +7528,22 @@ h3.conversation-title.editable:hover {
    would also match on Home, where the panel must stay flex-sized. */
 
 /* ── Home landing page (#2037) ─────────────────────────────────────────────── */
+/* Two bands, not one column. .home-canvas holds the page's 60rem reading column and, below
+   it, the agent roster at full canvas width. The roster used to live INSIDE .home-page, so
+   it inherited that 60rem cap: measured on a 2000px viewport it got 912px and 1088px - 54%
+   of the screen - was idle margin, with the column count stuck at three however wide the
+   display got.
+
+   The cap stays on .home-page rather than moving to its sections, deliberately.
+   .boot-skeleton-page copies this block's geometry and BootSkeletonTests pins the copy
+   property by property, so that placeholder cards land where the real ones will. Removing
+   the cap here breaks that guarantee; making the roster a SIBLING keeps it intact. */
+.home-canvas {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
 .home-page {
     display: flex;
     flex-direction: column;
