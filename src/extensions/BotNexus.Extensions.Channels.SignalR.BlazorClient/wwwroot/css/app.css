@@ -6524,9 +6524,19 @@ h3.conversation-title.editable:hover {
 }
 
 /* ── Home / Activity dashboard (#1888) ─────────────────────────────────────── */
+/* The Activity table is the widest content in the portal - five columns over 35 rows - and a
+   1100px cap left 900px of a 2000px display idle (45%) while eight conversation names were
+   clipped to an ellipsis. Measured on the live table: raising the cap clears every clipped
+   conversation name by 1300px, so 100rem gives that with margin and still uses ~80% of a
+   2000px screen. Laptops gain too: at 1280px the dashboard was 1100px and is now the full
+   1280. Kept centred rather than full-bleed, matching the roster decision in #114.
+
+   NOTE: this does NOT fix the clipped Agents cells. Those hold sub-agent chips ~400px wide
+   because AgentLabel falls back to the raw agent id - see the comment there. No column width
+   fixes a 1730px cell; widening from 1300 to 1500 measured zero improvement. */
 .activity-dashboard {
     padding: 1.5rem;
-    max-width: 1100px;
+    max-width: 100rem;
     margin: 0 auto;
     width: 100%;
     box-sizing: border-box;
