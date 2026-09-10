@@ -5096,56 +5096,14 @@ details[open] > .thinking-summary::before {
     color: var(--error);
 }
 
-/* Dim the pushpin and folder glyphs so they read as inactive actions until they are used. */
-.conversation-pin-btn,
-.conversation-section-btn {
+/* Dim the pushpin glyph so it reads as an inactive action until it is used. */
+.conversation-pin-btn {
     filter: grayscale(1) opacity(0.6);
 }
 
 .conversation-pin-btn:hover,
-.conversation-section-btn:hover,
 .conversation-pin-btn.pinned {
     filter: none;
-}
-
-.conversation-section-menu {
-    position: absolute;
-    right: 0.25rem;
-    top: 100%;
-    z-index: 20;
-    min-width: 10rem;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-elevated, var(--bg-secondary));
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.2rem;
-    box-shadow: var(--shadow-raised);
-}
-
-.conversation-section-menu-item {
-    background: none;
-    border: none;
-    cursor: pointer;
-    text-align: left;
-    color: var(--text);
-    font-size: var(--text-caption);
-    padding: 0.25rem 0.4rem;
-    border-radius: var(--radius-sm);
-}
-
-.conversation-section-menu-item:hover {
-    background: var(--bg-hover, var(--color-wash));
-}
-
-.conversation-section-menu-item.active {
-    color: var(--accent);
-}
-
-.conversation-section-menu-empty {
-    color: var(--text-muted);
-    font-size: var(--text-caption);
-    padding: 0.25rem 0.4rem;
 }
 
 /* ── Conversation Group Headers ───────────────────────────────────────────────────────── */
@@ -7089,12 +7047,6 @@ h3.conversation-title.editable:hover {
 /* #2441: "My sections" is nested under the agent chat section behind a collapsible
    header, so it needs no separator of its own and only a small indent to read as a
 
-
-
-
-
-
-
 .section-add-btn {
     background: none;
     border: 1px solid var(--sidebar-border);
@@ -7107,33 +7059,6 @@ h3.conversation-title.editable:hover {
 
 .section-add-btn:hover {
     background: var(--color-wash);
-}
-
-
-
-
-
-.conversation-section-actions button,
-.section-collapse-toggle {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: var(--text-caption);
-    padding: 0.05rem 0.2rem;
-    opacity: 0.75;
-}
-
-
-
-.section-name-input {
-    flex: 1 1 auto;
-    background: var(--color-scrim-soft);
-    border: 1px solid var(--sidebar-border);
-    border-radius: var(--radius-sm);
-    color: inherit;
-    font-size: var(--text-label);
-    padding: 0.1rem 0.3rem;
 }
 
 .section-create-row {
@@ -7151,44 +7076,6 @@ h3.conversation-title.editable:hover {
     cursor: pointer;
     font-size: var(--text-caption);
     padding: 0.1rem 0.35rem;
-}
-
-
-.conversation-section-empty {
-    font-size: var(--text-caption);
-    opacity: 0.5;
-    padding: 0.15rem 0.5rem;
-}
-
-.conversation-section-item {
-    /* The move-to-section menu positions against its row. This row was never a containing
-       block, so on a section member the menu resolved against whichever ancestor happened
-       to be positioned and landed away from the button that opened it. */
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.1rem 0.5rem;
-    font-size: var(--text-label);
-}
-
-.conversation-section-item-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.section-remove-conversation-btn {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0;
-    font-size: var(--text-caption);
-}
-
-.conversation-section-item:hover .section-remove-conversation-btn {
-    opacity: 0.7;
 }
 
 /* Tools iframe host route /tools/{id} (#2234) */
@@ -7709,7 +7596,6 @@ h3.conversation-title.editable:hover {
     }
 }
 
-
 .home-starter-title {
     margin: 0;
     font-size: var(--text-title);
@@ -8013,7 +7899,6 @@ h3.conversation-title.editable:hover {
 .banner-settings-btn,
 .conversation-pin-btn,
 .conversation-archive-btn,
-.conversation-section-btn,
 .msg-copy-btn,
 .tool-copy-btn,
 .tool-popout-btn,
