@@ -133,6 +133,7 @@ public sealed partial class GatewayHostTests
         await dispatch;
 
         // Give any background best-effort title task a moment; the title must stay custom.
+        // delay-is-not-a-signal: backoff between retries against a real external resource
         await Task.Delay(200);
         var conv = await conversationStore.GetAsync(convId, CancellationToken.None);
         conv!.Title.ShouldBe("My Custom Title");

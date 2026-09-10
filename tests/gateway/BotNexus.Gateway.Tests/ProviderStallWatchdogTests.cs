@@ -166,6 +166,7 @@ public sealed class ProviderStallWatchdogTests
     private static async IAsyncEnumerable<AgentStreamEvent> StallAfterFirst()
     {
         yield return new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "data" };
+        // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
         await Task.Delay(TimeSpan.FromSeconds(30)); // Will be interrupted by watchdog timeout
         yield return new AgentStreamEvent { Type = AgentStreamEventType.MessageEnd }; // Never reached
     }

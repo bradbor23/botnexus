@@ -70,6 +70,7 @@ public static class HubFixtureGuard
 
         var operationTask = operation(linked.Token);
         using var timerCts = new CancellationTokenSource();
+        // delay-is-not-a-signal: this timer IS the guard's timeout contract
         var timerTask = Task.Delay(timeout, timerCts.Token);
 
         var winner = await Task.WhenAny(operationTask, timerTask).ConfigureAwait(false);

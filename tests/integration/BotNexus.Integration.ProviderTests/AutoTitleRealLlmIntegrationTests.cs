@@ -125,6 +125,7 @@ public sealed class AutoTitleRealLlmIntegrationTests : IAsyncLifetime
         // #1903 companion: agent-initiated conversations have no user turn (user=0, assistant>=1),
         // so titling uses the new assistant-only prompt. Validate that prompt against a real model.
         Skip.If(!_apiAvailable, ApiDegradedReason);
+        // delay-is-not-a-signal: spacing between calls to a live API, not synchronisation
         await Task.Delay(4000); // rate-limit spacing vs the previous call
 
         var store = new InMemoryConversationStore();

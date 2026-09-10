@@ -62,6 +62,7 @@ public sealed class QmdCliBackendCancellationTests
                     // existing deadline rather than turning a normal writer race into a flake.
                 }
             }
+            // delay-is-not-a-signal: backoff between retries against a real external resource
             await Task.Delay(25);
         }
 

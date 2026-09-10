@@ -596,6 +596,7 @@ public sealed class GatewayStartupAndConfigurationTests
                     if (attempt == 4)
                         return; // Best-effort: leave temp dir for OS cleanup.
 
+                    // delay-is-not-a-signal: backoff between retries against a real external resource
                     Thread.Sleep(500 * (attempt + 1));
                 }
             }

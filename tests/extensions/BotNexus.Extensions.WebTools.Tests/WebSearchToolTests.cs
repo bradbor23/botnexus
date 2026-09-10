@@ -369,6 +369,7 @@ public class WebSearchToolTests
         public async Task<IReadOnlyList<SearchResult>> SearchAsync(string query, int maxResults, CancellationToken ct)
         {
             Interlocked.Increment(ref _callCount);
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(delay, ct);
             return [new SearchResult("Title", "https://example.com", query)];
         }

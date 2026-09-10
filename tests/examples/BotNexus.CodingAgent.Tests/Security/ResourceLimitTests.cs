@@ -103,6 +103,7 @@ public sealed class ResourceLimitTests : IDisposable
                 if (attempt == 4)
                     return;
 
+                // delay-is-not-a-signal: backoff between retries against a real external resource
                 Thread.Sleep(500 * (attempt + 1));
             }
         }

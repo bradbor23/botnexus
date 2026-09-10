@@ -271,6 +271,7 @@ public class StepExecutor
             case "wait_for_events": await ExecuteWaitForEventsAsync(step, ct); break;
             case "reset_session": await ExecuteResetAsync(step, ct); break;
             case "assert": ExecuteAssert(step); break;
+            // delay-is-not-a-signal: the scenario DSL's own 'delay' step - the delay is the feature
             case "delay": await Task.Delay(TimeSpan.FromSeconds(step.TimeoutSeconds), ct); break;
             case "api_get": await ExecuteApiGetAsync(step, ct); break;
             case "api_put": await ExecuteApiPutAsync(step, ct); break;

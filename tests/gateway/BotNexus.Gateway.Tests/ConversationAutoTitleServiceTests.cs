@@ -790,6 +790,7 @@ public sealed class ConversationAutoTitleServiceTests
             var stream = new LlmStream();
             _ = Task.Run(async () =>
             {
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(_delay);
                 var msg = new AssistantMessage(
                     Content: [new TextContent(_responseText)], Api: "fake-api", Provider: "fake",

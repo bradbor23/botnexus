@@ -542,12 +542,14 @@ public sealed class ExtensionLoaderTests : IDisposable
             {
                 if (attempt == 4)
                     return;
+                // delay-is-not-a-signal: backoff between retries against a real external resource
                 Thread.Sleep(100);
             }
             catch (IOException)
             {
                 if (attempt == 4)
                     return;
+                // delay-is-not-a-signal: backoff between retries against a real external resource
                 Thread.Sleep(100);
             }
         }

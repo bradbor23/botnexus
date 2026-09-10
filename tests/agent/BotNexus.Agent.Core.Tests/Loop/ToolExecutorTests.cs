@@ -85,6 +85,7 @@ public class ToolExecutorTests
                     "t2" => 30,
                     _ => 0
                 };
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(delay);
                 beforeOrder.Add(beforeContext.ToolCallRequest.Id);
                 return null;
@@ -457,6 +458,7 @@ public class ToolExecutorTests
             Interlocked.Increment(ref _executeCount);
             if (delayMs > 0)
             {
+                // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                 await Task.Delay(delayMs, cancellationToken);
             }
 

@@ -381,6 +381,7 @@ public sealed class TelegramMediaBoundsTests
             {
                 try
                 {
+                    // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
                     await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
                 }
                 catch (OperationCanceledException)

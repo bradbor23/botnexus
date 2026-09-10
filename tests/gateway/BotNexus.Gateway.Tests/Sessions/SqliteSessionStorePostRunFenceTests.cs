@@ -175,6 +175,7 @@ public sealed class SqliteSessionStorePostRunFenceTests : IDisposable
                     {
                         if (attempt >= 4)
                             break;
+                        // delay-is-not-a-signal: backoff between retries against a real external resource
                         Thread.Sleep(50);
                     }
                 }

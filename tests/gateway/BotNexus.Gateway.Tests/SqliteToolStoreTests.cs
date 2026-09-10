@@ -168,6 +168,7 @@ public sealed class SqliteToolStoreTests : IAsyncDisposable
             }
             catch (IOException) when (attempt < 4)
             {
+                // delay-is-not-a-signal: backoff between retries against a real external resource
                 await Task.Delay(50);
             }
         }

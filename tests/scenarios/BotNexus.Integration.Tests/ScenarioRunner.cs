@@ -358,6 +358,7 @@ public class ScenarioRunner
             }
             catch (HttpRequestException) { }
 
+            // delay-is-not-a-signal: backoff between retries against a real external resource
             await Task.Delay(250, ct);
         }
 

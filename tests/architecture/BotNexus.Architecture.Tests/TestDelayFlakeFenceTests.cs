@@ -24,6 +24,18 @@ namespace BotNexus.Architecture.Tests;
 /// expires. <see cref="TestObservationWindowTests"/> enforces the deadline half of that contract,
 /// <c>WaitAsync</c> included.
 /// </para>
+/// <para>
+/// <b>Not every finite wait is a guess (#111 follow-up).</b> When the baseline was read site by site,
+/// roughly two thirds of its 145 entries turned out to be correct code the scanner cannot tell apart
+/// from debt: a fake that is slow ON PURPOSE (<c>DelayingAction</c>, <c>DelayedHandler</c>, a stalling
+/// stream), a backoff against a genuinely external resource (temp-dir cleanup, an <c>IOException</c>
+/// retry, a TCP readiness probe, rate-limit spacing against a live API), or the delay the test is
+/// actually about. Freezing those as debt made the count meaningless - it could not distinguish
+/// "a test that guesses" from "a test that simulates". A wait that claims
+/// <c>delay-is-not-a-signal:</c> with a reason is therefore exempt, the same way the deadline fence
+/// exempts a wait whose expiry is the assertion. The claim is the point: it makes the author say
+/// which of the three it is, and it leaves the remaining count meaning something.
+/// </para>
 /// </remarks>
 public class TestDelayFlakeFenceTests : ArchitectureTest
 {
@@ -33,6 +45,12 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private const string BaselineFileName = "TestDelayFlakeBaseline.baseline";
+    // #111 follow-up ratchet: 145 -> 83. Sixty-one entries were never debt - a fake that is slow
+    // on purpose, a backoff against a real resource, or spacing against a live API - and now say so
+    // with delay-is-not-a-signal. One more was a Task.Delay inside a STRING, in an assertion message
+    // telling the reader NOT to add a delay; the scanner masks string literals now, so prose about a
+    // wait is no longer scored as one. Nothing was rewritten to earn this; the count simply stopped
+    // counting correct code.
     // #107 ratchet: FileWatcherToolTests' rapid-change debounce test drove five writes to a real
     // file 40ms apart. The sleep was never what made the changes rapid - the debounce window is - so
     // raising the events through the tool's own watcher seam removed it and left only the clamp
@@ -43,8 +61,8 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // race in InMemoryActivityBroadcaster - SubscribeAsync did not register the subscriber until
     // first enumeration, so the sleeps were waiting for something that had not been asked to
     // happen. Fixing the broadcaster removed the need for both, and the entry with them.
-    private const int ExpectedBaselineEntryCount = 108;
-    private const int ExpectedBaselineViolationCount = 145;
+    private const int ExpectedBaselineEntryCount = 62;
+    private const int ExpectedBaselineViolationCount = 83;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.
@@ -57,6 +75,14 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     [InlineData("await Task.Delay(Timeout.Infinite, cancellationToken);", false)]
     [InlineData("await Task.Delay(\n    Timeout.InfiniteTimeSpan,\n    cancellationToken);", false)]
     [InlineData("// await Task.Delay(20);", false)]
+    // A wait written inside a STRING is prose about a delay, not a delay.
+    [InlineData("throw new Exception(\"If you needed Task.Delay(..) here the binding is lazy\");", false)]
+    // A "//" inside a string must not truncate the line and hide the real wait after it.
+    [InlineData("Log(\"see https://x/y\"); await Task.Delay(20);", true)]
+    // Claimed, with a reason, as something other than a stand-in for a signal.
+    [InlineData("await Task.Delay(_gap, ct); // delay-is-not-a-signal: the stall IS the subject", false)]
+    // A bare claim with no reason does not exempt anything.
+    [InlineData("await Task.Delay(_gap, ct); // delay-is-not-a-signal:", true)]
     public void FiniteWaitClassifier_DistinguishesSleepsFromCancellationSentinels(
         string source,
         bool expectedViolation)
@@ -90,7 +116,11 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
             "Tests must use TestAwait.EventuallyAsync to observe a condition, TestAwait.SignaledAsync to " +
             "await a signal the fixture raises, use virtual time, or inject the delay under test " +
             "instead of sleeping for a finite wall-clock duration. Infinite delays that end through " +
-            "cancellation are sentinels and remain valid. Rewriting the sleep as " +
+            "cancellation are sentinels and remain valid. If the delay is NOT standing in for a " +
+            $"signal - it is the behaviour being simulated (a fake that is slow on purpose), a " +
+            "backoff against a genuinely external resource, or the subject under test - say so with " +
+            $"a '{FiniteTestDelayScanner.JustificationMarker} <reason>' comment on the line or just " +
+            "above it, and it is exempt. Rewriting the sleep as " +
             "WaitAsync(TimeSpan.FromSeconds(n)) does NOT satisfy this rule: it is the same wall-clock " +
             "deadline, it fails on the same loaded runner, and TestObservationWindowTests fences it. " +
             "Do not add entries to the baseline; replace " +
@@ -209,6 +239,16 @@ internal static partial class FiniteTestDelayScanner
 
     internal sealed record Violation(int Line, string Text);
 
+    /// <summary>
+    /// Marks a finite wait that is NOT standing in for a signal - the delay is the behaviour being
+    /// simulated, a backoff against a genuinely external resource, or the subject under test. Must
+    /// appear on the wait's own line or within <see cref="JustificationLookbackLines"/> lines above
+    /// it, followed by a reason saying which of those it is.
+    /// </summary>
+    internal const string JustificationMarker = "delay-is-not-a-signal:";
+
+    private const int JustificationLookbackLines = 10;
+
     internal static List<Violation> FindViolations(string source)
     {
         var violations = new List<Violation>();
@@ -218,13 +258,16 @@ internal static partial class FiniteTestDelayScanner
 
         for (var index = 0; index < lines.Length; index++)
         {
-            var code = lines[index].Split("//", 2, StringSplitOptions.None)[0];
+            var code = MaskStringsAndComments(lines[index]);
             foreach (Match match in FiniteWait.Matches(code))
             {
                 var invocationStart = sourceOffset + match.Index;
                 var invocationEnd = normalized.IndexOf(';', invocationStart);
                 var invocation = normalized[invocationStart..(invocationEnd < 0 ? normalized.Length : invocationEnd)];
                 if (invocation.Contains("Timeout.Infinite", StringComparison.Ordinal))
+                    continue;
+
+                if (IsJustified(lines, index + 1))
                     continue;
 
                 violations.Add(new Violation(index + 1, lines[index].Trim()));
@@ -234,6 +277,81 @@ internal static partial class FiniteTestDelayScanner
         }
 
         return violations;
+    }
+
+    /// <summary>
+    /// Reports whether the wait claims, with a reason, that it is not standing in for a signal. Read
+    /// from the raw lines rather than the masked ones, because the claim lives in a comment.
+    /// </summary>
+    private static bool IsJustified(string[] lines, int line)
+    {
+        var first = Math.Max(0, line - 1 - JustificationLookbackLines);
+        for (var index = first; index < line && index < lines.Length; index++)
+        {
+            var marker = lines[index].IndexOf(JustificationMarker, StringComparison.Ordinal);
+            if (marker < 0)
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(lines[index][(marker + JustificationMarker.Length)..]))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Blanks string literals and the trailing line comment while preserving every offset.
+    /// </summary>
+    /// <remarks>
+    /// Splitting on <c>//</c> alone had two defects. A <c>Task.Delay(...)</c> written INSIDE a string
+    /// was counted as a wait - <c>SubAgentEagerConversationPinTests</c> carries one in an assertion
+    /// message that exists precisely to tell the reader not to add a delay, and it was scored as
+    /// debt. And a <c>//</c> inside a string (any URL) truncated the line early, hiding real code
+    /// after it. Verbatim and raw string literals spanning lines are not handled; this is a
+    /// line-based scanner and they have not appeared in a finite-wait line.
+    /// </remarks>
+    private static string MaskStringsAndComments(string line)
+    {
+        var masked = line.ToCharArray();
+        var inString = false;
+        var inChar = false;
+
+        for (var index = 0; index < line.Length; index++)
+        {
+            var current = line[index];
+
+            if (!inString && !inChar && current == '/' && index + 1 < line.Length && line[index + 1] == '/')
+            {
+                for (var rest = index; rest < line.Length; rest++)
+                    masked[rest] = ' ';
+                break;
+            }
+
+            if (current == '\\' && (inString || inChar) && index + 1 < line.Length)
+            {
+                masked[index] = ' ';
+                masked[index + 1] = ' ';
+                index++;
+                continue;
+            }
+
+            if (current == '"' && !inChar)
+            {
+                inString = !inString;
+                continue;
+            }
+
+            if (current == '\'' && !inString)
+            {
+                inChar = !inChar;
+                continue;
+            }
+
+            if (inString || inChar)
+                masked[index] = ' ';
+        }
+
+        return new string(masked);
     }
 
     [GeneratedRegex(@"\b(?:Task\.Delay|Thread\.Sleep)\s*\(", RegexOptions.CultureInvariant)]

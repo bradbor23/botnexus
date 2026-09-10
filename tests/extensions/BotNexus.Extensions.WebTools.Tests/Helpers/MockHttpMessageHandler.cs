@@ -80,6 +80,7 @@ public sealed class MockHttpMessageHandler : HttpMessageHandler
         }
 
         if (plan.Delay is { } delay && delay > TimeSpan.Zero)
+            // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
 
         if (plan.Exception is not null)
