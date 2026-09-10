@@ -2368,6 +2368,13 @@ html, body, #app {
 
 /* ── Messages ───────────────────────────────────────────────────────── */
 
+/* One column width for the transcript and the composer below it, declared on the panel
+   that owns both so they cannot drift apart. Wide enough to HOLD a code block or a table;
+   the per-message caps below decide what actually uses the room. */
+.chat-panel {
+    --chat-column: 96rem;
+}
+
 .messages-container {
     flex: 1;
     overflow-y: auto;
@@ -2375,12 +2382,32 @@ html, body, #app {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    max-width: var(--chat-column);
+    margin-inline: auto;
+    width: 100%;
 }
 
 .message {
     padding: 0.75rem 1rem;
     border-radius: var(--radius);
-    max-width: 85%;
+    /* Was a bare 85% - a proportion of the container, so line length grew with the display.
+       Measured on a real transcript: 101 characters at a 1024px viewport, 128 at 1280 and
+       170 at 2000, against a comfortable 65-75. The ch term is what stops it; the
+       percentage still governs narrow screens, where 68ch is never the binding constraint
+       (and a media query further down widens these to 95% there). */
+    max-width: min(85%, 68ch);
+}
+
+/* Reference material is scanned rather than read, so it may use the column that prose
+   deliberately does not. .message.tool already carries its own 95% and gets the same
+   benefit from the wider container, so it needs no rule here.
+
+   Degrades gracefully without :has(): the rule is dropped and a code block scrolls inside
+   the measure instead, because .msg-content pre already sets overflow-x: auto. :has() is
+   used in five other places in this stylesheet, so it is not a new dependency. */
+.message:has(pre),
+.message:has(table) {
+    max-width: 95%;
 }
 
 .message.user {
@@ -2507,6 +2534,13 @@ html, body, #app {
     display: flex;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
+    /* The band stays full width so its border and fill still read as a page-level divider,
+       but its CONTENTS line up with the transcript column above - a centred transcript over
+       a full-width composer reads as a bug. The + 1rem matters: .messages-container's own
+       1rem padding sits INSIDE its capped box, so centring on the column alone left the
+       composer 16px out at every width past the cap. max() keeps the original 1rem gutter
+       once the viewport is narrower than the column, where the calc goes negative. */
+    padding-inline: max(1rem, calc((100% - var(--chat-column)) / 2 + 1rem));
     border-top: 1px solid var(--border);
     background: var(--bg-secondary);
 }
