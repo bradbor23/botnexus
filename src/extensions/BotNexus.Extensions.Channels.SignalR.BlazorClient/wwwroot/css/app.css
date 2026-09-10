@@ -7286,6 +7286,225 @@ h3.conversation-title.editable:hover {
         flex-wrap: wrap;
     }
 }
+/* ── Platform stats strip (#1692) ────────────────────────────────
+   PlatformStatsPanel shipped with class names and NO rules in this stylesheet, so
+   the browser laid its spans out as blocks: four counters stacked down the page,
+   the disclosure rendered as a native bordered button, and the whole thing ate
+   five lines above the Home page's conversation starter. These rules make it what
+   it was always meant to be - a one-line status strip.
+
+   The strip renders on two surfaces: inside .home-summary on Home (#2037), where
+   it shares a bar with the agent roster count, and alone in the /platform config
+   canvas. It therefore carries no bar chrome of its own - .home-summary owns the
+   border there - and stays a flex COLUMN so the expanded loop list drops below
+   the counter row instead of alongside it. */
+.platform-stats-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+/* One row of counters. The min-height is shared with .home-agent-summary so the
+   two halves of the Home bar sit on the same line even though the disclosure
+   button is padded and the roster count is not. */
+.platform-stats-grid {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    min-height: 1.75rem;
+    min-width: 0;
+}
+
+.platform-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    white-space: nowrap;
+}
+
+/* The active-loops cell exists only to carry its data-testid; the button inside
+   is the real control, so the wrapper steps out of the row rather than nesting a
+   second box in it. */
+.platform-stat-interactive {
+    display: contents;
+}
+
+.platform-stat-value {
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    /* The counters repoll every 5s; fixed-width digits stop the labels beside
+       them from twitching sideways when a value gains or loses a digit. */
+    font-variant-numeric: tabular-nums;
+}
+
+.platform-stat-label {
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-secondary);
+}
+
+/* Peak and completed are history, not live state. Same row, lower contrast, and
+   fenced off by a hairline so the eye lands on the two live counters first. */
+.platform-stats-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.125rem 0 0.125rem 1rem;
+    border-left: 1px solid var(--border-color);
+}
+
+.platform-stats-secondary .platform-stat-value {
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+}
+
+.platform-stats-secondary .platform-stat-label {
+    color: var(--text-muted);
+}
+
+.platform-stat-disclosure {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: none;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--motion-fast) var(--ease-standard),
+                border-color var(--motion-fast) var(--ease-standard);
+}
+
+.platform-stat-disclosure:hover,
+.platform-stat-disclosure[aria-expanded="true"] {
+    background: var(--color-wash);
+    border-color: var(--border-color);
+}
+
+.platform-stat-chevron {
+    font-size: var(--text-caption);
+    line-height: 1;
+    color: var(--text-muted);
+}
+
+.platform-stats-error {
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    color: var(--color-danger-text);
+}
+
+/* Expanded loop list. Off the strip's single line and onto its own rows - this is
+   opt-in detail, so it may cost vertical space; the collapsed strip may not. */
+.platform-loop-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.platform-loop-loading,
+.platform-loop-empty,
+.platform-loop-stale {
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-muted);
+}
+
+.platform-loop-stale {
+    color: var(--color-warning-text);
+}
+
+.platform-loop-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.platform-loop-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0.125rem 0;
+}
+
+/* The link wraps agent + conversation, so it is the part that has to shrink when
+   a conversation id is long; the age column keeps its width. */
+.platform-loop-link {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0.125rem 0.375rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.platform-loop-link:hover {
+    background: var(--color-wash);
+}
+
+.platform-loop-agent {
+    font-size: var(--text-label);
+    line-height: var(--text-label-lh);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.platform-loop-conversation {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    line-height: var(--text-mono-lh);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.platform-loop-age {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Below roughly the width where the counter row stops fitting on one line (its
+   max-content is ~500px), the secondary group can land on a wrapped row, where a
+   left border would float mid-strip with nothing to its left. It becomes a plain
+   gap instead. */
+@media (max-width: 600px) {
+    .platform-stats-secondary {
+        padding-left: 0;
+        border-left: 0;
+    }
+}
+
 /* ── Home landing page (#2037) ─────────────────────────────────────────────── */
 .home-page {
     display: flex;
@@ -7298,28 +7517,60 @@ h3.conversation-title.editable:hover {
     box-sizing: border-box;
 }
 
+/* One status bar, not two floating blocks. The platform stats strip and the agent
+   roster count share a single bordered row: live counters read from the left, the
+   roster from the right. align-items is flex-start rather than center so that
+   expanding the loop list grows the bar downward and leaves the roster count on
+   the top line, instead of drifting it to the middle of a tall box. */
 .home-summary {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 1rem;
+    align-items: flex-start;
+    gap: 0.5rem 1rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+/* Takes the slack so the roster count sits at the right edge. The basis is 0, not
+   auto: on auto the strip asks for its max-content width, and once the loop list
+   is expanded a long conversation id makes that wider than the bar - which wraps
+   the roster count onto a second line and drops it to the bottom of the box. */
+.home-summary .platform-stats-panel {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .home-agent-summary {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.4rem;
+    /* Matches .platform-stats-grid so both halves of the bar share a baseline. */
+    min-height: 1.75rem;
+    margin-left: auto;
+    white-space: nowrap;
 }
 
+/* Deliberately the same scale as the strip's counters. At --text-title this was
+   the largest thing on the page, outweighing the "What would you like to do?"
+   heading below it - the roster count is context, not the headline. */
 .home-agent-count {
-    font-size: var(--text-title);
-    font-weight: 600;
+    font-size: var(--text-body);
+    line-height: var(--text-body-lh);
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
 }
 
 .home-agent-count-label,
 .home-agent-connected {
-    opacity: 0.75;
-    font-size: var(--text-body);
+    font-size: var(--text-caption);
+    line-height: var(--text-caption-lh);
+    color: var(--text-secondary);
+}
+
+.home-agent-connected {
+    color: var(--text-muted);
 }
 
 .home-starter {
@@ -7327,6 +7578,22 @@ h3.conversation-title.editable:hover {
     flex-direction: column;
     gap: 0.75rem;
 }
+
+/* One line fits until about here: the counter row needs ~500px and the roster
+   count ~200px, so with the bar's own padding and the page's 1.5rem gutters the
+   pair stops fitting somewhere below 800px. Past that the roster takes its own
+   row rather than shrinking the strip below its min-content, which would slide
+   the (nowrap) counter labels out under it. */
+@media (max-width: 820px) {
+    .home-summary .platform-stats-panel {
+        flex: 1 1 100%;
+    }
+
+    .home-agent-summary {
+        margin-left: 0;
+    }
+}
+
 
 .home-starter-title {
     margin: 0;
