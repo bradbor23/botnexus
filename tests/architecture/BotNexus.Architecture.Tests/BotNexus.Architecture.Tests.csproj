@@ -25,9 +25,6 @@
     <None Include="ConfigPathResolutionBaseline.baseline" CopyToOutputDirectory="PreserveNewest" />
     <!-- Finite waits are frozen so new timing-based synchronization cannot enter the test suite. -->
     <None Include="TestDelayFlakeBaseline.baseline" CopyToOutputDirectory="PreserveNewest" />
-    <!-- #107: hand-written WaitAsync deadlines are frozen too, so banning Task.Delay cannot keep
-         steering authors into the next wall-clock flake shape. -->
-    <None Include="TestObservationWindowBaseline.baseline" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

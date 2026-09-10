@@ -125,7 +125,9 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
         var model = MapModel(["/responses", "ws:/responses"]);
 
-        var result = await provider.Stream(model, BuildContext(), Options()).GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(model, BuildContext(), Options()).GetResultAsync(),
+            "the provider stream to produce its result");
 
         socket.ConnectCount.ShouldBe(1);
         handler.RequestCount.ShouldBe(1);
@@ -139,8 +141,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -157,8 +161,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -176,8 +182,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -198,8 +206,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.ErrorMessage.ShouldNotBeNull();
@@ -229,8 +239,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -258,8 +270,10 @@ public sealed class CopilotResponsesTransportTests
             NullLogger<CopilotResponsesProvider>.Instance,
             socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         result.ErrorMessage.ShouldNotBeNull();
         result.ErrorMessage!.ShouldContain("1011");

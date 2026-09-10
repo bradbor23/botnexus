@@ -265,7 +265,9 @@ public sealed class GatewaySteeringTests : IAsyncLifetime
 
         // Agent finishes
         agentCanFinish.TrySetResult();
-        await Task.WhenAll(normalTask, steer1, steer2, steer3).WaitAsync(TimeSpan.FromSeconds(10));
+        await TestAwait.SignaledAsync(
+            Task.WhenAll(normalTask, steer1, steer2, steer3),
+            "the normal message and all three steers to complete");
 
         // ALL steers injected
         handle.Verify(h => h.SteerAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
@@ -425,7 +427,9 @@ public sealed class GatewaySteeringTests : IAsyncLifetime
 
         // Agent finishes
         agentCanFinish.TrySetResult();
-        await Task.WhenAll(normalTask, steerTask).WaitAsync(TimeSpan.FromSeconds(10));
+        await TestAwait.SignaledAsync(
+            Task.WhenAll(normalTask, steerTask),
+            "the normal message and the queued steer to complete");
 
         // FIXED: SteeringInjected IS published (portal resolves 🕒 to ✅)
         activity.Activities.ShouldContain(a => a.Type == GatewayActivityType.SteeringInjected);
