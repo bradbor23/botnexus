@@ -45,11 +45,12 @@ namespace BotNexus.Architecture.Tests;
 /// </remarks>
 public class TestConcurrencyFlakeFenceTests : ArchitectureTest
 {
-    private static readonly string[] WaitHelpers =
-    [
-        "WaitUntilAsync", "WaitForAsync", "WaitForOutboundAsync", "WaitForConditionAsync",
-        "EventuallyAsync", "WaitForStatusAsync", "PollUntilAsync"
-    ];
+    /// <summary>
+    /// POLLERS ONLY. A direct await (SignaledAsync, SettledAsync, WaitAsync) orders the work it
+    /// awaits, so a Verify after one is correctly synchronised and must not be reported here - see
+    /// <see cref="TestWaitHelperNames"/>.
+    /// </summary>
+    private static readonly string[] WaitHelpers = TestWaitHelperNames.PollingHelpers;
 
     /// <summary>
     /// Characters of source following a poll-wait that are searched for a bare
