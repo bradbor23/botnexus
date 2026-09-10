@@ -200,16 +200,16 @@ public sealed class SubAgentAssistantHistoryTests
     /// </summary>
     private static async Task<SubAgentInfo> WaitForCompletionAsync(ISubAgentManager manager, string subAgentId)
     {
-        for (var attempt = 0; attempt < 200; attempt++)
-        {
-            var info = await manager.GetAsync(subAgentId);
-            if (info is not null && info.Status != SubAgentStatus.Running)
-                return info;
+        SubAgentInfo? info = null;
+        await TestAwait.EventuallyAsync(
+            async () =>
+            {
+                info = await manager.GetAsync(subAgentId);
+                return info is not null && info.Status != SubAgentStatus.Running;
+            },
+            $"sub-agent '{subAgentId}' to reach a terminal status");
 
-            await Task.Delay(25);
-        }
-
-        throw new TimeoutException($"Sub-agent '{subAgentId}' never reached a terminal state.");
+        return info!;
     }
 
     private static SubAgentSpawnRequest BuildRequest() => new()

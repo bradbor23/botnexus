@@ -108,6 +108,7 @@ public sealed class LocationsApiIntegrationTests
                 }
             }
 
+            // delay-is-not-a-signal: backoff between HTTP reads of a live endpoint; the loop distinguishes a false predicate from a failed read and reports each differently, which a generic poller would flatten
             await Task.Delay(50);
         }
     }

@@ -52,6 +52,7 @@ public sealed class SubAgentSpawnFaultObservationTests
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 GC.Collect();
+                // delay-is-not-a-signal: gives finalizers time to run after GC.Collect; there is no signal for 'finalization has happened'
                 await Task.Delay(50);
             }
 

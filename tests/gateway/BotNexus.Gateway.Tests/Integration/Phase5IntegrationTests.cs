@@ -373,8 +373,10 @@ public sealed class Phase5IntegrationTests
 
         public async IAsyncEnumerable<GatewayActivity> SubscribeAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            while (!cancellationToken.IsCancellationRequested)
-                await Task.Delay(10, cancellationToken);
+            // Idle until cancelled. Spinning on a 10ms timer to discover that burns CPU for no
+            // reason - an infinite cancellable delay is the sentinel form, and is exactly what
+            // TestDelayFlakeFenceTests exempts.
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             yield break;
         }
     }

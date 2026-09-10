@@ -187,6 +187,7 @@ public sealed class ProviderStallWatchdogTests
 
             try
             {
+                // delay-is-not-a-signal: the cadence of this fake stream is what the watchdog is being measured against
                 await Task.Delay(10, cancellationToken);
             }
             catch (OperationCanceledException)

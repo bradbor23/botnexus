@@ -129,15 +129,8 @@ public sealed class SessionLifecycleTests
 
     private static async Task<bool> WaitForConditionAsync(Func<Task<bool>> condition, int maxAttempts = 20)
     {
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            if (await condition())
-                return true;
-
-            await Task.Delay(100);
-        }
-
-        return false;
+        // The bool contract is preserved: a tolerated expiry is reported, never thrown.
+        return await TestAwait.TryEventuallyAsync(condition, "the awaited condition to hold");
     }
 
     private sealed class SessionStoreFixture : IDisposable

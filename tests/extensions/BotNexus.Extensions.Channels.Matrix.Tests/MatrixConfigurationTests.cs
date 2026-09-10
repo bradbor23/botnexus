@@ -173,9 +173,7 @@ public sealed class MatrixChannelAdapterLifecycleTests
         await adapter.StartAsync(new NoOpDispatcher());
 
         var client = factory.ClientFor("farnsworth");
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (client.SyncTimeouts.Count == 0 && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        await TestAwait.EventuallyAsync(() => client.SyncTimeouts.Count > 0, "the adapter to issue its first sync");
 
         await adapter.StopAsync();
 
@@ -195,9 +193,7 @@ public sealed class MatrixChannelAdapterLifecycleTests
         await adapter.StartAsync(new NoOpDispatcher());
 
         var client = factory.ClientFor("farnsworth");
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (client.SinceTokens.Count == 0 && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        await TestAwait.EventuallyAsync(() => client.SinceTokens.Count > 0, "the adapter to record its first since-token");
 
         await adapter.StopAsync();
 
@@ -221,9 +217,7 @@ public sealed class MatrixChannelAdapterLifecycleTests
 
         await adapter.StartAsync(new NoOpDispatcher());
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (client.SinceTokens.Count < 2 && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        await TestAwait.EventuallyAsync(() => client.SinceTokens.Count >= 2, "the adapter to record a second since-token");
 
         await adapter.StopAsync();
 
@@ -248,11 +242,10 @@ public sealed class MatrixChannelAdapterLifecycleTests
 
         await adapter.StartAsync(new NoOpDispatcher());
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (client.SinceTokens.Count < 1 && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        await TestAwait.EventuallyAsync(() => client.SinceTokens.Count >= 1, "the adapter to record a since-token");
 
         // Give the loop room to issue a second sync if it were going to retry.
+        // delay-is-not-a-signal: asserts an ABSENCE - room for a second sync to appear if the loop were going to retry; load can only give it more room
         await Task.Delay(300);
         var observed = client.SinceTokens.Count;
 

@@ -177,6 +177,60 @@ internal static class TestAwait
             delayAsync);
     }
 
+    /// <summary>
+    /// Polls like <see cref="EventuallyAsync(Func{bool}, string, TimeSpan?, TimeSpan?, CancellationToken, Func{TimeSpan, CancellationToken, Task})"/>
+    /// but REPORTS the expiry instead of throwing: <see langword="true"/> if the condition became
+    /// true, <see langword="false"/> if the window closed first.
+    /// </summary>
+    /// <remarks>
+    /// Many hand-rolled poll loops deliberately tolerate their own deadline - they fall through to a
+    /// final read, an assertion with a better message, or a <c>bool</c> the caller interprets.
+    /// Replacing those with <c>EventuallyAsync</c> would convert a tolerated timeout into a thrown
+    /// one and change what the test reports on failure. This keeps the loop's contract while still
+    /// removing the sleep.
+    /// </remarks>
+    public static async Task<bool> TryEventuallyAsync(
+        Func<bool> condition,
+        string description,
+        TimeSpan? timeout = null,
+        TimeSpan? pollInterval = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        return await TryEventuallyAsync(
+            () => Task.FromResult(condition()), description, timeout, pollInterval, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asynchronous-condition companion to
+    /// <see cref="TryEventuallyAsync(Func{bool}, string, TimeSpan?, TimeSpan?, CancellationToken)"/>.
+    /// </summary>
+    public static async Task<bool> TryEventuallyAsync(
+        Func<Task<bool>> condition,
+        string description,
+        TimeSpan? timeout = null,
+        TimeSpan? pollInterval = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        try
+        {
+            await EventuallyCoreAsync(
+                async () => await condition().ConfigureAwait(false),
+                description,
+                timeout,
+                pollInterval,
+                cancellationToken,
+                delayAsync: null).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
     private static async Task EventuallyCoreAsync(
         Func<ValueTask<bool>> condition,
         string description,

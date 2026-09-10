@@ -114,16 +114,16 @@ public sealed class SubAgentTurnBudgetTests
 
     private static async Task<SubAgentInfo> AwaitTerminalAsync(ISubAgentManager manager, string subAgentId)
     {
-        for (var i = 0; i < 1000; i++)
-        {
-            var current = await manager.GetAsync(subAgentId);
-            if (current is { Status: not SubAgentStatus.Running })
-                return current;
-            await Task.Yield();
-            await Task.Delay(10);
-        }
+        SubAgentInfo? current = null;
+        await TestAwait.EventuallyAsync(
+            async () =>
+            {
+                current = await manager.GetAsync(subAgentId);
+                return current is { Status: not SubAgentStatus.Running };
+            },
+            "the sub-agent to reach a terminal status");
 
-        throw new TimeoutException("Sub-agent did not reach a terminal state.");
+        return current!;
     }
 
     private static SubAgentSpawnRequest CreateRequest(int maxTurns, int timeoutSeconds)

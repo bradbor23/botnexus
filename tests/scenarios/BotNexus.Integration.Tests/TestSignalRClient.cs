@@ -177,15 +177,19 @@ public class TestSignalRClient : IAsyncDisposable
         TimeSpan timeout, CancellationToken ct)
     {
         _log.Write($"⏳ Waiting for '{eventType}' on sid={Truncate(sessionId, 12)}");
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (DateTimeOffset.UtcNow < deadline && !ct.IsCancellationRequested)
-        {
-            var events = GetEvents(sessionId);
-            var match = events.FirstOrDefault(e => e.Method == eventType);
-            if (match is not null)
-                return match;
-            await Task.Delay(100, ct);
-        }
+        ReceivedEvent? match = null;
+        await TestAwait.TryEventuallyAsync(
+            () =>
+            {
+                match = GetEvents(sessionId).FirstOrDefault(e => e.Method == eventType);
+                return match is not null;
+            },
+            $"a '{eventType}' event on session {Truncate(sessionId, 12)}",
+            timeout,
+            cancellationToken: ct);
+
+        if (match is not null)
+            return match;
 
         _log.Write($"⚠️  TIMEOUT: {eventType} on sid={Truncate(sessionId, 12)}");
         _log.Write($"    Events: {GetEvents(sessionId).Count}");
@@ -200,17 +204,22 @@ public class TestSignalRClient : IAsyncDisposable
         string sessionId, TimeSpan timeout, CancellationToken ct)
     {
         _log.Write($"⏳ WaitForMessageComplete on sid={Truncate(sessionId, 12)}");
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (DateTimeOffset.UtcNow < deadline && !ct.IsCancellationRequested)
-        {
-            var events = GetEvents(sessionId);
-            if (events.Any(e => e.Method == "MessageStart") &&
-                events.Any(e => e.Method is "MessageEnd" or "Error"))
+        IReadOnlyList<ReceivedEvent> events = [];
+        var complete = await TestAwait.TryEventuallyAsync(
+            () =>
             {
-                _log.Write($"✅ MessageComplete sid={Truncate(sessionId, 12)} ({events.Count} events)");
-                return events;
-            }
-            await Task.Delay(100, ct);
+                events = GetEvents(sessionId);
+                return events.Any(e => e.Method == "MessageStart")
+                    && events.Any(e => e.Method is "MessageEnd" or "Error");
+            },
+            $"the message on session {Truncate(sessionId, 12)} to complete",
+            timeout,
+            cancellationToken: ct);
+
+        if (complete)
+        {
+            _log.Write($"✅ MessageComplete sid={Truncate(sessionId, 12)} ({events.Count} events)");
+            return events;
         }
 
         throw new TimeoutException($"Message did not complete on session {Truncate(sessionId, 12)}");

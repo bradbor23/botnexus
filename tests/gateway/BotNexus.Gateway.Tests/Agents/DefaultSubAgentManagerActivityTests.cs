@@ -267,6 +267,7 @@ public sealed class DefaultSubAgentManagerActivityTests
         {
             while (!cancellationToken.IsCancellationRequested)
             {
+                // delay-is-not-a-signal: a fake subscription that yields nothing; the delay is its idle period, not a wait for a condition
                 await Task.Delay(50, cancellationToken);
                 yield break;
             }

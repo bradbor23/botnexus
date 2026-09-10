@@ -223,6 +223,7 @@ public sealed class ProcessToolAdditionalTests : IDisposable
             for (var i = 0; i < 10; i++)
             {
                 await _tool.ExecuteAsync("read", Args("output", pid: managed.Pid, tail: 5));
+                // delay-is-not-a-signal: paces a burst of concurrent reads - the interleaving IS the scenario, not a wait for a condition
                 await Task.Delay(30);
             }
         });
@@ -352,15 +353,11 @@ public sealed class ProcessToolAdditionalTests : IDisposable
 
     private async Task WaitForOutputContainsAsync(int pid, string expectedText)
     {
-        var timeoutAt = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < timeoutAt)
-        {
-            var result = await _tool.ExecuteAsync("call", Args("output", pid: pid));
-            if (Text(result).Contains(expectedText, StringComparison.Ordinal))
-                return;
-
-            await Task.Delay(50);
-        }
+        // Expiry is tolerated: the final read below is what the assertion reports on.
+        await TestAwait.TryEventuallyAsync(
+            async () => Text(await _tool.ExecuteAsync("call", Args("output", pid: pid)))
+                .Contains(expectedText, StringComparison.Ordinal),
+            $"the process output to contain '{expectedText}'");
 
         var finalResult = await _tool.ExecuteAsync("call", Args("output", pid: pid));
         Text(finalResult).ShouldContain(expectedText);
@@ -456,11 +453,11 @@ public sealed class ProcessManagerAndManagedProcessTests : IDisposable
     }
 
     [Fact]
-    public void GetOutput_WithTailLines_ReturnsLastLines()
+    public async Task GetOutput_WithTailLines_ReturnsLastLines()
     {
         var process = SpawnManagedProcess("echo one & echo two & echo three", "echo one; echo two; echo three");
         process.WaitForExit(5_000);
-        SpinWaitFor(() => process.GetOutput().Contains("three", StringComparison.Ordinal));
+        await SpinWaitForAsync(() => process.GetOutput().Contains("three", StringComparison.Ordinal));
 
         var output = process.GetOutput(2);
 
@@ -490,11 +487,11 @@ public sealed class ProcessManagerAndManagedProcessTests : IDisposable
     }
 
     [Fact]
-    public void ManagedProcess_CapturesBothOutputStreams()
+    public async Task ManagedProcess_CapturesBothOutputStreams()
     {
         var process = SpawnManagedProcess("echo out-line & echo err-line 1>&2", "echo out-line; echo err-line 1>&2");
         process.WaitForExit(5_000);
-        SpinWaitFor(() => process.GetOutput().Contains("err-line", StringComparison.Ordinal));
+        await SpinWaitForAsync(() => process.GetOutput().Contains("err-line", StringComparison.Ordinal));
 
         var output = process.GetOutput();
         output.ShouldContain("out-line");
@@ -532,15 +529,9 @@ public sealed class ProcessManagerAndManagedProcessTests : IDisposable
         return managed;
     }
 
-    private static void SpinWaitFor(Func<bool> condition)
+    private static async Task SpinWaitForAsync(Func<bool> condition)
     {
-        var timeoutAt = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < timeoutAt)
-        {
-            if (condition())
-                return;
-
-            Thread.Sleep(25);
-        }
+        // Expiry is tolerated exactly as before: the caller's own assertion reports the failure.
+        await TestAwait.TryEventuallyAsync(condition, "the awaited process output");
     }
 }
