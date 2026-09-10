@@ -34,6 +34,12 @@ public sealed record SkillDefinition
     /// lose a value replays wrongly and looks like it worked, which is worse than not replaying.
     /// </para>
     /// <para>
+    /// Slot names are matched case-INSENSITIVELY, throughout. That is forced rather than chosen:
+    /// the frontmatter parser's nested-block reader folds case, so two declarations differing only
+    /// in case cannot survive parsing, and a case-sensitive loader would refuse
+    /// <c>{{Title}}</c> against a frontmatter that declares <c>Title</c>.
+    /// </para>
+    /// <para>
     /// Written by <c>skill_record</c> from parameters an operator confirmed, but nothing stops a
     /// hand-authored skill declaring them; the loader does not care which produced the file.
     /// </para>

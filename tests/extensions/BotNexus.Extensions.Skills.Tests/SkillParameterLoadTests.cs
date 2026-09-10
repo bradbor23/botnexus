@@ -18,7 +18,7 @@ public sealed class SkillParameterLoadTests
             Content = content,
             SourcePath = "/skills/add-film",
             Source = SkillSource.Workspace,
-            Parameters = parameters ?? new Dictionary<string, string>(StringComparer.Ordinal)
+            Parameters = parameters ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         };
 
     private static SkillTool Tool(SkillDefinition skill)
@@ -39,7 +39,7 @@ public sealed class SkillParameterLoadTests
     private static string Text(AgentToolResult result)
         => string.Join(string.Empty, result.Content.Select(c => c.Value));
 
-    private static readonly Dictionary<string, string> Declared = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, string> Declared = new(StringComparer.OrdinalIgnoreCase)
     {
         ["title"] = "The film to add."
     };
@@ -179,10 +179,11 @@ public sealed class SkillParameterLoadTests
     }
 
     [Fact]
-    public void Parser_TreatsSlotNamesAsCaseSensitive()
+    public void Parser_FoldsSlotNamesThatDifferOnlyInCase()
     {
-        // Substitution is an exact match, so treating "Title" and "title" as one declaration would
-        // promise a substitution the loader does not perform.
+        // Not a preference — the frontmatter parser's nested-block reader is case-insensitive, so
+        // two such declarations cannot survive parsing. Pinned because the loader must agree with
+        // it: a case-SENSITIVE loader would refuse {{Title}} against a file that declares Title.
         var markdown = """
             ---
             name: cased
@@ -195,6 +196,22 @@ public sealed class SkillParameterLoadTests
             """;
 
         SkillParser.Parse("cased", markdown, "/skills/cased", SkillSource.Workspace)
-            .Parameters.Count.ShouldBe(2);
+            .Parameters.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Load_MatchesSlotNamesWithoutRegardToCase()
+    {
+        // Follows from the parser folding case. Without this, a skill declaring "Title" could never
+        // be loaded at all: the declaration is real and no spelling of the argument would match it.
+        var declared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Title"] = "The film to add."
+        };
+        var tool = Tool(Skill("Add {{Title}}.", declared));
+
+        Text(await tool.ExecuteAsync("call", LoadArgs(
+                new Dictionary<string, object?> { ["title"] = "Dune" })))
+            .ShouldContain("Add Dune.");
     }
 }

@@ -33,10 +33,13 @@ public static class SkillParser
         string? compatibility = null;
         string? allowedTools = null;
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        // Ordinal, unlike metadata: a slot name is substituted into the body by exact match, so
-        // treating "Title" and "title" as the same declaration would promise a substitution the
-        // loader does not perform.
-        var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+        // OrdinalIgnoreCase, and not by choice: the frontmatter parser's nested-block reader is
+        // itself case-insensitive, so "title" and "Title" have already collapsed into one entry
+        // before this code sees them. A case-SENSITIVE dictionary here would therefore be a lie -
+        // it would hold one declaration while implying it could hold two, and a body containing
+        // {{Title}} would be refused for declaring a parameter the frontmatter plainly declares.
+        // Every consumer of Parameters matches case-insensitively for the same reason.
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         if (frontmatter is not null)
         {
@@ -51,7 +54,7 @@ public static class SkillParser
                                StringComparer.OrdinalIgnoreCase);
             parameters   = new Dictionary<string, string>(
                                YamlParser.ParseNested(frontmatter, "parameters"),
-                               StringComparer.Ordinal);
+                               StringComparer.OrdinalIgnoreCase);
         }
 
         var disableModelInvocation = false;

@@ -43,6 +43,14 @@ public static class SkillDraftValidator
     private static readonly Regex ValidParameterName =
         new(@"^[a-z0-9][a-z0-9_-]*$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Splits instructions into candidate values. Deliberately does NOT split on <c>:</c>, <c>/</c>
+    /// or <c>.</c>, so <c>http://nas:7878/api/v3/queue</c> survives as one token - a URL broken into
+    /// fragments matches everywhere and means nothing.
+    /// </summary>
+    private static readonly Regex ContentTokenPattern =
+        new(@"[^\s""'`,;(){}\[\]<>|*#]+", RegexOptions.Compiled);
+
     /// <summary>Shortest literal considered when suggesting values that stayed hard-coded.</summary>
     private const int MinLiteralLength = 4;
 
@@ -71,7 +79,10 @@ public static class SkillDraftValidator
         var errors = new List<string>();
         var warnings = new List<string>();
 
-        var declared = new Dictionary<string, DraftParameter>(StringComparer.Ordinal);
+        // OrdinalIgnoreCase throughout, matching SkillDefinition.Parameters: the frontmatter parser
+        // folds case, so a proposal declaring both "title" and "Title" cannot survive being written
+        // out. Catching that here as a duplicate is better than letting the file lose one silently.
+        var declared = new Dictionary<string, DraftParameter>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in parameters)
         {
             if (string.IsNullOrWhiteSpace(p.Name) || !ValidParameterName.IsMatch(p.Name))
@@ -147,35 +158,55 @@ public static class SkillDraftValidator
     }
 
     /// <summary>
-    /// Finds values that really occurred in the run, appear verbatim in the proposed body, and were
-    /// left hard-coded. This is the other half of the confirm question: the agent has said what it
-    /// thinks varies, and this says what it has decided is fixed, so the operator rules on both.
+    /// Finds values in the proposed instructions that also occurred in the run and were left
+    /// hard-coded. This is the other half of the confirm question: the agent has said what it thinks
+    /// varies, and this says what it has decided is fixed, so the operator rules on both.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The direction matters, and the obvious one does not work. Scanning the TRACE for values and
+    /// asking whether each appears in the body finds almost nothing here, because a tool argument is
+    /// one long string - <c>curl -s http://nas:7878/api/v3/movie -d '{"title":"Dune"}'</c> - and no
+    /// such string is ever a substring of prose. Since the commonest sequence on this deployment is
+    /// <c>bash to bash to bash</c>, that would leave the list empty in exactly the case it exists for.
+    /// </para>
+    /// <para>
+    /// So it runs the other way: tokenise the INSTRUCTIONS, and report the tokens that occur
+    /// somewhere in what actually ran. A host, path, endpoint or id the agent wrote into the body
+    /// that really appeared in the run is a value it has silently decided is part of the skill, and
+    /// that is precisely the decision worth surfacing to whoever confirms it.
+    /// </para>
+    /// <para>
+    /// This is a nudge list, not a proof. It will include the occasional ordinary word that happens
+    /// to occur in a command, and it will miss a constant the agent paraphrased rather than quoted.
+    /// Longest tokens come first, which puts hosts, paths and identifiers above short incidental
+    /// words without having to guess which is which.
+    /// </para>
+    /// </remarks>
     private static IReadOnlyList<string> FindUnparameterisedLiterals(
         string content,
         IEnumerable<DraftParameter> parameters,
         IReadOnlyList<RecordedStep> steps)
     {
         var parameterised = parameters.Select(p => p.ObservedValue).ToList();
-        var found = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var step in steps)
+        // Placeholders go first: "{{title}}" tokenises to "title", which is a slot name rather than
+        // a value the run chose, and offering it back as a fixed literal would be nonsense.
+        var prose = PlaceholderPattern.Replace(content, " ");
+
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in ContentTokenPattern.Matches(prose))
         {
-            if (string.IsNullOrWhiteSpace(step.ArgumentsJson))
+            var token = match.Value.Trim('.', ',', ';', ':', '!', '?', '-', '(', ')');
+            if (token.Length < MinLiteralLength)
+                continue;
+            // Already spoken for: it IS a parameter's value, or it sits inside one.
+            if (parameterised.Any(v => v.Contains(token, StringComparison.Ordinal)))
+                continue;
+            if (!AppearsInTrace(token, steps))
                 continue;
 
-            foreach (var literal in ExtractStringLeaves(step.ArgumentsJson))
-            {
-                if (literal.Length < MinLiteralLength)
-                    continue;
-                if (!content.Contains(literal, StringComparison.Ordinal))
-                    continue;
-                // Already spoken for: either it IS a parameter's value, or it sits inside one.
-                if (parameterised.Any(v => v.Contains(literal, StringComparison.Ordinal)))
-                    continue;
-
-                found.Add(literal);
-            }
+            found.Add(token);
         }
 
         return found
@@ -184,56 +215,6 @@ public static class SkillDraftValidator
             .Take(MaxSuggestedLiterals)
             .Select(v => Truncate(v, 120))
             .ToList();
-    }
-
-    /// <summary>
-    /// Walks a tool call's JSON arguments and yields every string value, at any depth. Property
-    /// NAMES are skipped: an argument called "command" is part of the tool's contract, not a value
-    /// this run chose, so offering it as a candidate parameter would be noise.
-    /// </summary>
-    private static IEnumerable<string> ExtractStringLeaves(string json)
-    {
-        JsonDocument document;
-        try
-        {
-            document = JsonDocument.Parse(json);
-        }
-        catch (JsonException)
-        {
-            // Arguments that are not valid JSON are still a real record of a call; they simply
-            // yield no structured candidates. Dropping the step entirely would be worse.
-            yield break;
-        }
-
-        using (document)
-        {
-            foreach (var value in Walk(document.RootElement))
-                yield return value;
-        }
-    }
-
-    private static IEnumerable<string> Walk(JsonElement element)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.String:
-                var text = element.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                    yield return text;
-                break;
-
-            case JsonValueKind.Object:
-                foreach (var property in element.EnumerateObject())
-                    foreach (var value in Walk(property.Value))
-                        yield return value;
-                break;
-
-            case JsonValueKind.Array:
-                foreach (var item in element.EnumerateArray())
-                    foreach (var value in Walk(item))
-                        yield return value;
-                break;
-        }
     }
 
     /// <summary>
@@ -268,7 +249,7 @@ public static class SkillDraftValidator
     {
         foreach (Match match in PlaceholderPattern.Matches(content))
         {
-            if (string.Equals(match.Groups[1].Value, name, StringComparison.Ordinal))
+            if (string.Equals(match.Groups[1].Value, name, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
@@ -276,9 +257,20 @@ public static class SkillDraftValidator
     }
 
     /// <summary>Replaces every declared slot in <paramref name="content"/> with its supplied value.</summary>
+    /// <remarks>
+    /// Lookups are case-insensitive regardless of the comparer <paramref name="values"/> was built
+    /// with. Leaving that to the caller is a footgun: a slot resolved by one comparer and validated
+    /// by another produces a skill that validates and then loads with the placeholder still in it.
+    /// </remarks>
     public static string Substitute(string content, IReadOnlyDictionary<string, string> values)
-        => PlaceholderPattern.Replace(content, match =>
-            values.TryGetValue(match.Groups[1].Value, out var value) ? value : match.Value);
+    {
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in values)
+            lookup[pair.Key] = pair.Value;
+
+        return PlaceholderPattern.Replace(content, match =>
+            lookup.TryGetValue(match.Groups[1].Value, out var value) ? value : match.Value);
+    }
 
     /// <summary>Lists the distinct slot names appearing in a body, in first-seen order.</summary>
     public static IReadOnlyList<string> PlaceholdersIn(string content)
@@ -287,7 +279,7 @@ public static class SkillDraftValidator
         foreach (Match match in PlaceholderPattern.Matches(content))
         {
             var slot = match.Groups[1].Value;
-            if (!seen.Contains(slot, StringComparer.Ordinal))
+            if (!seen.Contains(slot, StringComparer.OrdinalIgnoreCase))
                 seen.Add(slot);
         }
 

@@ -261,7 +261,15 @@ public sealed class SkillTool(
 
         var supplied = ReadParameterMap(arguments);
 
-        if (skill.Parameters.Count == 0)
+        // A case-insensitive VIEW of the declarations, rather than trusting the comparer the
+        // definition happens to carry. SkillParser always produces one, but a SkillDefinition built
+        // in code need not, and a declaration matched by one comparer while substitution uses
+        // another yields a load that reports success with the placeholder still in the text.
+        var declared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in skill.Parameters)
+            declared[pair.Key] = pair.Value;
+
+        if (declared.Count == 0)
         {
             if (supplied.Count == 0)
                 return true;
@@ -273,18 +281,18 @@ public sealed class SkillTool(
         }
 
         var unknown = supplied.Keys
-            .Where(k => !skill.Parameters.ContainsKey(k))
+            .Where(k => !declared.ContainsKey(k))
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
 
         if (unknown.Count > 0)
         {
             error = $"Skill '{skill.Name}' does not declare: {string.Join(", ", unknown)}. " +
-                    $"It declares: {string.Join(", ", skill.Parameters.Keys.Order(StringComparer.Ordinal))}.";
+                    $"It declares: {string.Join(", ", declared.Keys.Order(StringComparer.Ordinal))}.";
             return false;
         }
 
-        var missing = skill.Parameters
+        var missing = declared
             .Where(p => !supplied.ContainsKey(p.Key))
             .OrderBy(p => p.Key, StringComparer.Ordinal)
             .ToList();
@@ -332,7 +340,7 @@ public sealed class SkillTool(
         if (element.ValueKind != JsonValueKind.Object)
             return EmptyParameters;
 
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var property in element.EnumerateObject())
         {
             map[property.Name] = property.Value.ValueKind == JsonValueKind.String
@@ -344,7 +352,7 @@ public sealed class SkillTool(
     }
 
     private static readonly IReadOnlyDictionary<string, string> EmptyParameters =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Names a skill's required parameters in the listing.

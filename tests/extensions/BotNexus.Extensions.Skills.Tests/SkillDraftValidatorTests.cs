@@ -60,7 +60,7 @@ public sealed class SkillDraftValidatorTests
         // comparison would reject honest proposals for precisely the values worth parameterising.
         var steps = new[]
         {
-            Step(1, "bash", """{"command":"curl -d '{\"path\":\"C:\\\\media\\\\films\"}'"}""")
+            Step(1, "bash", """{"command":"curl -d '{\"path\":\"C:\\media\\films\"}'"}""")
         };
 
         var result = SkillDraftValidator.Validate(
@@ -163,10 +163,39 @@ public sealed class SkillDraftValidatorTests
     [Fact]
     public void Validate_DoesNotOfferAParameterisedValueBackAsAFixedLiteral()
     {
-        var content = "Add {{title}} to Radarr.";
+        // "Dune" is in the run AND in the body, so the literal scan sees it — but it is already the
+        // parameter's observed value. Listing it would ask the operator to rule on a decision the
+        // proposal has plainly already made, and train them to skim the list.
+        var content = "Add {{title}} to Radarr. This run added Dune.";
         var result = SkillDraftValidator.Validate(content, [Parameter("title", "Dune")], RadarrRun());
 
         result.UnparameterisedLiterals.ShouldNotContain("Dune");
+    }
+
+    [Fact]
+    public void Validate_ReportsTheHostTheInstructionsHardCoded()
+    {
+        // The case the list exists for, and the one a trace-first scan misses entirely: the body
+        // names a host that really appeared in the run, so it is a constant by decision.
+        var content = "Add {{title}} to Radarr at http://nas:7878.";
+        var result = SkillDraftValidator.Validate(content, [Parameter("title", "Dune")], RadarrRun());
+
+        result.UnparameterisedLiterals.ShouldContain("http://nas:7878");
+    }
+
+    [Fact]
+    public void Validate_RejectsTwoSlotsDifferingOnlyInCase()
+    {
+        // The frontmatter parser folds case, so a file declaring both would keep one and lose the
+        // other. Refusing here is better than installing a skill that silently declares less than
+        // was confirmed.
+        var result = SkillDraftValidator.Validate(
+            "{{title}} {{Title}}",
+            [Parameter("title", "Dune"), Parameter("Title", "Dune")],
+            RadarrRun());
+
+        result.IsValid.ShouldBeFalse();
+        result.Errors.ShouldContain(e => e.Contains("declared more than once"));
     }
 
     [Fact]
