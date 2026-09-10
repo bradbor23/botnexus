@@ -9,6 +9,12 @@
       "blurb": "Install, first run, and checking the gateway is healthy."
     },
     {
+      "id": "portal",
+      "file": "portal.md",
+      "title": "The portal",
+      "blurb": "The shell you look at: toolbar, sidebar, and what Activity's filters do."
+    },
+    {
       "id": "conversations",
       "file": "conversations.md",
       "title": "Conversations & sessions",

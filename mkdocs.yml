@@ -99,6 +99,7 @@ nav:
       - Your First AI Agent: tutorials/first-agent.md
   - User Guide:
       - Getting Started: user-guide/getting-started.md
+      - The Portal: user-guide/portal.md
       - Agents: user-guide/agents.md
       - Configuration: user-guide/configuration.md
       - Extensions: user-guide/extensions.md
