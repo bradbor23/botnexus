@@ -162,6 +162,8 @@ public sealed class SkillDraftStoreTests
     public void ADraftIsNotDiscoverableAsASkill()
     {
         // The line this whole feature depends on: staged, unreviewed content must not be loadable.
+        // This covers the PRIMARY guard — the draft root is somewhere nothing scans — and passes
+        // whatever the draft file is called, which is why the name guard needs its own test below.
         var fs = new MockFileSystem();
         var store = Store(fs);
         store.Save(Draft());
@@ -176,12 +178,24 @@ public sealed class SkillDraftStoreTests
     [Fact]
     public void EvenPlacedInsideASkillsRoot_ADraftFileIsNotASkill()
     {
-        // Second, independent reason. Discovery requires SKILL.md; a draft is draft.json. Neither
-        // guard relies on the other holding, which is the point of having two.
+        // The second, independent reason drafts cannot load: discovery requires a file named
+        // SKILL.md, and a draft is not one.
+        //
+        // The content here is a PERFECTLY VALID skill on purpose. An earlier version of this test
+        // used the draft's own JSON, which discovery rejected for having no frontmatter — so it
+        // passed for a reason that had nothing to do with the file name, and renaming the draft
+        // file to SKILL.md left it green. Mutation testing caught that. With valid markdown, the
+        // only thing standing between this file and the loader is its name.
         var fs = new MockFileSystem();
         fs.AddFile(
             Path.Combine(AgentSkillsDir, "smuggled", SkillDraftStore.DraftFileName),
-            new MockFileData("""{"Name":"smuggled","Scope":"agent","Content":"---\nname: smuggled\ndescription: x\n---\nbody"}"""));
+            new MockFileData("""
+                ---
+                name: smuggled
+                description: A complete, valid skill that must still not load.
+                ---
+                Do the thing.
+                """));
 
         SkillDiscovery.Discover(GlobalSkillsDir, AgentSkillsDir, WorkspaceSkillsDir, fs).ShouldBeEmpty();
     }
