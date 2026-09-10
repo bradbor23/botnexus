@@ -5,6 +5,26 @@ namespace BotNexus.Architecture.Tests;
 /// <summary>
 /// Prevents tests from synchronising through finite wall-clock sleeps instead of observable signals.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Replacing a sleep with <c>WaitAsync(TimeSpan)</c> does not satisfy this fence's intent.</b> It
+/// is still a finite wall-clock deadline and still fails when CI is saturated - the ban simply moves
+/// the flake somewhere this scanner cannot see it. That happened, repeatedly: a comment in
+/// <c>InboundBoundaryObservabilityTests</c> read "Task.Delay is banned in tests by
+/// TestDelayFlakeFenceTests; WaitAsync is the sanctioned form", and hand-written five-second
+/// deadlines then took three unrelated PRs red (#75, #103, and <c>main</c> at 6c215e2c). A fence that
+/// names what is forbidden without naming what is correct redirects the defect rather than removing
+/// it.
+/// </para>
+/// <para>
+/// What is actually sanctioned, in order of preference: await a signal the fixture raises through
+/// <c>TestAwait.SignaledAsync</c>; poll for the observable condition through
+/// <c>TestAwait.EventuallyAsync</c>; or drive the clock yourself with <c>ManualTimeProvider</c>. All
+/// three end when the thing you are waiting for happens, not when a guess about the host's speed
+/// expires. <see cref="TestObservationWindowTests"/> enforces the deadline half of that contract,
+/// <c>WaitAsync</c> included.
+/// </para>
+/// </remarks>
 public class TestDelayFlakeFenceTests : ArchitectureTest
 {
     private static readonly Regex LocalPollerDeclaration = new(
@@ -13,6 +33,10 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private const string BaselineFileName = "TestDelayFlakeBaseline.baseline";
+    // #107 ratchet: FileWatcherToolTests' rapid-change debounce test drove five writes to a real
+    // file 40ms apart. The sleep was never what made the changes rapid - the debounce window is - so
+    // raising the events through the tool's own watcher seam removed it and left only the clamp
+    // watchdog behind.
     // #3625 ratchet: CrossWorldFederationControllerTests' single finite wait (a 25ms Task.Delay
     // poll loop) was replaced with an awaited signal, so its baseline entry was removed entirely.
     // Ratcheted again: DefaultAgentRegistryTests' two 20ms sleeps were the visible half of a real
@@ -20,7 +44,7 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // first enumeration, so the sleeps were waiting for something that had not been asked to
     // happen. Fixing the broadcaster removed the need for both, and the entry with them.
     private const int ExpectedBaselineEntryCount = 108;
-    private const int ExpectedBaselineViolationCount = 146;
+    private const int ExpectedBaselineViolationCount = 145;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.
@@ -63,10 +87,13 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
         }
 
         offenders.ShouldBeEmpty(
-            "Tests must use TestAwait.EventuallyAsync to observe a condition, synchronize on an explicit signal, " +
-            "use virtual time, or inject the delay under test " +
+            "Tests must use TestAwait.EventuallyAsync to observe a condition, TestAwait.SignaledAsync to " +
+            "await a signal the fixture raises, use virtual time, or inject the delay under test " +
             "instead of sleeping for a finite wall-clock duration. Infinite delays that end through " +
-            "cancellation are sentinels and remain valid. Do not add entries to the baseline; replace " +
+            "cancellation are sentinels and remain valid. Rewriting the sleep as " +
+            "WaitAsync(TimeSpan.FromSeconds(n)) does NOT satisfy this rule: it is the same wall-clock " +
+            "deadline, it fails on the same loaded runner, and TestObservationWindowTests fences it. " +
+            "Do not add entries to the baseline; replace " +
             "the wait with deterministic coordination." + Environment.NewLine +
             string.Join(Environment.NewLine, offenders));
     }
