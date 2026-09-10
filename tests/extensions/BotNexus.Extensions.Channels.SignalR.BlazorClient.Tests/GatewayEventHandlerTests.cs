@@ -866,7 +866,11 @@ public sealed class GatewayEventHandlerTests
         // Stream ends
         _handler.HandleMessageEnd(new AgentStreamEvent { SessionId = "sess-1" });
 
-        await Task.Delay(20); // allow fire-and-forget refresh to execute
+        // The refresh is fire-and-forget, so there is no completion to await - but its effect is
+        // observable, and observing beats guessing how long it needs.
+        await TestAwait.EventuallyAsync(
+            () => refreshCount == 1,
+            "the deferred refresh to drain once the turn ends");
         Assert.Equal(1, refreshCount); // drained after turn end
     }
 

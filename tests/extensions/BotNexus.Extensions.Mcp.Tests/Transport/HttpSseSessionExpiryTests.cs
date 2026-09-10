@@ -300,6 +300,7 @@ public sealed class HttpSseSessionExpiryTests
 
             if (request.Body.Contains("\"method\":\"initialize\"", StringComparison.Ordinal))
             {
+                // delay-is-not-a-signal: the slow initialize is what this stub handler exists to simulate
                 Thread.Sleep(50);
                 return Json("""{"jsonrpc":"2.0","id":-1,"result":{}}""", "new-session");
             }

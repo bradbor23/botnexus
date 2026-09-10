@@ -227,6 +227,7 @@ public sealed partial class GatewayHostTests
         // A cron turn's session is non-interactive; provisional titling must not fire. The
         // post-response auto-title path may still title after the exchange, so we only assert the
         // provisional flag is never set (a cron title, if any, is a final refine, not provisional).
+        // delay-is-not-a-signal: asserts an ABSENCE; a loaded host gives the background titling MORE time to appear, so this cannot fail spuriously
         await Task.Delay(200);
         var conv = await conversationStore.GetAsync(convId, CancellationToken.None);
         ConversationAutoTitleService.IsProvisionalTitle(conv!).ShouldBeFalse();
