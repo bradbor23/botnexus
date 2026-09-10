@@ -19,7 +19,10 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
 public sealed class PlatformPageTests : IDisposable
 {
     private readonly BunitContext _ctx = new();
-    private readonly MockHttpMessageHandler _httpHandler = new();
+    // Nested inside PlatformStatsPanelTests, and deliberately reused rather than duplicated. The
+    // unqualified name binds to an unrelated namespace-level MockHttpMessageHandler in
+    // GatewayRestClientTests.cs, which has no SetupResponse.
+    private readonly PlatformStatsPanelTests.MockHttpMessageHandler _httpHandler = new();
 
     public PlatformPageTests()
     {
