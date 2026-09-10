@@ -1374,7 +1374,7 @@ public sealed partial class GatewayHostTests
 
         await host.StartAsync(CancellationToken.None);
         // Wait until the channel adapter's StartAsync has been invoked (event-driven, not time-based).
-        await channelStartedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(channelStartedTcs.Task, "the channel adapter's StartAsync to be invoked");
         await host.StopAsync(CancellationToken.None);
 
         firstChannel.Verify(c => c.StartAsync(It.IsAny<IChannelDispatcher>(), It.IsAny<CancellationToken>()), Times.Once);

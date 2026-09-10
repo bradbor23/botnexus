@@ -29,6 +29,14 @@ internal static class TestAwait
     /// the deadline is reached on the passing path, so it must stay short and must be justified at
     /// the call site; see <c>TestObservationWindowTests</c> for how that case is fenced.
     /// </para>
+    /// <para>
+    /// The <c>when (!signal.IsCompleted)</c> guard matters more than it looks. Only the DEADLINE's
+    /// own <see cref="TimeoutException"/> should be rewritten; a <see cref="TimeoutException"/>
+    /// raised by the awaited work itself must reach the test untouched. Production types derive from
+    /// it — <c>StripeLockTimeoutException</c> names the key and the bound it exceeded — and swallowing
+    /// one to report "the signal was never raised" would replace a precise diagnostic with a wrong
+    /// one. If the signal has completed, the exception came from the signal, not from this wait.
+    /// </para>
     /// </remarks>
     public static async Task SignaledAsync(
         Task signal,
@@ -44,7 +52,7 @@ internal static class TestAwait
         {
             await signal.WaitAsync(window, cancellationToken).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException) when (!signal.IsCompleted)
         {
             throw new TimeoutException(
                 $"Timed out after {window.TotalSeconds:0.###}s waiting for {description}. The signal was " +
@@ -70,7 +78,7 @@ internal static class TestAwait
         {
             return await signal.WaitAsync(window, cancellationToken).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException) when (!signal.IsCompleted)
         {
             throw new TimeoutException(
                 $"Timed out after {window.TotalSeconds:0.###}s waiting for {description}. The signal was " +

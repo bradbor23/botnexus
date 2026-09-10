@@ -119,6 +119,22 @@ public class TestAwaitBehaviourTests
         exception.Message.ShouldContain("the boundary log to be written");
     }
 
+    /// <summary>
+    /// A <see cref="TimeoutException"/> raised by the awaited work itself is NOT rewritten as
+    /// "the signal was never raised" — production types derive from it and carry precise detail.
+    /// </summary>
+    [Fact]
+    public async Task SignaledAsync_SignalFaultsWithATimeout_DoesNotReplaceIt()
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        signal.SetException(new TimeoutException("the stripe lock bound elapsed for key 'k'"));
+
+        var exception = await Should.ThrowAsync<TimeoutException>(
+            () => TestAwait.SignaledAsync(signal.Task, "the lock to be handed over"));
+
+        exception.Message.ShouldBe("the stripe lock bound elapsed for key 'k'");
+    }
+
     /// <summary>Caller cancellation remains distinguishable from an unraised signal.</summary>
     [Fact]
     public async Task SignaledAsync_CallerCancels_ThrowsOperationCanceledException()

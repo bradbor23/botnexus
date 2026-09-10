@@ -208,7 +208,7 @@ public sealed class CronTimeoutSentinelTests
 
         using var cts = new CancellationTokenSource();
         var runTask = scheduler.RunNowAsync(JobId.From("job-unlimited-abort"), cts.Token);
-        await action.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(action.Started.Task, "the cron action to start executing");
         await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10)));
