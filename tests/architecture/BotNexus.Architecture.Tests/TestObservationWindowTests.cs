@@ -40,6 +40,14 @@ namespace BotNexus.Architecture.Tests;
 /// up steering people into the flake it exists to prevent.
 /// </para>
 /// <para>
+/// The 163 deadlines that predated the rule were frozen in a shrink-only baseline and retired over
+/// #112, #113 and #115; the last of them went in #116. With the debt at zero the baseline was
+/// deleted rather than left at 0/0, which makes the rule STRONGER than it was: a short deadline now
+/// fails outright instead of being measured against an allowance. Do not reintroduce a baseline to
+/// admit one - the fix is <c>TestAwait.SignaledAsync</c>, or the justification marker if the expiry
+/// really is the assertion.
+/// </para>
+/// <para>
 /// <b>Why tool-argument budgets are NOT regex-fenced.</b> <c>["timeout"] = 5</c> passed to a tool
 /// under test is the same wall-clock deadline spelled as data, and it is what took
 /// <c>FileWatcherToolTests</c> red. It is nevertheless left to review rather than to a scanner,
@@ -55,42 +63,20 @@ namespace BotNexus.Architecture.Tests;
 public class TestObservationWindowTests : ArchitectureTest
 {
     /// <summary>
-    /// Helpers whose <c>TimeSpan</c> argument is an observation budget. These carry no baseline: a
-    /// new short window here fails outright.
+    /// Helpers and forms whose <c>TimeSpan</c> argument is an observation budget. None of these
+    /// carries a baseline: a new short window fails outright.
     /// </summary>
     private static readonly string[] WaitHelpers =
     [
         "WaitUntilAsync", "WaitForAsync", "WaitForOutboundAsync", "WaitForConditionAsync",
-        "EventuallyAsync", "WaitForStatusAsync", "PollUntilAsync", "SignaledAsync"
+        "EventuallyAsync", "WaitForStatusAsync", "PollUntilAsync", "SignaledAsync", "WaitAsync"
     ];
-
-    /// <summary>
-    /// The raw deadline form, fenced since #107 and baselined: 107 call sites predate the rule.
-    /// </summary>
-    private static readonly string[] RawDeadlineForms = ["WaitAsync"];
 
     private const int MinimumObservationSeconds = 15;
 
-    private const string BaselineFileName = "TestObservationWindowBaseline.baseline";
-
-    // Both counts are shrink-only. Lower them when a deadline is made generous or replaced by a
-    // signal; never raise them to admit a new one.
-    // #111 ratchet: TelegramChannelAdapterTests' 19 five-second deadlines all waited on a signal the
-    // stub handler or the mock dispatcher already raised, so every one became a SignaledAsync call
-    // and the file left the baseline entirely.
-    // #111 ratchet: every remaining five-second deadline - the value behind all three failures this
-    // fence was built for (#75, #103, main at 6c215e2c). All 29 were the same case: a wait on a signal
-    // the fixture already raises. Nothing at 5s or below survives in the baseline.
-    // #111 ratchet: the eight sub-five-second deadlines, the shortest in the baseline. Seven waited
-    // on a signal and became SignaledAsync calls. The eighth - ConversationLostUpdateSeamTests'
-    // 200ms SeamGate wait - is the first site to claim the justification marker: its expiry IS the
-    // assertion, but it reports the condition as SeamDeadlockException, which the automatic
-    // TimeoutException exemption cannot see.
-    private const int ExpectedBaselineEntryCount = 30;
-    private const int ExpectedBaselineViolationCount = 99;
-
     /// <summary>
-    /// Rejects short observation windows on the shared polling helpers, which carry no legacy debt.
+    /// Rejects every short observation window. There is no allowance and no baseline: with the
+    /// pre-existing debt retired, one of these is a defect rather than history.
     /// </summary>
     [Fact]
     public void ObservationWindows_AreGenerousEnoughForALoadedHost()
@@ -102,79 +88,14 @@ public class TestObservationWindowTests : ArchitectureTest
 
         violations.ShouldBeEmpty(
             $"Observation windows must tolerate a loaded host (>= {MinimumObservationSeconds}s). " +
-            "Poll for the condition instead of assuming the machine is fast; widening an " +
-            "observation window cannot weaken an assertion because the condition must still " +
-            $"be met.{Environment.NewLine}{string.Join(Environment.NewLine, violations)}");
-    }
-
-    /// <summary>
-    /// Rejects hand-written <c>WaitAsync</c> deadlines beyond the frozen debt.
-    /// </summary>
-    [Fact]
-    public void RawDeadlines_IntroduceNoNewShortObservationWindows()
-    {
-        var baseline = ReadBaseline();
-        var actual = Scan(RawDeadlineForms);
-        var offenders = new List<string>();
-
-        foreach (var (path, sites) in actual.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            var allowed = baseline.TryGetValue(path, out var count) ? count : 0;
-            if (sites.Count <= allowed)
-                continue;
-
-            // Every site is listed, not just the ones past the allowance. The baseline records a
-            // COUNT, not which lines it forgave, so Skip(allowed) names whichever sites happen to
-            // fall last in file order - which is rarely the one just added. Reporting a line the
-            // author did not touch sends them to the wrong place; listing all of them, and saying
-            // how many are pre-existing, sends them to the right one.
-            offenders.Add(
-                $"{path}: {sites.Count} short deadline(s), baseline allows {allowed}. " +
-                $"All {sites.Count} in this file (the baseline does not record which {allowed} it " +
-                "forgives, so look for the one you added): " +
-                string.Join("; ", sites.Select(site => $"L{site.Line} waits only {site.Seconds:0.##}s")));
-        }
-
-        offenders.ShouldBeEmpty(
-            "A wait that is bounded by the clock rather than by a signal fails whenever CI is busy. " +
             "The signal is the synchronisation; the deadline only decides how a hang gets reported, " +
             "so it is never reached on the passing path and there is nothing to buy by keeping it " +
-            $"tight. Await the fixture's own signal through TestAwait.SignaledAsync, or give the " +
-            $"deadline at least {MinimumObservationSeconds}s. If its EXPIRY is what you are asserting, " +
-            $"say so with a '{ShortDeadlineScanner.JustificationMarker} <reason>' comment on the " +
-            "line or just above it. " +
-            "Do not add entries to the baseline." +
-            Environment.NewLine + string.Join(Environment.NewLine, offenders));
-    }
-
-    /// <summary>
-    /// Forces the baseline to ratchet downward whenever a short deadline is removed.
-    /// </summary>
-    [Fact]
-    public void RawDeadlineBaseline_HasNoStaleEntries()
-    {
-        var baseline = ReadBaseline();
-        var actual = Scan(RawDeadlineForms);
-        var stale = new List<string>();
-
-        baseline.Count.ShouldBe(
-            ExpectedBaselineEntryCount,
-            "The short-deadline baseline file count may only shrink; lower the expected count when removing an entry.");
-        baseline.Values.Sum().ShouldBe(
-            ExpectedBaselineViolationCount,
-            "The short-deadline baseline count may only shrink; lower the expected count when removing a deadline.");
-
-        foreach (var (path, allowed) in baseline.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            var count = actual.TryGetValue(path, out var sites) ? sites.Count : 0;
-            if (count < allowed)
-                stale.Add($"{path}: baseline allows {allowed} but only {count} remain.");
-        }
-
-        stale.ShouldBeEmpty(
-            "The short-deadline baseline is shrink-only. Lower or remove an entry whenever a deadline " +
-            "is made generous or replaced by a signal." +
-            Environment.NewLine + string.Join(Environment.NewLine, stale));
+            "tight. Await the fixture's own signal through TestAwait.SignaledAsync, or poll for the " +
+            "condition through TestAwait.EventuallyAsync - widening either cannot weaken an assertion, " +
+            "because the condition must still be met. If the deadline's EXPIRY is what you are " +
+            $"asserting, say so with a '{ShortDeadlineScanner.JustificationMarker} <reason>' comment " +
+            $"on the line or just above it.{Environment.NewLine}" +
+            string.Join(Environment.NewLine, violations));
     }
 
     /// <summary>Pins the boundary between a deadline, an exempt one, and prose that merely shows one.</summary>
@@ -189,10 +110,14 @@ public class TestObservationWindowTests : ArchitectureTest
     // Expiry as the assertion, claimed either by the existing heuristic or by the marker.
     [InlineData("await Should.ThrowAsync<TimeoutException>(async () => await run.WaitAsync(TimeSpan.FromSeconds(2)));", false)]
     [InlineData("await run.WaitAsync(TimeSpan.FromSeconds(2)); // deadline-is-the-assertion: expiry is the pass", false)]
+    // A product timeout nested inside a wrapped call is the SUBJECT under test, not the window.
+    [InlineData("await TestAwait.SignaledAsync(Read(c, idleTimeout: TimeSpan.FromMilliseconds(200)), \"x\");", false)]
+    // The helper's own budget argument still counts, however deep the call is formatted.
+    [InlineData("await TestAwait.EventuallyAsync(() => ok, \"x\", timeout: TimeSpan.FromSeconds(5));", true)]
     public void DeadlineClassifier_DistinguishesBudgetsFromAssertionsAndProse(string source, bool expectedViolation)
     {
         ShortDeadlineScanner
-            .FindViolations(source, RawDeadlineForms, MinimumObservationSeconds)
+            .FindViolations(source, WaitHelpers, MinimumObservationSeconds)
             .Any()
             .ShouldBe(expectedViolation);
     }
@@ -204,7 +129,7 @@ public class TestObservationWindowTests : ArchitectureTest
         ShortDeadlineScanner
             .FindViolations(
                 "await run.WaitAsync(TimeSpan.FromSeconds(2)); // deadline-is-the-assertion:",
-                RawDeadlineForms,
+                WaitHelpers,
                 MinimumObservationSeconds)
             .ShouldNotBeEmpty("a bare marker is a claim without a reason, so it does not exempt the deadline");
     }
@@ -233,12 +158,6 @@ public class TestObservationWindowTests : ArchitectureTest
 
         return result;
     }
-
-    private static Dictionary<string, int> ReadBaseline() =>
-        File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, BaselineFileName))
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
-            .Select(line => line.Split('|', 2))
-            .ToDictionary(parts => parts[0], parts => int.Parse(parts[1], CultureInfo.InvariantCulture), StringComparer.Ordinal);
 
 }
 
@@ -298,6 +217,14 @@ internal static class ShortDeadlineScanner
                 continue;
             }
 
+            // The matched TimeSpan must be the HELPER's own argument, not one nested inside an
+            // argument of it. Wrapping a call that takes a product timeout - e.g.
+            // SignaledAsync(ReadWithLimitAsync(content, idleTimeout: TimeSpan.FromMilliseconds(200)),
+            // "...") - otherwise reads the SUBJECT under test as the observation window and reports a
+            // 0.2s violation against a deadline that is not there.
+            if (!IsHelpersOwnArgument(masked, match))
+                continue;
+
             var line = masked[..match.Index].Count(character => character == '\n') + 1;
             if (IsJustified(lines, line))
                 continue;
@@ -306,6 +233,34 @@ internal static class ShortDeadlineScanner
         }
 
         return violations;
+    }
+
+    /// <summary>
+    /// Reports whether the matched <c>TimeSpan</c> sits directly in the helper's own argument list,
+    /// rather than nested inside one of its arguments.
+    /// </summary>
+    private static bool IsHelpersOwnArgument(string masked, Match match)
+    {
+        // Walk from the helper's opening parenthesis to the TimeSpan, tracking nesting. Depth 1 is
+        // the helper's own argument list; anything deeper belongs to a call it wraps.
+        var open = masked.IndexOf('(', match.Index);
+        if (open < 0)
+            return false;
+
+        var timeSpan = masked.IndexOf("TimeSpan.From", match.Index, StringComparison.Ordinal);
+        if (timeSpan < 0)
+            return false;
+
+        var depth = 0;
+        for (var index = open; index < timeSpan; index++)
+        {
+            if (masked[index] == '(')
+                depth++;
+            else if (masked[index] == ')')
+                depth--;
+        }
+
+        return depth == 1;
     }
 
     /// <summary>

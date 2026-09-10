@@ -9,7 +9,6 @@ using BotNexus.Agent.Providers.Copilot.Responses;
 using BotNexus.Agent.Providers.Core.Diagnostics;
 using BotNexus.Agent.Providers.Core.Models;
 using BotNexus.Agent.Providers.Core.Streaming;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BotNexus.Agent.Providers.Copilot.Tests.Responses;
@@ -60,24 +59,19 @@ public sealed class CopilotResponsesTransportTests
     }
 
     [Fact]
-    public async Task Gpt56_WebSocketAndSse_ProduceEquivalentDeltasAndFinalText()
+    public async Task Gpt56_WebSocketAndSse_StripRepeatedChunkCrLf_WithEquivalentDeltaAndFinalText()
     {
-        // Transport parity acceptance: reproduce via the actual capability-aware WebSocket path AND
-        // the SSE fallback for the same frame sequence, asserting both the emitted TextDeltaEvent
-        // values and the final accumulated assistant text on each path. The model advertises both
-        // endpoints so Auto selects WebSocket; the SSE run pins the transport explicitly so the two
-        // paths are compared head-to-head.
-        //
-        // #3442: the frames no longer carry a synthetic CRLF prefix. This test used to assert both
-        // transports stripped it (#2119), but mitm captures contain 0 raw CR bytes across 3,025
-        // Copilot deltas - the framing was never on the wire. The parity property is untouched and
-        // is what the test was always really worth: two transports, one assembled result.
+        // #2119 acceptance: reproduce via the actual capability-aware WebSocket path AND the
+        // SSE fallback for the same GPT-5.6 frame sequence, asserting both the emitted
+        // TextDeltaEvent values and the final accumulated assistant text on each path. The
+        // model advertises both endpoints so Auto selects WebSocket; the SSE run pins the
+        // transport explicitly so the two paths are compared head-to-head.
         var frames = new[]
         {
             "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"Under\"}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"stood\"}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\" now\"}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\nUnder\"}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\nstood\"}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\n now\"}",
             "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}"
         };
         var model = MapModel(["/responses", "ws:/responses"], "gpt-5.6-sol");
@@ -131,7 +125,9 @@ public sealed class CopilotResponsesTransportTests
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
         var model = MapModel(["/responses", "ws:/responses"]);
 
-        var result = await provider.Stream(model, BuildContext(), Options()).GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(model, BuildContext(), Options()).GetResultAsync(),
+            "the provider stream to produce its result");
 
         socket.ConnectCount.ShouldBe(1);
         handler.RequestCount.ShouldBe(1);
@@ -145,8 +141,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -163,8 +161,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -182,8 +182,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
@@ -204,8 +206,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(0);
         result.ErrorMessage.ShouldNotBeNull();
@@ -235,8 +239,10 @@ public sealed class CopilotResponsesTransportTests
         var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
         var provider = new CopilotResponsesProvider(new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         handler.RequestCount.ShouldBe(1);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
@@ -264,8 +270,10 @@ public sealed class CopilotResponsesTransportTests
             NullLogger<CopilotResponsesProvider>.Instance,
             socket);
 
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        var result = await TestAwait.SignaledAsync(
+            provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+                .GetResultAsync(),
+            "the provider stream to produce its result");
 
         result.ErrorMessage.ShouldNotBeNull();
         result.ErrorMessage!.ShouldContain("1011");
@@ -373,160 +381,6 @@ public sealed class CopilotResponsesTransportTests
         }
     }
 
-    [Theory]
-    [InlineData(403)]
-    [InlineData(401)]
-    public async Task Auto_WebSocketHandshakeRejectedWithAuthStatus_ShortCircuitsWithoutSseFallback(int status)
-    {
-        // #3674 AC1/AC2/AC6/AC7: a 401 or 403 on the upgrade handshake is a rejected CREDENTIAL, not a
-        // degraded transport. SSE would present the same credential to the same provider, so the
-        // fallback is guaranteed to fail and must not be attempted. Exactly one provider call.
-        var socket = new StubWebSocketTransport(
-            connectFailure: new CopilotResponsesWebSocketHandshakeException(
-                status, $"handshake rejected with HTTP {status}", null));
-        var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("SSE fallback must not run for an authentication failure."));
-        var provider = new CopilotResponsesProvider(
-            new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
-
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
-
-        // Exactly one provider call: the WebSocket connect, and no SSE retry behind it.
-        socket.ConnectCount.ShouldBe(1);
-        handler.RequestCount.ShouldBe(0);
-
-        result.StopReason.ShouldBe(StopReason.Error);
-        result.ErrorMessage.ShouldNotBeNull();
-        // AC2: the surfaced failure is the ProviderAuthenticationException contract - it names the
-        // provider and the status, matching what the SSE path already produces for a 401/403 body.
-        result.ErrorMessage!.ShouldContain("Authentication failed for provider 'Copilot Responses'");
-        result.ErrorMessage!.ShouldContain($"HTTP {status}");
-    }
-
-    [Fact]
-    public async Task Auto_WebSocketHandshakeRejectedWithAuthStatus_LogsAnAuthErrorNotATransportFallbackWarning()
-    {
-        // #3674 AC3: the operator's first and most prominent signal must identify an AUTHENTICATION
-        // failure at Error level, not a WRN about falling back to SSE. During the 2026-08-29 incident
-        // the transport-health wording sent diagnosis to the wrong subsystem for 39 minutes.
-        var logger = new CapturingLogger<CopilotResponsesProvider>();
-        var socket = new StubWebSocketTransport(
-            connectFailure: new CopilotResponsesWebSocketHandshakeException(403, "handshake rejected", null));
-        var provider = new CopilotResponsesProvider(
-            new HttpClient(new RecordingHandler(_ =>
-                throw new InvalidOperationException("SSE fallback must not run for an authentication failure."))),
-            logger,
-            socket);
-
-        await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
-
-        var entries = logger.Entries;
-        entries.ShouldContain(
-            e => e.Level == LogLevel.Error && e.Message.Contains("authentication failure", StringComparison.OrdinalIgnoreCase),
-            "an auth failure must be reported as an error naming authentication");
-        entries.ShouldNotContain(
-            e => e.Message.Contains("falling back to SSE", StringComparison.OrdinalIgnoreCase),
-            "the misleading transport-fallback warning must not be emitted for an auth failure");
-    }
-
-    [Fact]
-    public async Task Auto_WebSocketHandshakeRejectedWithNonAuthStatus_StillFallsBackToSse()
-    {
-        // #3674 AC4, non-vacuity for the narrowing: a 503 handshake rejection is a genuine transport
-        // fault. Only 401/403 short-circuit; everything else must retain today's fallback behaviour,
-        // proving the fix did not disable the fallback wholesale.
-        var socket = new StubWebSocketTransport(
-            connectFailure: new CopilotResponsesWebSocketHandshakeException(503, "handshake rejected", null));
-        var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
-        var provider = new CopilotResponsesProvider(
-            new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
-
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
-
-        handler.RequestCount.ShouldBe(1);
-        result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
-    }
-
-    [Fact]
-    public async Task Auto_TransientWebSocketFailure_StillFallsBackToSseAndReturnsTheSseResult()
-    {
-        // #3674 AC8: a plain transport drop carries no HTTP status at all and must keep falling back.
-        var socket = new StubWebSocketTransport(receiveFailure: new WebSocketException("connection reset"));
-        var handler = new RecordingHandler(_ => SseResponse(FixtureEvents()));
-        var provider = new CopilotResponsesProvider(
-            new HttpClient(handler), NullLogger<CopilotResponsesProvider>.Instance, socket);
-
-        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
-            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(15));
-
-        handler.RequestCount.ShouldBe(1);
-        result.StopReason.ShouldNotBe(StopReason.Error);
-        result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello\n");
-    }
-
-    [Fact]
-    public async Task Auto_CancelledTurn_IsNotReclassifiedAsAnAuthFailure()
-    {
-        // #3674 AC5: the OperationCanceledException path is unchanged. The new auth filter runs BEFORE
-        // the existing fallback filter, so a cancellation must not be captured by it.
-        using var cts = new CancellationTokenSource();
-        var socket = new StubWebSocketTransport(
-            receiveFailure: new OperationCanceledException(cts.Token),
-            onReceive: () => cts.Cancel());
-        var provider = new CopilotResponsesProvider(
-            new HttpClient(new RecordingHandler(_ =>
-                throw new InvalidOperationException("SSE fallback must not run for a cancelled turn."))),
-            NullLogger<CopilotResponsesProvider>.Instance,
-            socket);
-
-        var options = new CopilotResponsesOptions { ApiKey = "test-token", CancellationToken = cts.Token };
-        var events = new List<AssistantMessageEvent>();
-        try
-        {
-            await foreach (var evt in provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), options)
-                .WithCancellation(CancellationToken.None))
-            {
-                events.Add(evt);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        events.OfType<ErrorEvent>().ShouldContain(e => e.Reason == StopReason.Aborted);
-        events.OfType<ErrorEvent>().ShouldNotContain(
-            e => (e.Error.ErrorMessage ?? string.Empty).Contains("Authentication failed", StringComparison.Ordinal));
-    }
-
-    [Theory]
-    [InlineData("The server returned status code '403' when status code '101' was expected", 403)]
-    [InlineData("The server returned status code '401' when status code '101' was expected", 401)]
-    [InlineData("The server returned status code '503' when status code '101' was expected", 503)]
-    [InlineData("Unable to connect to the remote server", null)]
-    [InlineData("", null)]
-    public void HandshakeStatusParse_ReadsTheRejectedStatusFromTheClrMessage(string message, int? expected)
-    {
-        // #3674: pins the fallback extraction path used when CollectHttpResponseDetails yields nothing,
-        // so a runtime message change surfaces as a test failure rather than silently re-routing auth
-        // failures back into the SSE fallback.
-        CopilotResponsesHandshakeStatus.TryParseStatus(message).ShouldBe(expected);
-    }
-
-    [Theory]
-    [InlineData(401, true)]
-    [InlineData(403, true)]
-    [InlineData(429, false)]
-    [InlineData(500, false)]
-    [InlineData(503, false)]
-    public void HandshakeStatusClassification_TreatsOnly401And403AsAuthFailures(int status, bool expected)
-    {
-        // #3674 AC4: a 429 is a rate limit and a 5xx is a server fault; both stay retryable over SSE.
-        CopilotResponsesHandshakeStatus.IsAuthFailure(status).ShouldBe(expected);
-    }
-
     private static CopilotResponsesOptions Options() => new() { ApiKey = "test-token" };
 
     private static CopilotResponsesOptions SseOptions() => new()
@@ -580,7 +434,7 @@ public sealed class CopilotResponsesTransportTests
         using var reader = new StreamReader(stream);
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseAsync(llm, reader, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 
@@ -589,7 +443,7 @@ public sealed class CopilotResponsesTransportTests
     {
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseEventsAsync(llm, read, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 
@@ -630,35 +484,6 @@ public sealed class CopilotResponsesTransportTests
         {
             RequestCount++;
             return Task.FromResult(response(request));
-        }
-    }
-
-    /// <summary>
-    /// Captures level + rendered message so a test can assert on WHAT was logged, not merely that the
-    /// code path ran. #3674 AC3 is a statement about operator-visible severity and wording, so the log
-    /// is the assertion surface and <c>NullLogger</c> cannot express it.
-    /// </summary>
-    private sealed class CapturingLogger<T> : ILogger<T>
-    {
-        private readonly List<(LogLevel Level, string Message)> _entries = [];
-
-        public IReadOnlyList<(LogLevel Level, string Message)> Entries
-        {
-            get { lock (_entries) return [.. _entries]; }
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            lock (_entries) _entries.Add((logLevel, formatter(state, exception)));
         }
     }
 
