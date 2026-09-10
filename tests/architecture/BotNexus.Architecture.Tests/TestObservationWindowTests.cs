@@ -65,7 +65,7 @@ public class TestObservationWindowTests : ArchitectureTest
     ];
 
     /// <summary>
-    /// The raw deadline form, fenced since #107 and baselined: 144 call sites predate the rule.
+    /// The raw deadline form, fenced since #107 and baselined: 136 call sites predate the rule.
     /// </summary>
     private static readonly string[] RawDeadlineForms = ["WaitAsync"];
 
@@ -78,8 +78,13 @@ public class TestObservationWindowTests : ArchitectureTest
     // #111 ratchet: TelegramChannelAdapterTests' 19 five-second deadlines all waited on a signal the
     // stub handler or the mock dispatcher already raised, so every one became a SignaledAsync call
     // and the file left the baseline entirely.
-    private const int ExpectedBaselineEntryCount = 47;
-    private const int ExpectedBaselineViolationCount = 144;
+    // #111 ratchet: the eight sub-five-second deadlines, the shortest in the baseline. Seven waited
+    // on a signal and became SignaledAsync calls. The eighth - ConversationLostUpdateSeamTests'
+    // 200ms SeamGate wait - is the first site to claim the justification marker: its expiry IS the
+    // assertion, but it reports the condition as SeamDeadlockException, which the automatic
+    // TimeoutException exemption cannot see.
+    private const int ExpectedBaselineEntryCount = 42;
+    private const int ExpectedBaselineViolationCount = 136;
 
     /// <summary>
     /// Rejects short observation windows on the shared polling helpers, which carry no legacy debt.
