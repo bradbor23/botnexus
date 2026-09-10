@@ -28,6 +28,18 @@ public sealed class AgentConverseTool(
     private const int DefaultTimeoutSeconds = 600;
     private const int MaxTimeoutSeconds = 1800;
 
+    /// <summary>
+    /// Grace period added to this tool's own linked backstop timer so the turn engine's
+    /// engine-owned deadline expires first (#3515).
+    /// </summary>
+    /// <remarks>
+    /// The backstop is linked from the caller's token, so if it wins the race the resulting
+    /// cancellation is indistinguishable from caller cancellation and the exchange session is left
+    /// unsealed - the defect #3515 fixes. Five seconds is generous relative to the scheduling jitter
+    /// between two timers and negligible relative to the 600s default budget.
+    /// </remarks>
+    private static readonly TimeSpan DeadlineBackstopBuffer = TimeSpan.FromSeconds(5);
+
     private readonly AgentExchangeOptions _exchangeOptions = exchangeOptions ?? new AgentExchangeOptions();
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
@@ -105,8 +117,19 @@ public sealed class AgentConverseTool(
             ?? throw new ArgumentException("Missing required argument: message.");
 
         var timeoutSeconds = ReadTimeoutSeconds(arguments);
+        // #3515: the exchange budget is now expressed TWICE, deliberately, and the order matters.
+        //   1. `Deadline` below is data. The turn engine arms its own source from it - one the caller
+        //      cannot cancel - which is what lets it tell "budget expired" apart from "caller pressed
+        //      stop" and seal the session on the former.
+        //   2. `timeoutCts` stays, demoted to a backstop for the frames the engine does not own
+        //      (argument prep below, and anything that escapes the loop).
+        // The backstop is armed with a buffer so the engine's deadline reliably fires FIRST. Without
+        // it the two timers race, the linked token wins often enough to matter, and the exchange then
+        // looks like caller cancellation - the exact ambiguity #3515 exists to remove. Same idiom, and
+        // the same reason, as the +10s safety-cap buffer in ToolExecutor.ResolveEffectiveTimeout.
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(timeoutSeconds);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds) + DeadlineBackstopBuffer);
         var startedAt = Stopwatch.GetTimestamp();
 
         try
@@ -119,6 +142,7 @@ public sealed class AgentConverseTool(
                     Message = message,
                     Objective = ReadString(arguments, "objective"),
                     MaxTurns = Math.Clamp(ReadInt(arguments, "maxTurns", 1), 1, _exchangeOptions.EffectiveMaxTurnsCeiling),
+                    Deadline = deadline,
                     CallChain = await ResolveCallChainAsync(timeoutCts.Token).ConfigureAwait(false),
                     // #3176: hand the exchange the delegating thread's address so handoff milestones
                     // can be reported back into it. Resolution failures are non-fatal - progress is
@@ -133,18 +157,33 @@ public sealed class AgentConverseTool(
                     new AgentToolContent(AgentToolContentType.Text, JsonSerializer.Serialize(result, JsonOptions))
                 ]);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex)
         {
-            // #3577: a cancellation that the CALLER's ambient token did not cause must never reach
-            // ToolExecutor's generic `catch (Exception ex) => ex.Message` handler, because the .NET
-            // default text there is the bare "A task was canceled." - the exact opaque result this
-            // issue was filed for. Everything the caller needs to choose between retrying, waiting
-            // and giving up is knowable here and nowhere further up the stack: the budget, the
-            // elapsed time against it, and which token actually fired.
+            // #3577: a cancellation must never reach ToolExecutor's generic
+            // `catch (Exception ex) => ex.Message` handler, because the .NET default text there is
+            // the bare "A task was canceled." - the exact opaque result that issue was filed for.
+            // Everything the caller needs to choose between retrying, waiting and giving up is
+            // knowable here and nowhere further up the stack: the budget, the elapsed time against
+            // it, and which token actually fired.
+            //
+            // #3698: this catch was previously guarded by `when (!cancellationToken.IsCancellation
+            // Requested)`, which excluded the caller's own ambient turn token by construction and so
+            // let the majority class of real cancellations (56% of the measured corpus - parallel
+            // fan-outs abandoned when their turn ended) fall through to that generic handler. The
+            // guard's intent was right - an abandoned turn is not a peer failure and must not be
+            // reported as one - but "not a peer failure" was implemented as "no report at all".
+            // A third cause now covers it, so no cancellation path is unlabelled.
+            //
+            // The ambient token is tested FIRST because timeoutCts is linked to it: once the caller
+            // aborts, the linked source also reports cancellation, and testing it first would
+            // misattribute an abandoned turn as an exhausted budget. The typed engine deadline
+            // also proves timeout before the later backstop fires; elapsed time is not evidence.
             var elapsed = Stopwatch.GetElapsedTime(startedAt);
-            var report = timeoutCts.IsCancellationRequested
-                ? BuildTimeoutReport(targetAgentId, timeoutSeconds, elapsed)
-                : BuildTargetUnavailableReport(targetAgentId, timeoutSeconds, elapsed);
+            var report = cancellationToken.IsCancellationRequested
+                ? BuildCallerAbortedReport(targetAgentId, timeoutSeconds, elapsed)
+                : ex is AgentExchangeDeadlineExceededException || timeoutCts.IsCancellationRequested
+                    ? BuildTimeoutReport(targetAgentId, timeoutSeconds, elapsed)
+                    : BuildTargetUnavailableReport(targetAgentId, timeoutSeconds, elapsed);
 
             LogCancellation(toolCallId, targetAgentId, report);
             return new AgentToolResult(
@@ -180,6 +219,37 @@ public sealed class AgentConverseTool(
         };
 
     /// <summary>
+    /// Builds the #3698 report for the caller's own ambient turn token firing - a turn abort, a
+    /// session seal, or a cron run hitting its wall-clock limit while this exchange was in flight.
+    /// </summary>
+    /// <remarks>
+    /// <c>retryAdvised</c> is <c>false</c> and is not a judgement about the target: the calling turn
+    /// no longer exists, so there is nothing left to retry into. The target's state is deliberately
+    /// NOT probed here - the peer was never established to be at fault, and reporting a state for it
+    /// would invite exactly the caller/peer confusion this cause exists to remove.
+    /// </remarks>
+    private static AgentConverseCancellationReport BuildCallerAbortedReport(
+        string targetAgentId,
+        int timeoutSeconds,
+        TimeSpan elapsed)
+        => new()
+        {
+            CancellationCause = "callerAborted",
+            CancelledBy = "caller",
+            TargetAgentId = targetAgentId,
+            TargetState = "unknown",
+            TimeoutSeconds = timeoutSeconds,
+            ElapsedSeconds = Math.Round(elapsed.TotalSeconds, 3),
+            RetryAdvised = false,
+            Message =
+                $"The exchange with agent '{targetAgentId}' was abandoned after " +
+                $"{elapsed.TotalSeconds:0.###}s of its {timeoutSeconds}s budget because the calling " +
+                "turn itself was cancelled - a turn abort, session seal or cron wall-clock limit - " +
+                "not because the target failed or the budget ran out. The target may still be " +
+                "working. An immediate retry will not help: the turn that issued this call is gone."
+        };
+
+    /// <summary>
     /// Builds the #3577 AC4 report for a cancellation the caller's budget did NOT cause, naming the
     /// target's observable state. The distinction matters operationally: <c>unregistered</c> is
     /// deterministic and will never succeed on retry, whereas <c>busy</c> is transient and will.
@@ -198,8 +268,8 @@ public sealed class AgentConverseTool(
                 $"agent '{targetAgentId}' is unregistered, so this call is a deterministic failure and " +
                 "will not succeed on retry"),
             "busy" => (true,
-                $"agent '{targetAgentId}' is busy processing another turn and could not accept the " +
-                "exchange; retrying once it is idle is likely to succeed"),
+                $"agent '{targetAgentId}' is currently busy; this catch-time observation does not " +
+                "establish whether it accepted the exchange; retrying once it is idle may succeed"),
             "idle" => (true,
                 $"agent '{targetAgentId}' is registered and idle, so the exchange was cancelled by the " +
                 "target side or the runtime rather than by this call's budget; a retry may succeed"),
@@ -452,7 +522,10 @@ public sealed record AgentConverseCancellationReport
     /// <summary>Always <c>true</c>; the discriminator against a successful exchange result.</summary>
     public bool Cancelled { get; init; } = true;
 
-    /// <summary><c>timeout</c> when the caller's budget was exhausted; otherwise <c>targetUnavailable</c>.</summary>
+    /// <summary>
+    /// <c>timeout</c> when the caller's budget was exhausted, <c>callerAborted</c> when the caller's
+    /// ambient turn token fired (#3698), otherwise <c>targetUnavailable</c>.
+    /// </summary>
     public required string CancellationCause { get; init; }
 
     /// <summary>Which side cancelled: <c>caller</c> or <c>target</c>.</summary>

@@ -1375,8 +1375,7 @@
                 @* One strip rather than three independently positioned buttons. The old
                    per-button right: offsets were 21.6px apart and never revisited when the
                    buttons gained a 32px minimum hit target, so each overlapped its neighbour
-                   and all three sat on the title. Flex + gap cannot drift out of step. The
-                   section menu stays outside the strip: it positions against the row. *@
+                   and all three sat on the title. Flex + gap cannot drift out of step. *@
                 <div class="conversation-row-actions">
                     <button class="conversation-pin-btn @(conversation.IsPinned ? "pinned" : "")" data-testid="conversation-pin-btn"
                             title="@(conversation.IsPinned ? "Unpin conversation" : "Pin conversation to top")"
@@ -1399,6 +1398,7 @@
             }
         </div>
     };
+
 
 
     // The menu is a sibling of the actions strip, not a child of it: it positions against

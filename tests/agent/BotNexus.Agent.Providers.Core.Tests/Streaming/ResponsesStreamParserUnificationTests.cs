@@ -78,7 +78,6 @@ public class ResponsesStreamParserUnificationTests
                 }
             },
             resolveConfiguredServiceTier: null,
-            normalizeTextDelta: null,
             ct: CancellationToken.None);
 
         var result = await TestAwait.SignaledAsync(
@@ -119,7 +118,6 @@ public class ResponsesStreamParserUnificationTests
                 tierResolverCalled = true;
                 return "priority";
             },
-            normalizeTextDelta: null,
             ct: CancellationToken.None);
 
         var result = await TestAwait.SignaledAsync(

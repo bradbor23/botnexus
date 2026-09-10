@@ -58,48 +58,6 @@ public sealed class CopilotResponsesTransportTests
         websocket.OfType<DoneEvent>().Single().Message.Usage.TotalTokens.ShouldBe(15);
     }
 
-    [Fact]
-    public async Task Gpt56_WebSocketAndSse_StripRepeatedChunkCrLf_WithEquivalentDeltaAndFinalText()
-    {
-        // #2119 acceptance: reproduce via the actual capability-aware WebSocket path AND the
-        // SSE fallback for the same GPT-5.6 frame sequence, asserting both the emitted
-        // TextDeltaEvent values and the final accumulated assistant text on each path. The
-        // model advertises both endpoints so Auto selects WebSocket; the SSE run pins the
-        // transport explicitly so the two paths are compared head-to-head.
-        var frames = new[]
-        {
-            "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\nUnder\"}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\nstood\"}",
-            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"\\r\\n\\r\\n now\"}",
-            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}"
-        };
-        var model = MapModel(["/responses", "ws:/responses"], "gpt-5.6-sol");
-
-        var socket = new StubWebSocketTransport(messages: frames);
-        var websocketProvider = new CopilotResponsesProvider(
-            new HttpClient(new RecordingHandler(_ =>
-                throw new InvalidOperationException("SSE fallback must not run for a clean WebSocket stream."))),
-            NullLogger<CopilotResponsesProvider>.Instance,
-            socket);
-        var sseProvider = new CopilotResponsesProvider(
-            new HttpClient(new RecordingHandler(_ => SseResponse(frames))),
-            NullLogger<CopilotResponsesProvider>.Instance);
-
-        var websocketEvents = await CollectAsync(
-            websocketProvider.Stream(model, BuildContext(), Options()));
-        var sseEvents = await CollectAsync(
-            sseProvider.Stream(model, BuildContext(), SseOptions()));
-
-        string[] expectedDeltas = ["Under", "stood", " now"];
-        websocketEvents.OfType<TextDeltaEvent>().Select(x => x.Delta).ShouldBe(expectedDeltas);
-        sseEvents.OfType<TextDeltaEvent>().Select(x => x.Delta).ShouldBe(expectedDeltas);
-
-        websocketEvents.OfType<DoneEvent>().Single().Message.Content.OfType<TextContent>().Single().Text
-            .ShouldBe("Understood now");
-        sseEvents.OfType<DoneEvent>().Single().Message.Content.OfType<TextContent>().Single().Text
-            .ShouldBe("Understood now");
-    }
 
     [Fact]
     public async Task JsonEventParser_PreservesStandaloneNewlineDelta()
@@ -434,7 +392,7 @@ public sealed class CopilotResponsesTransportTests
         using var reader = new StreamReader(stream);
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseAsync(llm, reader, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 
@@ -443,7 +401,7 @@ public sealed class CopilotResponsesTransportTests
     {
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseEventsAsync(llm, read, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 

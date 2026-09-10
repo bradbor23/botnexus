@@ -41,7 +41,8 @@ public sealed class SessionCompactionCoordinator : ISessionCompactionCoordinator
         AgentId agentId,
         GatewaySession session,
         CancellationToken cancellationToken,
-        bool force = false)
+        bool force = false,
+        CompactionHandlePolicy handlePolicy = CompactionHandlePolicy.Evict)
     {
         ArgumentNullException.ThrowIfNull(session);
         var options = _options.CurrentValue;
@@ -84,6 +85,10 @@ public sealed class SessionCompactionCoordinator : ISessionCompactionCoordinator
         try
         {
             result = await _compactor.CompactAsync(session, options, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -185,14 +190,20 @@ public sealed class SessionCompactionCoordinator : ISessionCompactionCoordinator
             "Session {SessionId} compacted: {Summarized} entries summarized, {Preserved} preserved (applied={Applied}, outcome={Outcome}, reason={SkipReason}).",
             sessionId, result.EntriesSummarized, result.EntriesPreserved, applied, historyOutcome, skipReason ?? "(none)");
 
-        // 4. Evict the cached agent handle on success so the next turn rebuilds
-        //    context from post-compaction history (PR #602 Bug 3 fix — must run
-        //    on every compaction path, not just auto-compact).
-        if (applied)
+        // 4. External/pre-turn compaction evicts the cached handle so the next turn rebuilds
+        //    context from post-compaction history (PR #602 Bug 3). Mid-loop compaction runs
+        //    inside that handle, so synchronously stopping it would make the run await itself
+        //    through DisposeAsync -> Agent.AbortAsync (#4121). That caller keeps the handle and
+        //    replaces its context from the persisted compacted snapshot at the loop boundary.
+        if (applied && handlePolicy == CompactionHandlePolicy.Evict)
         {
             try
             {
                 await _supervisor.StopAsync(agentId, sessionId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -304,6 +315,15 @@ public sealed class SessionCompactionCoordinator : ISessionCompactionCoordinator
         var adapter = _channelManager.Get(channelType);
         if (adapter is null)
         {
+            // #3541: a non-deliverable channel type (cron / exchange / webhook) has no adapter by
+            // design, so "notification dropped" is the expected outcome, not a fault. Reached
+            // through the single OutboundResponseDeliverer seam rather than a local copy of the set.
+            if (OutboundResponseDeliverer.IsNonDeliverableChannel(channelType))
+            {
+                _logger.LogDebug("Skipping compaction notification for non-deliverable channel type '{ChannelType}' (session {SessionId}).", channelType, sessionId);
+                return false;
+            }
+
             _logger.LogWarning("No channel adapter found for type '{ChannelType}' — compaction notification dropped for session {SessionId}.", channelType, sessionId);
             return false;
         }

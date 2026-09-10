@@ -39,12 +39,13 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // watchdog behind.
     // #3625 ratchet: CrossWorldFederationControllerTests' single finite wait (a 25ms Task.Delay
     // poll loop) was replaced with an awaited signal, so its baseline entry was removed entirely.
-    // Ratcheted again: DefaultAgentRegistryTests' two 20ms sleeps were the visible half of a real
-    // race in InMemoryActivityBroadcaster - SubscribeAsync did not register the subscriber until
-    // first enumeration, so the sleeps were waiting for something that had not been asked to
-    // happen. Fixing the broadcaster removed the need for both, and the entry with them.
-    private const int ExpectedBaselineEntryCount = 108;
-    private const int ExpectedBaselineViolationCount = 145;
+    // Both sides ratcheted this independently: upstream's #3820 replaced DefaultSubAgentManager-
+    // TimeoutTests' two finite waits with an awaited dispatch signal, and our fix to
+    // InMemoryActivityBroadcaster.SubscribeAsync removed DefaultAgentRegistryTests' two 20ms sleeps
+    // (they were waiting on a subscriber that had not been registered yet). Both entries are gone,
+    // so the counts below are read off the merged baseline, not carried over from either branch.
+    private const int ExpectedBaselineEntryCount = 107;
+    private const int ExpectedBaselineViolationCount = 143;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.

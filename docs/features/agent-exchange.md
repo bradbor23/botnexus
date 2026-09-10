@@ -62,18 +62,18 @@ When `open` is set, the `ListAgents` tool shows `canConverse: true` for all agen
 
 ## Budget System
 
-The budget system prevents runaway agent loops and excessive resource consumption:
+The budget system prevents runaway agent loops and excessive resource consumption. The settings are
+bound from `gateway:agentExchange` and sit **directly** on that section - there is no nested
+`budget` object:
 
 ```json
 {
   "gateway": {
     "agentExchange": {
-      "budget": {
-        "dailyCap": 200,
-        "loopWindowSeconds": 60,
-        "loopThreshold": 3,
-        "cooldownSeconds": 300
-      }
+      "dailyTurnCap": 200,
+      "loopDetectionWindowSeconds": 60,
+      "loopThreshold": 3,
+      "cooldownOnLoopDetectSeconds": 300
     }
   }
 }
@@ -81,17 +81,21 @@ The budget system prevents runaway agent loops and excessive resource consumptio
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `dailyCap` | integer | 200 | Maximum exchanges per agent pair per day. |
-| `loopWindowSeconds` | integer | 60 | Time window for loop detection. |
-| `loopThreshold` | integer | 3 | Exchanges within the window that trigger cooldown. |
-| `cooldownSeconds` | integer | 300 | Seconds a pair must wait after loop detection. |
+| `dailyTurnCap` | integer | 200 | Maximum total **turns** per agent pair per calendar day (UTC). |
+| `loopDetectionWindowSeconds` | integer | 60 | Window within which a pair re-engaging increments the loop counter. |
+| `loopThreshold` | integer | 3 | Rapid re-engagements within the window that trigger cooldown. |
+| `cooldownOnLoopDetectSeconds` | integer | 300 | Cooldown duration in seconds once a loop is detected. |
+
+These four sit alongside the access and backpressure settings on the same section - `accessPolicy`,
+`maxTurnsCeiling` and `maxInboundQueueDepth`, documented in
+[Configuration](/configuration#agent-exchange-agentexchange).
 
 ### How It Works
 
 - Each agent pair (A→B) has an independent budget tracker
-- When a pair exceeds `loopThreshold` exchanges within `loopWindowSeconds`, a cooldown is applied
+- When a pair exceeds `loopThreshold` re-engagements within `loopDetectionWindowSeconds`, a cooldown is applied
 - During cooldown, further exchanges between that pair are rejected
-- The daily cap resets at UTC midnight
+- The daily cap counts turns, not exchanges, and resets at UTC midnight
 
 ## Scheduled Agent Conversations
 
@@ -207,18 +211,22 @@ instead, so the caller can choose between retrying, waiting and giving up:
 
 | Field | Meaning |
 |---|---|
-| `cancellationCause` | `timeout` when the caller's own `timeoutSeconds` budget was exhausted; `targetUnavailable` for every other cancellation. |
+| `cancellationCause` | `timeout` when the caller's own `timeoutSeconds` budget was exhausted; `callerAborted` when the caller's ambient turn token fired (turn abort, session seal, cron wall-clock limit); `targetUnavailable` for every other cancellation. |
 | `cancelledBy` | `caller` or `target` — which side gave up. |
 | `targetState` | `idle`, `busy`, `unreachable`, `unregistered`, or `unknown`. |
 | `elapsedSeconds` | How much of `timeoutSeconds` was actually consumed. A value well below the budget proves the timeout was *not* the cause. |
-| `retryAdvised` | `false` only for `unregistered`, which is a deterministic failure that will never succeed on retry. |
+| `retryAdvised` | `false` for `unregistered`, which is a deterministic failure that will never succeed on retry, and for `callerAborted`, where the turn that issued the call no longer exists to retry into. |
 
 Each cancellation also emits a warning log carrying the caller agent id, caller session id, target
 agent id and tool call id, so a single occurrence is enough to correlate the tool result with the
 transcript row and diagnose the trigger.
 
-> A caller-initiated cancellation (the ambient turn token firing) still propagates as cancellation
-> rather than becoming a result — the turn is ending regardless, and reporting into it would be moot.
+> A caller-initiated cancellation (the ambient turn token firing) is reported as `callerAborted`
+> rather than propagating as a bare cancellation (issue #3698). It was previously excluded from the
+> report by a `when (!cancellationToken.IsCancellationRequested)` guard, which left the largest
+> single cancellation class — parallel fan-outs abandoned when their turn ended — surfacing as the
+> opaque `A task was canceled.` text. It is still not a peer failure: `cancelledBy` is `caller`,
+> `targetState` is `unknown` because the peer is never probed, and `retryAdvised` is `false`.
 
 ### REST Endpoint
 
