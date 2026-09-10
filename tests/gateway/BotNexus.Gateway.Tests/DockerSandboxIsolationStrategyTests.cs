@@ -125,6 +125,7 @@ public sealed class DockerSandboxIsolationStrategyTests
         _strategy.GetStatus(descriptor.AgentId).ShouldBe(SandboxLifecycleStatus.Running);
 
         // Wait for idle timeout to elapse
+        // delay-is-not-a-signal: must EXCEED the configured idle timeout before CheckIdleTimeoutsAsync runs; a loaded host can only lengthen this wait, never shorten it
         await Task.Delay(100);
 
         await _strategy.CheckIdleTimeoutsAsync();
@@ -161,6 +162,7 @@ public sealed class DockerSandboxIsolationStrategyTests
 
         // Create, let idle, stop
         await _strategy.CreateAsync(descriptor, context);
+        // delay-is-not-a-signal: must EXCEED the configured idle timeout before CheckIdleTimeoutsAsync runs; a loaded host can only lengthen this wait, never shorten it
         await Task.Delay(100);
         await _strategy.CheckIdleTimeoutsAsync();
         _strategy.GetStatus(descriptor.AgentId).ShouldBe(SandboxLifecycleStatus.Stopped);
@@ -339,6 +341,7 @@ public sealed class DockerSandboxIsolationStrategyTests
         var descriptor = MakeDescriptor("short-timeout-agent", shortOptions);
 
         await _strategy.CreateAsync(descriptor, MakeContext());
+        // delay-is-not-a-signal: must EXCEED the configured idle timeout before CheckIdleTimeoutsAsync runs; a loaded host can only lengthen this wait, never shorten it
         await Task.Delay(100);
 
         await _strategy.CheckIdleTimeoutsAsync();

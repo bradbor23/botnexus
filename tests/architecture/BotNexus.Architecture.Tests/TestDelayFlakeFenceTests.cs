@@ -62,6 +62,11 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // InMemoryActivityBroadcaster.SubscribeAsync removed DefaultAgentRegistryTests' two 20ms sleeps
     // (they were waiting on a subscriber that had not been registered yet). Both entries are gone,
     // so the counts below are read off the merged baseline, not carried over from either branch.
+    // #111 ratchet: the sleep-and-hope waits. Two were real - a fire-and-forget refresh, now polled
+    // for its observable effect, and a steer racing a retry, now held open by the fake provider until
+    // the steer is registered. Seven more only LOOKED unsafe: a wait that must EXCEED a threshold, or
+    // one asserting an absence, can be lengthened by load but never shortened, so it cannot fail
+    // spuriously - those say so rather than being frozen.
     // #111 ratchet: sixteen Task.WhenAny(work, Task.Delay(n)) hang guards became TestAwait.
     // SettledAsync, which waits for the work to terminate without observing HOW - the assertion a
     // line later still does that. Four more were the opposite shape, where the delay expiring IS the
@@ -72,8 +77,8 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     // delay-is-not-a-signal. One more was a Task.Delay inside a STRING, in an assertion message
     // telling the reader NOT to add a delay; the scanner masks string literals now. The count simply
     // stopped counting correct code.
-    private const int ExpectedBaselineEntryCount = 50;
-    private const int ExpectedBaselineViolationCount = 65;
+    private const int ExpectedBaselineEntryCount = 43;
+    private const int ExpectedBaselineViolationCount = 54;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.

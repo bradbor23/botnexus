@@ -1,10 +1,7 @@
 # Repository-relative test source path|maximum finite wait count. This baseline may only shrink.
-tests/agent/BotNexus.Agent.Core.Tests/SteeringLoopTests.cs|1
 tests/extensions/BotNexus.Extensions.Channels.Matrix.Tests/MatrixConfigurationTests.cs|5
-tests/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests/GatewayEventHandlerTests.cs|1
 tests/extensions/BotNexus.Extensions.ExecTool.Tests/ExecToolCancellationTests.cs|1
 tests/extensions/BotNexus.Extensions.ExecTool.Tests/ExecToolTests.cs|1
-tests/extensions/BotNexus.Extensions.Mcp.Tests/Transport/HttpSseSessionExpiryTests.cs|1
 tests/extensions/BotNexus.Extensions.ProcessTool.Tests/ManagedProcessCancellationTests.cs|1
 tests/extensions/BotNexus.Extensions.ProcessTool.Tests/ProcessToolAdditionalTests.cs|3
 tests/extensions/BotNexus.Extensions.ProcessTool.Tests/ProcessToolTailCeilingTests.cs|1
@@ -27,15 +24,12 @@ tests/gateway/BotNexus.Gateway.Tests/Configuration/PlatformAgentReconciliationSe
 tests/gateway/BotNexus.Gateway.Tests/Configuration/PlatformConfigWriterNoOpTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/ConversationScopedEventAttributionTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Diagnostics/MemoryPressureMonitorTests.cs|1
-tests/gateway/BotNexus.Gateway.Tests/DockerSandboxIsolationStrategyTests.cs|3
-tests/gateway/BotNexus.Gateway.Tests/GatewayHostProvisionalTitleTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/GatewaySessionBehaviorSnapshotTests.cs|2
 tests/gateway/BotNexus.Gateway.Tests/InProcessAgentHandleTests.cs|2
 tests/gateway/BotNexus.Gateway.Tests/Integration/CopilotIntegrationTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Integration/LocationsApiIntegrationTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Integration/Phase5IntegrationTests.cs|1
-tests/gateway/BotNexus.Gateway.Tests/Integration/SessionResumeIntegrationTests.cs|1
-tests/gateway/BotNexus.Gateway.Tests/Integration/SignalRReliabilityTests.cs|2
+tests/gateway/BotNexus.Gateway.Tests/Integration/SignalRReliabilityTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/ProviderStallWatchdogTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Satellites/InMemorySatelliteRegistryTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/SessionLifecycleTests.cs|1
@@ -43,7 +37,6 @@ tests/gateway/BotNexus.Gateway.Tests/Sessions/CompactionModelTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Sessions/LegacyConversationBackfillTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/Steering/GatewaySteeringTests.cs|1
 tests/gateway/BotNexus.Gateway.Tests/StreamingPipelineTests.cs|1
-tests/integration/BotNexus.Conversation.Tests/ConversationSignalRTests.cs|2
 tests/integration/BotNexus.Conversation.Tests/TestSignalRClient.cs|2
 tests/integration/BotNexus.Integration.ConfigDiskE2E.Tests/ConfigMutationMatrixDiskTests.cs|1
 tests/integration/BotNexus.Integration.E2E.Tests/ParallelExecutionDisplayTests.cs|1

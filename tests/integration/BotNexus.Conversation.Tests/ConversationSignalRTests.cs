@@ -104,12 +104,31 @@ public class ConversationSignalRTests(LiveGatewayFixture fixture, ITestOutputHel
 
         result.SessionId.ShouldNotBeNullOrEmpty();
 
-        // Brief wait for session to be stamped
-        await Task.Delay(TimeSpan.FromSeconds(3), cts.Token);
+        // Poll for the session rather than guessing how long stamping takes. A persistent failure is
+        // still the documented SKIP below, not a test failure - so the timeout is swallowed here and
+        // the existing Skip.If decides. The window is kept well inside `cts` so this reports as a
+        // skip rather than surfacing the fixture's cancellation.
+        HttpResponseMessage? sessionResponse = null;
+        try
+        {
+            await TestAwait.EventuallyAsync(
+                async () =>
+                {
+                    sessionResponse = await fixture.Http.GetAsync(
+                        $"/api/sessions/{result.SessionId}", cts.Token);
+                    return sessionResponse.IsSuccessStatusCode;
+                },
+                "the session endpoint to serve the newly created session",
+                timeout: TimeSpan.FromSeconds(15),
+                cancellationToken: cts.Token);
+        }
+        catch (TimeoutException)
+        {
+            // Falls through to the skip below, exactly as the old fixed wait did.
+        }
 
-        var sessionResponse = await fixture.Http.GetAsync(
-            $"/api/sessions/{result.SessionId}", cts.Token);
-        Skip.If(!sessionResponse.IsSuccessStatusCode, "session endpoint not available");
+        Skip.If(sessionResponse is null || !sessionResponse.IsSuccessStatusCode,
+            "session endpoint not available");
 
         var doc = JsonDocument.Parse(await sessionResponse.Content.ReadAsStringAsync(cts.Token)).RootElement;
         output.WriteLine($"Session conversationId field: {(doc.TryGetProperty("conversationId", out var cid) ? cid.ToString() : "absent")}");
@@ -136,14 +155,35 @@ public class ConversationSignalRTests(LiveGatewayFixture fixture, ITestOutputHel
         await fixture.SignalR.SendMessageAsync(
             "assistant", "ping — default conversation test", cts.Token, "signalr");
 
-        // Brief wait for conversation to be created
-        await Task.Delay(TimeSpan.FromSeconds(2), cts.Token);
+        // Poll for the default conversation rather than guessing how long creation takes. An empty
+        // list is the documented SKIP below, so the timeout is swallowed and the assertions decide.
+        HttpResponseMessage? listResponse = null;
+        List<JsonElement> items = [];
+        try
+        {
+            await TestAwait.EventuallyAsync(
+                async () =>
+                {
+                    listResponse = await fixture.Http.GetAsync(
+                        "/api/conversations?agentId=assistant", cts.Token);
+                    if (!listResponse.IsSuccessStatusCode)
+                        return false;
 
-        var listResponse = await fixture.Http.GetAsync("/api/conversations?agentId=assistant", cts.Token);
-        listResponse.IsSuccessStatusCode.ShouldBeTrue();
+                    items = JsonDocument.Parse(await listResponse.Content.ReadAsStringAsync(cts.Token))
+                        .RootElement.EnumerateArray().ToList();
+                    return items.Count > 0;
+                },
+                "the default conversation to be created for the assistant",
+                timeout: TimeSpan.FromSeconds(15),
+                cancellationToken: cts.Token);
+        }
+        catch (TimeoutException)
+        {
+            // Falls through to the skip below, exactly as the old fixed wait did.
+        }
 
-        var items = JsonDocument.Parse(await listResponse.Content.ReadAsStringAsync(cts.Token))
-            .RootElement.EnumerateArray().ToList();
+        listResponse.ShouldNotBeNull();
+        listResponse!.IsSuccessStatusCode.ShouldBeTrue();
         output.WriteLine($"Conversations for assistant: {items.Count}");
 
         Skip.If(items.Count == 0, "No conversations found for assistant — default conversation auto-creation not yet live");

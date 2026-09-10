@@ -279,6 +279,7 @@ public sealed class SignalRReliabilityTests : IAsyncDisposable
         }, cts.Token);
 
         // Give the hub a moment to fan-out — the assertion is the absence of an event.
+        // delay-is-not-a-signal: asserts an ABSENCE; a loaded host gives the fan-out MORE time to arrive, so this cannot fail spuriously
         await Task.Delay(250, cts.Token);
         contentReceived.ShouldBeFalse(
             "NO_REPLY sentinel must not be forwarded as a ContentDelta event over SignalR; #216");

@@ -862,12 +862,20 @@ public sealed class SteeringLoopTests
     {
         var llmCallCount = 0;
         var steerVisibleOnSuccess = false;
+        var firstCallEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var steerRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using var provider = RegisterIsolatedProvider((_, ctx, _) =>
         {
             var call = Interlocked.Increment(ref llmCallCount);
             if (call == 1)
             {
+                // Hold the first call open until the steer is registered, then fail. Sleeping between
+                // PromptAsync and Steer only HOPED the retry had not started yet; blocking here makes
+                // it so, which is the whole property under test - a steer that arrives during a failed
+                // attempt must be visible to the retry.
+                firstCallEntered.TrySetResult();
+                steerRegistered.Task.GetAwaiter().GetResult();
                 throw new InvalidOperationException("rate limit exceeded");
             }
 
@@ -891,9 +899,13 @@ public sealed class SteeringLoopTests
         };
         var agent = new BotNexus.Agent.Core.Agent(options);
 
-        var runTask = agent.PromptAsync("compute");
-        await Task.Delay(5);
+        // PromptAsync runs the provider callback synchronously before it yields, so the gate below
+        // would block this thread before it could steer. Starting the run on the pool keeps the test
+        // thread free - without it the test deadlocks outright, which is how this was found.
+        var runTask = Task.Run(() => agent.PromptAsync("compute"));
+        await TestAwait.SignaledAsync(firstCallEntered.Task, "the first LLM call to be entered");
         agent.Steer(new UserMessage("retry-steer"));
+        steerRegistered.SetResult();
         await runTask;
 
         agent.State.Messages.OfType<AssistantAgentMessage>().ShouldNotBeEmpty();

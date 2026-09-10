@@ -97,6 +97,7 @@ public sealed class SessionResumeIntegrationTests : IDisposable
         await store.SaveAsync(first);
         await store.ArchiveAsync(SessionId.From(sessionId));
 
+        // delay-is-not-a-signal: the archive suffix has one-second resolution, so the clock must really pass a second for the two archives to get distinct names; load can only lengthen this
         await Task.Delay(1100);
 
         var second = await store.GetOrCreateAsync(SessionId.From(sessionId), AgentId.From("agent-a"));
