@@ -73,11 +73,15 @@ export default defineConfig({
         text: 'User Guide',
         items: [
           { text: 'Getting Started', link: '/user-guide/getting-started' },
+          { text: 'The Portal', link: '/user-guide/portal' },
           { text: 'Agents', link: '/user-guide/agents' },
           { text: 'Conversations', link: '/user-guide/conversations' },
           { text: 'Automation', link: '/user-guide/automation' },
+          { text: 'Tools', link: '/user-guide/tools' },
+          { text: 'Notifications', link: '/user-guide/notifications' },
           { text: 'Configuration', link: '/user-guide/configuration' },
           { text: 'Servers, Credentials and Agents', link: '/user-guide/secrets-and-locations' },
+          { text: 'Plugins and the Marketplace', link: '/user-guide/plugins' },
           { text: 'Extensions', link: '/user-guide/extensions' },
           {
             text: 'Channels',
