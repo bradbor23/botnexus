@@ -263,6 +263,7 @@ public sealed class ConfigMutationMatrixDiskTests
         var originalWriteTime = File.GetLastWriteTimeUtc(home.ConfigPath);
 
         // Ensure a distinguishable timestamp would be observable if a write happened.
+        // delay-is-not-a-signal: must cross a filesystem timestamp tick so a rewrite would be observable at all; a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(50);
 
         await home.Writer.MutateAsync(_ => { }, "test-noop");

@@ -58,6 +58,7 @@ public sealed class MemoryPressureMonitorTests
     public void GetHistory_ReturnsNewestFirst()
     {
         _monitor.CaptureSnapshot();
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         Thread.Sleep(10);
         _monitor.CaptureSnapshot();
 

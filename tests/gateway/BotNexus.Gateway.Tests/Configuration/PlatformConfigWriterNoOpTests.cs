@@ -39,6 +39,7 @@ public sealed class PlatformConfigWriterNoOpTests : IDisposable
 
         var before = File.GetLastWriteTimeUtc(_configPath);
         var beforeBytes = await File.ReadAllBytesAsync(_configPath);
+        // delay-is-not-a-signal: must cross a filesystem timestamp tick so a rewrite would be observable at all; a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(20);
 
         // A mutation that reads and rewrites the same value -> no effective change.

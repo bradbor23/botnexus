@@ -183,6 +183,7 @@ public sealed class CronToolCrossJobHistoryTests
         var run = await context.Store.RecordRunStartAsync(JobId.From(jobId));
         await context.Store.RecordRunCompleteAsync(run.Id, status, status == CronRunStatus.Ok ? null : "boom");
         // Distinct started_at instants so "newest first" is well-defined.
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(5);
     }
 }

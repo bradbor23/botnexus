@@ -80,6 +80,7 @@ public sealed class ConversationPinTests
         await store.CreateAsync(unpinned);
 
         // Small delay to ensure ordering by updated_at is deterministic
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(50);
 
         var pinned = CreateConversation(Agent("agent-a"), "Pinned");

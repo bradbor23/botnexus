@@ -86,6 +86,7 @@ public sealed class GatewaySessionBehaviorSnapshotTests
         // Use a real sleep rather than re-reading the wall clock because UpdatedAt is
         // stamped via DateTimeOffset.UtcNow inside SessionStreamReplay — without a real
         // gap the assertion is timing-sensitive on fast CI machines.
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(5);
 
         var allocated = session.StreamReplay.AllocateSequenceId();
@@ -109,6 +110,7 @@ public sealed class GatewaySessionBehaviorSnapshotTests
         var session = CreateSession();
         var initialUpdatedAt = session.UpdatedAt;
 
+        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
         await Task.Delay(5);
 
         session.StreamReplay.AddEvent(1, """{"type":"delta","sequenceId":1}""", replayWindowSize: 10);

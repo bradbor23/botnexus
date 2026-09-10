@@ -34,7 +34,14 @@ namespace BotNexus.Architecture.Tests;
 /// "a test that guesses" from "a test that simulates". A wait that claims
 /// <c>delay-is-not-a-signal:</c> with a reason is therefore exempt, the same way the deadline fence
 /// exempts a wait whose expiry is the assertion. The claim is the point: it makes the author say
-/// which of the three it is, and it leaves the remaining count meaning something.
+/// which it is.
+/// </para>
+/// <para>
+/// The 145 waits that predated the rule were retired over #123, #126, #129, #130 and #131, and the
+/// shrink-only baseline was DELETED rather than left at 0/0 - which makes the rule stronger than it
+/// was, because a finite wait now fails outright instead of being measured against an allowance. Do
+/// not reintroduce a baseline to admit one; use a helper, or the marker if the delay genuinely is
+/// not standing in for a signal.
 /// </para>
 /// </remarks>
 public class TestDelayFlakeFenceTests : ArchitectureTest
@@ -43,47 +50,6 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
         @"\b(?:private|protected|internal|public)\s+(?:static\s+)?(?:async\s+)?Task\s+" +
         @"(?:WaitUntilAsync|WaitForAsync|EventuallyAsync|PollUntilAsync)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private const string BaselineFileName = "TestDelayFlakeBaseline.baseline";
-    // #111 follow-up ratchet: 145 -> 83. Sixty-one entries were never debt - a fake that is slow
-    // on purpose, a backoff against a real resource, or spacing against a live API - and now say so
-    // with delay-is-not-a-signal. One more was a Task.Delay inside a STRING, in an assertion message
-    // telling the reader NOT to add a delay; the scanner masks string literals now, so prose about a
-    // wait is no longer scored as one. Nothing was rewritten to earn this; the count simply stopped
-    // counting correct code.
-    // #107 ratchet: FileWatcherToolTests' rapid-change debounce test drove five writes to a real
-    // file 40ms apart. The sleep was never what made the changes rapid - the debounce window is - so
-    // raising the events through the tool's own watcher seam removed it and left only the clamp
-    // watchdog behind.
-    // #3625 ratchet: CrossWorldFederationControllerTests' single finite wait (a 25ms Task.Delay
-    // poll loop) was replaced with an awaited signal, so its baseline entry was removed entirely.
-    // Both sides ratcheted this independently: upstream's #3820 replaced DefaultSubAgentManager-
-    // TimeoutTests' two finite waits with an awaited dispatch signal, and our fix to
-    // InMemoryActivityBroadcaster.SubscribeAsync removed DefaultAgentRegistryTests' two 20ms sleeps
-    // (they were waiting on a subscriber that had not been registered yet). Both entries are gone,
-    // so the counts below are read off the merged baseline, not carried over from either branch.
-    // #111 ratchet: the hand-rolled condition poll loops, now TestAwait.EventuallyAsync (or its
-    // Try- form where the loop deliberately TOLERATED its own deadline and let a later assertion
-    // report). Eight more were fake subscriptions idling until cancelled - a 10ms spin replaced by
-    // the infinite cancellable sentinel this fence already exempts. Everything left needs a
-    // TimeProvider seam in production before it can move at all.
-    // #111 ratchet: the sleep-and-hope waits. Two were real - a fire-and-forget refresh, now polled
-    // for its observable effect, and a steer racing a retry, now held open by the fake provider until
-    // the steer is registered. Seven more only LOOKED unsafe: a wait that must EXCEED a threshold, or
-    // one asserting an absence, can be lengthened by load but never shortened, so it cannot fail
-    // spuriously - those say so rather than being frozen.
-    // #111 ratchet: sixteen Task.WhenAny(work, Task.Delay(n)) hang guards became TestAwait.
-    // SettledAsync, which waits for the work to terminate without observing HOW - the assertion a
-    // line later still does that. Four more were the opposite shape, where the delay expiring IS the
-    // assertion, and now say so.
-    // #111 follow-up ratchet: the earlier drop was not a rewrite. Reading the baseline site by site
-    // showed roughly two thirds of it was never debt - a fake that is slow on purpose, a backoff
-    // against a real resource, or spacing against a live API - and those now say so with
-    // delay-is-not-a-signal. One more was a Task.Delay inside a STRING, in an assertion message
-    // telling the reader NOT to add a delay; the scanner masks string literals now. The count simply
-    // stopped counting correct code.
-    private const int ExpectedBaselineEntryCount = 15;
-    private const int ExpectedBaselineViolationCount = 18;
 
     /// <summary>
     /// Pins the lexical boundary so cancellation sentinels remain valid while finite sleeps are caught.
@@ -112,40 +78,31 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
     }
 
     /// <summary>
-    /// Rejects finite waits beyond the frozen debt so new tests must coordinate deterministically.
+    /// Rejects every finite wall-clock wait. There is no allowance and no baseline: with the
+    /// pre-existing debt retired, one of these is a defect rather than history.
     /// </summary>
     [Fact]
-    public void Tests_IntroduceNoNewFiniteWallClockWaits()
+    public void Tests_IntroduceNoFiniteWallClockWaits()
     {
-        var baseline = ReadBaseline();
-        var actual = ScanTestSources();
-        var offenders = new List<string>();
-
-        foreach (var (path, violations) in actual.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            var allowed = baseline.TryGetValue(path, out var count) ? count : 0;
-            if (violations.Count <= allowed)
-                continue;
-
-            offenders.Add(
-                $"{path}: {violations.Count} finite wait(s), baseline allows {allowed}. " +
-                "Offending lines: " +
-                string.Join("; ", violations.Skip(allowed).Select(site => $"L{site.Line} {site.Text}")));
-        }
+        var offenders = ScanTestSources()
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair =>
+                $"{pair.Key}: " +
+                string.Join("; ", pair.Value.Select(site => $"L{site.Line} {site.Text}")))
+            .ToList();
 
         offenders.ShouldBeEmpty(
             "Tests must use TestAwait.EventuallyAsync to observe a condition, TestAwait.SignaledAsync to " +
-            "await a signal the fixture raises, use virtual time, or inject the delay under test " +
-            "instead of sleeping for a finite wall-clock duration. Infinite delays that end through " +
-            "cancellation are sentinels and remain valid. If the delay is NOT standing in for a " +
-            $"signal - it is the behaviour being simulated (a fake that is slow on purpose), a " +
-            "backoff against a genuinely external resource, or the subject under test - say so with " +
-            $"a '{FiniteTestDelayScanner.JustificationMarker} <reason>' comment on the line or just " +
-            "above it, and it is exempt. Rewriting the sleep as " +
-            "WaitAsync(TimeSpan.FromSeconds(n)) does NOT satisfy this rule: it is the same wall-clock " +
-            "deadline, it fails on the same loaded runner, and TestObservationWindowTests fences it. " +
-            "Do not add entries to the baseline; replace " +
-            "the wait with deterministic coordination." + Environment.NewLine +
+            "await a signal the fixture raises, TestAwait.SettledAsync to wait for work to terminate, " +
+            "use virtual time, or inject the delay under test instead of sleeping for a finite " +
+            "wall-clock duration. Infinite delays that end through cancellation are sentinels and " +
+            "remain valid. Rewriting the sleep as WaitAsync(TimeSpan.FromSeconds(n)) does NOT satisfy " +
+            "this rule: it is the same wall-clock deadline, it fails on the same loaded runner, and " +
+            "TestObservationWindowTests fences it. If the delay is NOT standing in for a signal - it " +
+            "is the behaviour being simulated, a backoff against a genuinely external resource, a " +
+            "LOWER bound the clock must really cross, or the subject under test - say so with a " +
+            $"'{FiniteTestDelayScanner.JustificationMarker} <reason>' comment on the line or just " +
+            "above it, and it is exempt." + Environment.NewLine +
             string.Join(Environment.NewLine, offenders));
     }
 
@@ -185,35 +142,6 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
             .ShouldBeFalse();
     }
 
-    /// <summary>
-    /// Forces the baseline to ratchet downward whenever existing finite waits are removed.
-    /// </summary>
-    [Fact]
-    public void FiniteWaitBaseline_HasNoStaleEntries()
-    {
-        var baseline = ReadBaseline();
-        var actual = ScanTestSources();
-        var stale = new List<string>();
-
-        baseline.Count.ShouldBe(
-            ExpectedBaselineEntryCount,
-            "The finite-wait baseline file count may only shrink; lower the expected count when removing an entry.");
-        baseline.Values.Sum().ShouldBe(
-            ExpectedBaselineViolationCount,
-            "The finite-wait baseline violation count may only shrink; lower the expected count when removing a wait.");
-
-        foreach (var (path, allowed) in baseline.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            var count = actual.TryGetValue(path, out var violations) ? violations.Count : 0;
-            if (count < allowed)
-                stale.Add($"{path}: baseline allows {allowed} but only {count} remain.");
-        }
-
-        stale.ShouldBeEmpty(
-            "The finite-wait baseline is shrink-only. Lower or remove an entry whenever a wait is " +
-            "made deterministic." + Environment.NewLine + string.Join(Environment.NewLine, stale));
-    }
-
     private Dictionary<string, List<FiniteTestDelayScanner.Violation>> ScanTestSources()
     {
         var result = new Dictionary<string, List<FiniteTestDelayScanner.Violation>>(StringComparer.Ordinal);
@@ -247,11 +175,6 @@ public class TestDelayFlakeFenceTests : ArchitectureTest
         }
     }
 
-    private static Dictionary<string, int> ReadBaseline() =>
-        File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, BaselineFileName))
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#'))
-            .Select(line => line.Split('|', 2))
-            .ToDictionary(parts => parts[0], parts => int.Parse(parts[1]), StringComparer.Ordinal);
 }
 
 internal static partial class FiniteTestDelayScanner
