@@ -21,6 +21,10 @@ name: "CI: Docs impact"
 on:
   pull_request:
     branches: [main]
+    # `edited` is here because the remedy this gate prints is "state `no-docs-impact` in the PR
+    # body". Without it, editing the body changes nothing until an unrelated commit is pushed, so
+    # the instruction in the error message does not work when followed.
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 concurrency:
