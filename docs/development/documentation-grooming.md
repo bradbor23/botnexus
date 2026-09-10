@@ -39,8 +39,15 @@ silently disarm the gate, so it is gated too.
 | docs-vs-source trigger | A PR touching an extension manifest, a provider interface or a controller route must change a `docs/` page or state `no-docs-impact` in the body. | Extension layout drift; `IApiProvider` vs `LlmProviderBase`; `/api/exchanges/budget`. |
 
 The first three are content rules in the lint script. The fourth is not a content rule and lives
-where it belongs: the `docs-impact` job in the same workflow, plus the **Documentation impact**
+in its own workflow, `.github/workflows/docs-impact.yml`, plus the **Documentation impact**
 checklist item in `.github/pull_request_template.md`.
+
+It is a separate workflow because the two want opposite triggers (issue #84). Docs lint runs on
+`paths: docs/**`; the docs-vs-source trigger has to run on the *source* PRs that change no docs at
+all, so it carries no `paths` filter and exits early when nothing documentation-sensitive was
+touched. While the two shared a file it could only ever run on PRs that had already changed
+documentation — where its first satisfying branch is "this PR also changes documentation" — so it
+was green from the day it landed without once being able to fail.
 
 ### Tuning the rules
 
