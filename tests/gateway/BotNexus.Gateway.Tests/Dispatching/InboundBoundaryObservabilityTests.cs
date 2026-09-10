@@ -109,7 +109,7 @@ public sealed class InboundBoundaryObservabilityTests
         // at its deadline with BotNexus.Gateway.Tests outstanding.
         try
         {
-            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await TestAwait.SignaledAsync(firstStarted.Task, "the first turn to wedge the queue");
 
             var second = await orchestrator
                 .AcceptAsync(CreateMessage("addr-feedback"))
@@ -126,8 +126,8 @@ public sealed class InboundBoundaryObservabilityTests
         finally
         {
             wedged.TrySetResult(true);
-            try { await head.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* not under test */ }
-            try { await orchestrator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10)); }
+            try { await TestAwait.SignaledAsync(head, "the wedged head turn to drain"); } catch { /* not under test */ }
+            try { await TestAwait.SignaledAsync(orchestrator.DisposeAsync().AsTask(), "the orchestrator to dispose"); }
             catch { /* best effort */ }
         }
     }
@@ -165,9 +165,9 @@ public sealed class InboundBoundaryObservabilityTests
 
         for (var i = 0; i < 5; i++)
         {
-            var result = await orchestrator
-                .AcceptAsync(CreateMessage("addr-fast"))
-                .WaitAsync(TimeSpan.FromSeconds(10));
+            var result = await TestAwait.SignaledAsync(
+                orchestrator.AcceptAsync(CreateMessage("addr-fast")),
+                "the healthy processor to return a terminal status");
             result.Status.ShouldBe(InboundDispatchStatus.NoRoute);
         }
     }
@@ -202,14 +202,21 @@ public sealed class InboundBoundaryObservabilityTests
         // Release before disposal in all paths - see the note in StalledQueue_SendsUserVisibleChannelFeedback.
         try
         {
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await TestAwait.SignaledAsync(started.Task, "the processor to enter the long-running turn");
 
             // Deterministic equivalent of "wait past the bound and confirm nothing resolved": if the fix
             // timed the PROCESSOR rather than the queue wait, `accept` would complete as Stalled on its
             // own. Racing it against a bound many multiples of the configured 100ms timeout therefore
             // proves the turn is not truncated, and a TimeoutException here is the PASSING outcome.
-            // Task.Delay is banned in tests by TestDelayFlakeFenceTests; WaitAsync is the sanctioned form.
+            //
+            // This is the ONE shape in which a short deadline is correct, and it is the exception that
+            // proves the rule for every other wait in this file: expiry is the passing outcome, so the
+            // deadline is reached on every healthy run. Load can only make it MORE likely to expire,
+            // never less, so a busy runner cannot turn this red. Widening it would merely make the
+            // suite slower. A wait whose expiry means FAILURE is the opposite case and must be
+            // generous - use TestAwait.SignaledAsync, as the other waits here now do.
             await Should.ThrowAsync<TimeoutException>(
+                // deadline-is-the-assertion: expiry is the passing outcome, at 20x the configured 100ms bound.
                 async () => await accept.WaitAsync(TimeSpan.FromSeconds(2)),
                 "the #3600 bound must not truncate a turn that is genuinely running");
 
@@ -217,14 +224,14 @@ public sealed class InboundBoundaryObservabilityTests
                 "the #3600 bound must not truncate a turn that is genuinely running");
 
             release.SetResult(true);
-            var result = await accept.WaitAsync(TimeSpan.FromSeconds(10));
+            var result = await TestAwait.SignaledAsync(accept, "the released turn to report its real outcome");
             result.Status.ShouldBe(InboundDispatchStatus.Accepted);
         }
         finally
         {
             release.TrySetResult(true);
-            try { await accept.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* not under test */ }
-            try { await orchestrator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10)); }
+            try { await TestAwait.SignaledAsync(accept, "the long-running turn to drain"); } catch { /* not under test */ }
+            try { await TestAwait.SignaledAsync(orchestrator.DisposeAsync().AsTask(), "the orchestrator to dispose"); }
             catch { /* best effort */ }
         }
     }
