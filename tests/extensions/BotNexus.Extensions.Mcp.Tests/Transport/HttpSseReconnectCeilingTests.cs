@@ -104,9 +104,9 @@ public sealed class HttpSseReconnectCeilingTests
             throw new InvalidOperationException("No SSE read loop was started.");
         }
 
-        var completed = await Task.WhenAny(loop, Task.Delay(TimeSpan.FromSeconds(10)));
-        ReferenceEquals(completed, loop)
-            .ShouldBeTrue("SSE read loop did not terminate - the reconnect ceiling is inert.");
+        await TestAwait.SettledAsync(
+            loop,
+            "the SSE read loop to terminate, proving the reconnect ceiling is not inert");
         await loop;
     }
 

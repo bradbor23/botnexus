@@ -158,8 +158,9 @@ public sealed class DoctorConfigCommandTests : IDisposable
                 configPath,
                 autoApply: false, dryRun: false, verbose: false,
                 CancellationToken.None);
-            var completed = await Task.WhenAny(exec, Task.Delay(TimeSpan.FromSeconds(20)));
-            completed.ShouldBe((Task)exec, "doctor config blocked on an interactive prompt with no stdin (regression of #2196)");
+            await TestAwait.SettledAsync(
+                exec,
+                "doctor config to return rather than block on an interactive prompt with no stdin");
 
             var result = await exec;
             result.ShouldBe(0);

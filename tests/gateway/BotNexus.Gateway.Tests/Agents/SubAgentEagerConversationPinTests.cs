@@ -102,6 +102,7 @@ public sealed class SubAgentEagerConversationPinTests
 
         // Act
         var spawnTask = manager.SpawnAsync(request);
+        // delay-is-not-a-signal: expiry is the passing outcome: SpawnAsync must NOT have completed yet
         var finishedEarly = await Task.WhenAny(spawnTask, Task.Delay(500)) == spawnTask;
 
         // Assert: SpawnAsync must NOT have completed yet — it's still awaiting the

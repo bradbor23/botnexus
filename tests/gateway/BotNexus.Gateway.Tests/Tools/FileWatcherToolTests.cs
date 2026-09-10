@@ -266,11 +266,10 @@ public sealed class FileWatcherToolTests : IDisposable
                     readinessNotice = text;
             });
 
-        var completed = await Task.WhenAny(watch, Task.Delay(ClampWatchdog));
-        completed.ShouldBeSameAs(
+        await TestAwait.SettledAsync(
             watch,
-            $"The watch did not return within {ClampWatchdog.TotalSeconds:0}s, so the 999-second request " +
-            "was not clamped to the configured 2-second maximum.");
+            "the watch to return, proving the 999-second request was clamped to the configured maximum",
+            ClampWatchdog);
 
         var result = await watch;
 

@@ -150,6 +150,32 @@ public class TestAwaitBehaviourTests
                 cancellationToken: cancellation.Token));
     }
 
+    /// <summary>A faulted task has SETTLED; the helper returns and leaves the fault to the caller.</summary>
+    [Fact]
+    public async Task SettledAsync_TaskFaults_ReturnsWithoutRethrowing()
+    {
+        var work = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        work.SetException(new InvalidOperationException("boom"));
+
+        await TestAwait.SettledAsync(work.Task, "the work to terminate");
+
+        // The caller observes the outcome, which is the whole point of settling rather than awaiting.
+        (await Should.ThrowAsync<InvalidOperationException>(() => work.Task)).Message.ShouldBe("boom");
+    }
+
+    /// <summary>A task that never terminates is reported as a hang, naming what was being waited on.</summary>
+    [Fact]
+    public async Task SettledAsync_TaskNeverTerminates_ReportsAHang()
+    {
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var exception = await Should.ThrowAsync<TimeoutException>(
+            // deadline-is-the-assertion: expiry is the passing outcome, so this must NOT be generous.
+            () => TestAwait.SettledAsync(never.Task, "the read loop to terminate", timeout: TimeSpan.Zero));
+
+        exception.Message.ShouldContain("the read loop to terminate");
+    }
+
     /// <summary>Elapsed-time tests can advance a shared clock without waiting for wall time.</summary>
     [Fact]
     public void ManualTimeProvider_Advance_MovesUtcNow()

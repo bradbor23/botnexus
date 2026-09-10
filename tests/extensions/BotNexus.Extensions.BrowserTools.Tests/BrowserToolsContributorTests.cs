@@ -408,9 +408,7 @@ public sealed class BrowserToolsContributorTests
         var tools = await ToolsFor(Contributor(runner), Context());
 
         var call = InvokeAsync(Tool(tools, "browser_navigate"), ("url", "https://example.com/"));
-        var completed = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(10)));
-
-        completed.ShouldBe(call, "a missing Chrome must fail fast, never hang.");
+        await TestAwait.SettledAsync(call, "a missing Chrome to fail fast rather than hang");
         (await call).ShouldContain("agent-browser install");
     }
 

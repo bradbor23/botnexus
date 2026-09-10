@@ -59,6 +59,7 @@ public sealed class SeamGate
     public async Task WaitAsync(TimeSpan? timeout = null)
     {
         var budget = timeout ?? TimeSpan.FromSeconds(30);
+        // delay-is-not-a-signal: this timer IS the gate's deadline - expiry is what raises SeamDeadlockException
         var completed = await Task.WhenAny(_source.Task, Task.Delay(budget)).ConfigureAwait(false);
         if (completed != _source.Task)
         {

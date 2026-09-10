@@ -326,8 +326,9 @@ public class StreamAccumulatorTests
             _ => Task.CompletedTask,
             CancellationToken.None);
 
-        var completed = await Task.WhenAny(accumulate, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(accumulate, "AccumulateAsync must complete, not hang, when the stream ends with no result");
+        await TestAwait.SettledAsync(
+            accumulate,
+            "AccumulateAsync to terminate when the stream ends without a terminal event");
 
         var ex = await Should.ThrowAsync<LlmStreamIncompleteException>(() => accumulate);
         ex.Reason.ShouldBe("transport closed before a terminal event");
@@ -353,8 +354,7 @@ public class StreamAccumulatorTests
 
         cts.Cancel();
 
-        var completed = await Task.WhenAny(accumulate, Task.Delay(TimeSpan.FromSeconds(5)));
-        completed.ShouldBeSameAs(accumulate, "AccumulateAsync must observe cancellation rather than hang");
+        await TestAwait.SettledAsync(accumulate, "AccumulateAsync to observe cancellation rather than hang");
         await Should.ThrowAsync<OperationCanceledException>(() => accumulate);
     }
 }

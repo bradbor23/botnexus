@@ -63,6 +63,7 @@ public sealed class PlatformConfigReloadTests : IDisposable
         while (!tcs.Task.IsCompleted && DateTime.UtcNow < deadline)
         {
             File.WriteAllText(_configPath, """{"gateway":{"defaultAgentId":"agent-b"}}""");
+            // delay-is-not-a-signal: one bounded slice of an outer retry loop that asserts completion afterwards
             await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(2)));
         }
 
