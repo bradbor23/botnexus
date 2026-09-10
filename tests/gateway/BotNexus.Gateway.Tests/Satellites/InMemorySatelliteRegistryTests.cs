@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Domain.World;
 using BotNexus.Gateway.Abstractions.Satellites;
 using BotNexus.Gateway.Configuration;
@@ -11,7 +12,8 @@ namespace BotNexus.Gateway.Tests.Satellites;
 public sealed class InMemorySatelliteRegistryTests
 {
     private static InMemorySatelliteRegistry CreateRegistry(
-        Dictionary<string, SatelliteConfig>? satellites = null)
+        Dictionary<string, SatelliteConfig>? satellites = null,
+        TimeProvider? clock = null)
     {
         var config = new PlatformConfig
         {
@@ -21,7 +23,7 @@ public sealed class InMemorySatelliteRegistryTests
             }
         };
         var monitor = new TestOptionsMonitor<PlatformConfig>(config);
-        return new InMemorySatelliteRegistry(monitor, NullLogger<InMemorySatelliteRegistry>.Instance);
+        return new InMemorySatelliteRegistry(monitor, NullLogger<InMemorySatelliteRegistry>.Instance, clock);
     }
 
     [Fact]
@@ -124,16 +126,18 @@ public sealed class InMemorySatelliteRegistryTests
     [Fact]
     public void RecordHeartbeat_UpdatesLastSeen()
     {
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
         var registry = CreateRegistry(new Dictionary<string, SatelliteConfig>
         {
             ["sat1"] = new() { DisplayName = "Desktop", Platform = "windows", OwnerUserId = "jon", ApiKey = "k1" }
-        });
+        }, clock);
 
         registry.MarkOnline("sat1", "conn-123");
         var firstSeen = registry.GetById("sat1")!.LastSeen;
 
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        Thread.Sleep(10); // ensure time advances
+        // The registry already takes a TimeProvider, so move the clock rather than sleep on it.
+        clock.Advance(TimeSpan.FromSeconds(1));
         registry.RecordHeartbeat("sat1");
 
         var afterHeartbeat = registry.GetById("sat1")!.LastSeen;
