@@ -112,6 +112,8 @@ nav:
           - Agents: api/agents.md
           - Conversations: api/conversations.md
           - Cron: api/cron.md
+          - Exchanges: api/exchanges.md
+          - Plugins: api/plugins.md
           - Satellites: api/satellites.md
           - Sessions: api/sessions.md
           - Webhooks: api/webhooks.md

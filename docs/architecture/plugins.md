@@ -286,3 +286,11 @@ logged; under `Warn` it is loaded and the violation logged.
 Note that this is trust at **skill** granularity, applied to skills that happen to come from a
 plugin. A catalog generated over the whole plugin at install time - so that a plugin shipping
 no `trust.json` is itself covered - is sibling issue #2682 and is not yet implemented.
+
+---
+
+## The HTTP surface
+
+The routes these components sit behind — `/api/plugins` and `/api/plugins/sources`, their request
+bodies, status codes and the wire form of `trustState` and `updateState` — are documented in the
+[Plugins API reference](../api/plugins.md).

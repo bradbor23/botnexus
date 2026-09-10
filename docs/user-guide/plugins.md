@@ -400,3 +400,4 @@ no partial state behind.
 - [Skills](skills.md) — the `SKILL.md` format in full
 - [Extensions](extensions.md) — writing the code a plugin can carry
 - [Troubleshooting](troubleshooting.md)
+- [Plugins REST API](../api/plugins.md) — the same operations, for scripting them
