@@ -148,7 +148,16 @@ Static resources like templates, schemas, lookup tables, and example files.
 
 ## Skill placement
 
-BotNexus discovers skills from three locations, scanned in priority order:
+BotNexus discovers skills from four sources, scanned in priority order:
+
+### 0. Plugin skills
+
+Shipped by an installed plugin, under that plugin's own `skills/` directory (#2684). Scanned
+**first**, at the same tier as global skills, so a plugin's skill is overridable by anything below
+it and a plugin cannot silently displace a skill an operator wrote.
+
+You do not place these by hand — installing the plugin puts them there, and removing it takes them
+away. A machine with no plugins installed simply has none.
 
 ### 1. Global skills
 
@@ -193,9 +202,12 @@ Use workspace skills for project-specific conventions that travel with the codeb
 
 When multiple locations define a skill with the same name, higher-priority sources override lower ones:
 
-**Workspace** (highest) → **Per-agent** → **Global** (lowest)
+**Workspace** (highest) → **Per-agent** → **Global** → **Plugin** (lowest)
 
 For example, if both `~/.botnexus/skills/security/SKILL.md` and `my-project/skills/security/SKILL.md` exist, the workspace version is used.
+
+Plugin skills sit at the bottom deliberately: a plugin is code you installed rather than content
+you wrote, so anything you author — global, per-agent or workspace — wins over it by default.
 
 ---
 

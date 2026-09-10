@@ -33,11 +33,20 @@ by:
       "verifyTls": true,
       "description": "Main hypervisor",
       "tags": ["homelab", "hypervisor"],
-      "properties": { "node": "pve" }
+      "properties": { "node": "pve" },
+      "agents": ["infra"]
     }
   }
 }
 ```
+
+`agents` names who may **see** this location. Leave it out and every agent can — that is the
+default, and it is what an existing config keeps on upgrade. `["*"]` says the same thing
+explicitly; `[]` means nobody.
+
+Worth setting once you have more than a couple of targets. What it stops is an agent that needs one
+internal API also enumerating the hypervisor, the NAS and the database — endpoints and usernames
+included.
 
 `type` must be one of `filesystem`, `api`, `mcp-server`, `database`, `remote-node`. There is no
 vendor-specific type — a Proxmox host is a `remote-node`, and anything vendor-specific goes in
@@ -178,7 +187,8 @@ Grant the `list_locations` tool:
 including the workspace ones. Leave it unset and the agent gets everything, `list_locations`
 included; set it and you must name everything you want. This catches people out.
 
-The agent sees names, kinds, addresses, usernames, descriptions and tags — and never a credential:
+The agent sees **the locations it is scoped to** — names, kinds, addresses, usernames, descriptions
+and tags, and never a credential:
 
 ```json
 [{"name":"proxmox-main","type":"remote-node","address":"https://pve.example.lan:8006",
@@ -228,6 +238,50 @@ credential internally, exposes an explicit verb allow-list, and is read-only by 
 A resolution failure always names the **reference**, never the value. If you ever see a credential
 in a log, that is a bug worth reporting.
 
+## What an agent's shell commands can see
+
+Keeping a credential out of an agent's *context* is only half the property. The other half is the
+`bash` and `exec` tools, which start a real child process — and a child process started the obvious
+way inherits its parent's whole environment.
+
+That is closed. Both tools build the child environment **from empty**, and it carries only:
+
+```
+PATH  PATHEXT  SHELL  ComSpec  SystemRoot  SystemDrive  windir
+TEMP  TMP  TMPDIR
+HOME  USERPROFILE  APPDATA  LOCALAPPDATA  XDG_CONFIG_HOME  XDG_CACHE_HOME
+XDG_DATA_HOME  XDG_RUNTIME_DIR
+LANG  LC_ALL  LC_CTYPE  TZ  TERM
+USER  LOGNAME  HOSTNAME
+```
+
+Nothing on that list authenticates anything. In particular, **an `env:` credential is no longer
+readable by an agent that can run a command** — which it was, before this control existed.
+
+The direction matters. It is an allow-list rather than a deny-list because a deny-list is a claim
+about every secret name that will ever exist, and no list shipped here can know what you exported
+for your own `credentialRef`s.
+
+### When a command needs something else
+
+Some commands legitimately need a variable outside that list — `DOTNET_ROOT` for a private .NET
+install, `NODE_OPTIONS`, a proxy setting. Name it:
+
+```json
+"gateway": {
+  "toolEnvironmentPassThrough": ["DOTNET_ROOT"]
+}
+```
+
+Per-name, on purpose. There is deliberately **no** switch that restores wholesale inheritance,
+because that is the vulnerability rather than a setting.
+
+> **Do not put a credential name in that list.** Anything named there is handed to every agent that
+> can run a command, which is exactly what the rest of this page is about.
+
+If an agent's command started failing after an upgrade with a "command not found" or an unset
+variable, this is why — name the variable and the command works again.
+
 ## What this design does not protect against
 
 Worth stating as plainly as the guarantees:
@@ -236,6 +290,14 @@ Worth stating as plainly as the guarantees:
 - `env:`, `file:` and `sqlite:` are not encrypted at rest.
 - A malicious *tool* is outside the model. Tools are trusted code — that is precisely why the
   credential lives there and not in the agent's context.
+- An agent that can write a file the gateway later reads, or edit its own workspace, is working
+  inside the trust boundary rather than against it.
 
 The property being defended is narrower and more useful than "secrets are safe": a credential does
-not enter an agent's context, so text that reaches that context cannot carry it back out.
+not enter an agent's context **and is not reachable from a command the agent runs**, so text that
+reaches that context cannot carry it back out.
+
+> The second clause of that sentence is newer than the first. Until the environment control above
+> existed, an agent granted `bash` could read an `env:` credential straight out of its own process
+> environment — the guarantee held in the context and leaked through the shell. If you are reading
+> an older copy of this page that omits it, treat the guarantee as the weaker one.
