@@ -184,18 +184,23 @@ public sealed class SkillDraftValidatorTests
     }
 
     [Fact]
-    public void Validate_RejectsTwoSlotsDifferingOnlyInCase()
+    public void Validate_RefusesAnUppercaseSlotName_SoACaseCollisionCannotBeProposed()
     {
-        // The frontmatter parser folds case, so a file declaring both would keep one and lose the
-        // other. Refusing here is better than installing a skill that silently declares less than
-        // was confirmed.
+        // A recorded proposal cannot create the case ambiguity at all: slot names must be lowercase,
+        // so "Title" is refused before the duplicate check is even reached. The frontmatter parser
+        // folds case, so a file declaring both "title" and "Title" would keep one and lose the
+        // other — this is where that is made unreachable rather than merely detected.
+        //
+        // The LOADER is still case-insensitive, and deliberately so: hand-authored skills predate
+        // this tool and are not bound by its naming rule. The recorder is narrow, the loader is
+        // tolerant, and neither is inconsistent with the other.
         var result = SkillDraftValidator.Validate(
             "{{title}} {{Title}}",
             [Parameter("title", "Dune"), Parameter("Title", "Dune")],
             RadarrRun());
 
         result.IsValid.ShouldBeFalse();
-        result.Errors.ShouldContain(e => e.Contains("declared more than once"));
+        result.Errors.ShouldContain(e => e.Contains("not usable as a slot"));
     }
 
     [Fact]

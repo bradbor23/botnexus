@@ -40,6 +40,17 @@ public static class SkillDraftValidator
     private static readonly Regex PlaceholderPattern =
         new(@"\{\{\s*([^}\s]+)\s*\}\}", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Slot names a RECORDED proposal may use: lowercase only.
+    /// </summary>
+    /// <remarks>
+    /// Narrower than what the loader accepts, on purpose. The frontmatter parser folds case, so a
+    /// file declaring both <c>title</c> and <c>Title</c> keeps one and loses the other; requiring
+    /// lowercase here makes that unreachable rather than merely detectable. The LOADER stays
+    /// case-insensitive because hand-authored skills predate this tool and are not bound by its
+    /// naming rule — the recorder is narrow, the loader is tolerant, and the two agree on what a
+    /// slot resolves to.
+    /// </remarks>
     private static readonly Regex ValidParameterName =
         new(@"^[a-z0-9][a-z0-9_-]*$", RegexOptions.Compiled);
 
