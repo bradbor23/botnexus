@@ -73,7 +73,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback(() => updatesSeen.TrySetResult());
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await updatesSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(updatesSeen.Task, "the adapter to dispatch the polled update");
         await adapter.StopAsync(CancellationToken.None);
 
         dispatcher.Invocations
@@ -308,7 +308,7 @@ public sealed class TelegramChannelAdapterTests
         }, handler);
 
         await adapter.StartAsync(Mock.Of<IChannelDispatcher>(), CancellationToken.None);
-        await pollingSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(pollingSeen.Task, "the adapter to issue its first getUpdates poll");
         await adapter.StopAsync(CancellationToken.None);
 
         calls.Select(c => c.MethodName).ShouldContain("deleteWebhook");
@@ -565,7 +565,7 @@ public sealed class TelegramChannelAdapterTests
         }, handler);
 
         await adapter.StartAsync(Mock.Of<IChannelDispatcher>(), CancellationToken.None);
-        await pollSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(pollSeen.Task, "the adapter to issue its first getUpdates poll");
         await adapter.StopAsync(CancellationToken.None);
 
         pollingCall.ShouldNotBeNull();
@@ -716,7 +716,7 @@ public sealed class TelegramChannelAdapterTests
         }, handler);
 
         await adapter.StartAsync(Mock.Of<IChannelDispatcher>(), CancellationToken.None);
-        await pollSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(pollSeen.Task, "the adapter to issue its first getUpdates poll");
         await adapter.StopAsync(CancellationToken.None);
 
         pollingCall.ShouldNotBeNull();
@@ -785,7 +785,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var message = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var message = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         message.RoutingHints.ShouldNotBeNull();
@@ -839,7 +839,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var message = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var message = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         // Adapter dispatches without BindingId — GatewayHost stamps it after routing
@@ -900,7 +900,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback(() => dispatched = true);
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await updatesSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(updatesSeen.Task, "the adapter to poll a second time, proving the first batch was processed");
         await adapter.StopAsync(CancellationToken.None);
 
         dispatched.ShouldBeFalse();
@@ -948,7 +948,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.Content.ShouldBe("hello");
@@ -996,7 +996,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.Content.ShouldBe("hello");
@@ -1053,7 +1053,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback(() => dispatched = true);
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await updatesSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(updatesSeen.Task, "the adapter to poll a second time, proving the first batch was processed");
         await adapter.StopAsync(CancellationToken.None);
 
         dispatched.ShouldBeFalse();
@@ -1112,7 +1112,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback(() => dispatched = true);
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await updatesSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(updatesSeen.Task, "the adapter to poll a second time, proving the first batch was processed");
         await adapter.StopAsync(CancellationToken.None);
 
         dispatched.ShouldBeFalse();
@@ -1160,7 +1160,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.Content.ShouldBe("edited text");
@@ -1218,7 +1218,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback(() => dispatched = true);
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await updatesSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(updatesSeen.Task, "the adapter to poll a second time, proving the first batch was processed");
         await adapter.StopAsync(CancellationToken.None);
 
         dispatched.ShouldBeFalse();
@@ -1280,7 +1280,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.Content.ShouldBe("here is a photo");
@@ -1337,7 +1337,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.Content.ShouldBe(string.Empty);
@@ -1390,7 +1390,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         // Adapter must still dispatch; falls back to caption-only (no ContentParts)
@@ -1456,7 +1456,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         usedFileId.ShouldBe("hd_id");
@@ -1512,7 +1512,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         // Must not throw and should dispatch with at least one ContentPart (or none if download fails)
@@ -1568,7 +1568,7 @@ public sealed class TelegramChannelAdapterTests
             .Callback<InboundMessage, CancellationToken>((m, _) => dispatched.TrySetResult(m));
 
         await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
-        var msg = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var msg = await TestAwait.SignaledAsync(dispatched.Task, "the adapter to dispatch the inbound message");
         await adapter.StopAsync(CancellationToken.None);
 
         msg.ContentParts.ShouldNotBeNull();

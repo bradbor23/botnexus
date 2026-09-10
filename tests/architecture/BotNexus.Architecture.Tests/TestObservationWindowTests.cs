@@ -65,7 +65,7 @@ public class TestObservationWindowTests : ArchitectureTest
     ];
 
     /// <summary>
-    /// The raw deadline form, newly fenced and therefore baselined: 163 call sites predate the rule.
+    /// The raw deadline form, fenced since #107 and baselined: 144 call sites predate the rule.
     /// </summary>
     private static readonly string[] RawDeadlineForms = ["WaitAsync"];
 
@@ -75,8 +75,11 @@ public class TestObservationWindowTests : ArchitectureTest
 
     // Both counts are shrink-only. Lower them when a deadline is made generous or replaced by a
     // signal; never raise them to admit a new one.
-    private const int ExpectedBaselineEntryCount = 48;
-    private const int ExpectedBaselineViolationCount = 163;
+    // #111 ratchet: TelegramChannelAdapterTests' 19 five-second deadlines all waited on a signal the
+    // stub handler or the mock dispatcher already raised, so every one became a SignaledAsync call
+    // and the file left the baseline entirely.
+    private const int ExpectedBaselineEntryCount = 47;
+    private const int ExpectedBaselineViolationCount = 144;
 
     /// <summary>
     /// Rejects short observation windows on the shared polling helpers, which carry no legacy debt.
