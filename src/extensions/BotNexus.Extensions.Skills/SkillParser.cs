@@ -33,6 +33,10 @@ public static class SkillParser
         string? compatibility = null;
         string? allowedTools = null;
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal, unlike metadata: a slot name is substituted into the body by exact match, so
+        // treating "Title" and "title" as the same declaration would promise a substitution the
+        // loader does not perform.
+        var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
 
         if (frontmatter is not null)
         {
@@ -45,6 +49,9 @@ public static class SkillParser
             metadata     = new Dictionary<string, string>(
                                YamlParser.ParseNested(frontmatter, "metadata"),
                                StringComparer.OrdinalIgnoreCase);
+            parameters   = new Dictionary<string, string>(
+                               YamlParser.ParseNested(frontmatter, "parameters"),
+                               StringComparer.Ordinal);
         }
 
         var disableModelInvocation = false;
@@ -65,6 +72,7 @@ public static class SkillParser
             AllowedTools           = allowedTools,
             DisableModelInvocation = disableModelInvocation,
             Metadata               = metadata,
+            Parameters             = parameters,
             Content                = content.Trim(),
             SourcePath             = sourcePath,
             Source                 = source
