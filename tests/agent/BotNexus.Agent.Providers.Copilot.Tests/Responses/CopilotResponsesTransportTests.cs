@@ -434,7 +434,7 @@ public sealed class CopilotResponsesTransportTests
         using var reader = new StreamReader(stream);
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseAsync(llm, reader, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 
@@ -443,7 +443,7 @@ public sealed class CopilotResponsesTransportTests
     {
         var llm = new LlmStream();
         await ResponsesStreamParser.ParseEventsAsync(llm, read, BaseModel(), null, "test", NullLogger.Instance,
-            static (_, _, _, _) => { }, null, null, null, CancellationToken.None);
+            static (_, _, _, _) => { }, null, null, CancellationToken.None);
         return await CollectAsync(llm);
     }
 

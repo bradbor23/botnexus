@@ -1927,6 +1927,8 @@ public sealed class ActivityDashboardProjectionTests
         var rows = ProjectQuery("secret", Conv("c-1", title: "secret", visibility: "InternalHidden"));
 
         Assert.Empty(rows);
+    }
+
     // ── #3713: Live badge corroborated against the session roster ──────────
 
     private static SessionSummary Session(string id, string? status, string agentId = "alpha") =>
