@@ -528,6 +528,80 @@ public static class ActivityDashboardProjection
     }
 
     /// <summary>
+    /// Marker embedded in every sub-agent's child agent id. Kept in lock-step with
+    /// <c>ReclaimedWorkspacePreflight.SubAgentMarker</c> and
+    /// <c>FileAgentWorkspaceManager.SubAgentMarker</c>; duplicated here because this project
+    /// references only Domain.Wire and must not reach into Agent.Core for a string.
+    /// </summary>
+    private const string SubAgentMarker = "--subagent--";
+
+    /// <summary>
+    /// Readable label for an agent id the client store cannot resolve, which in practice means an
+    /// ephemeral sub-agent: those are spawned per run and never enter the agent roster, so
+    /// <c>IClientStateStore.GetAgent</c> returns <see langword="null"/> and the caller is left
+    /// holding the id.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A spawned sub-agent's id has the shape
+    /// <c>&lt;parent&gt;--subagent--&lt;role&gt;--&lt;32 hex correlation id&gt;</c>. Rendered
+    /// verbatim that is roughly 400px of chip: one Activity cell measured 1730px of content inside a
+    /// 310px column, which no column width can recover - widening the page from a 1300px to a 1500px
+    /// cap reduced the clipping by zero. This returns <c>parent \u2192 role</c> and drops the
+    /// correlation id, which the chip's tooltip still carries in full.
+    /// </para>
+    /// <para>
+    /// Fails OPEN, the same way <see cref="RoleLabel"/> does. An id without the marker comes back
+    /// unchanged, so ordinary agent ids are untouched. A marker with only one usable side yields
+    /// that side. Nothing usable at all yields the original id: an unreadable label beats a label
+    /// that quietly invents structure that was not there.
+    /// </para>
+    /// </remarks>
+    /// <param name="agentId">The unresolved agent id.</param>
+    public static string AgentDisplayFallback(string agentId)
+    {
+        if (string.IsNullOrWhiteSpace(agentId))
+            return agentId;
+
+        var marker = agentId.IndexOf(SubAgentMarker, StringComparison.Ordinal);
+        if (marker < 0)
+            return agentId;
+
+        var parent = agentId[..marker].Trim();
+        var tail = agentId[(marker + SubAgentMarker.Length)..];
+
+        var segments = tail.Split("--", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        // Drop a trailing correlation id. The LENGTH gate is what protects a genuinely hex-looking
+        // short role ("beef", "cafe"); gating on segment count instead does not, and got this
+        // wrong first time - `<parent>--subagent--<32 hex>` with no role at all then labelled the
+        // correlation id AS the role. The unit test for that case is what caught it.
+        if (segments.Length > 0 && segments[^1].Length >= 8 && IsHex(segments[^1]))
+            segments = segments[..^1];
+
+        var role = string.Join(" ", segments).Trim();
+
+        return (parent.Length, role.Length) switch
+        {
+            (> 0, > 0) => $"{parent} \u2192 {role}",
+            (> 0, 0) => parent,
+            (0, > 0) => role,
+            _ => agentId
+        };
+    }
+
+    private static bool IsHex(string value)
+    {
+        foreach (var c in value)
+        {
+            if (!Uri.IsHexDigit(c))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// CSS modifier suffix for the agent chip's role treatment, so the component gets colour without
     /// string-matching on display copy - the same split <see cref="OriginModifier"/> uses.
     /// </summary>

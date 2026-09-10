@@ -226,12 +226,17 @@
         ConversationLabel.DisplayTitle(row.Title, row.ConversationId, row.OwningAgentId);
 
     /// <summary>Resolve an agent id to its display name via the store, falling back to the raw id.</summary>
+    /// <summary>
+    /// Same resolution rule as the overview's AgentLabel, including the sub-agent fallback. The
+    /// owning agent of a cost row is normally a configured agent, but a sub-agent run bills to the
+    /// sub-agent id, so this column could show a raw id for exactly the same reason.
+    /// </summary>
     private string AgentLabel(string agentId)
     {
         var agent = Store.GetAgent(agentId);
         if (agent is { DisplayName.Length: > 0 })
             return agent.DisplayName;
-        return agentId;
+        return ActivityDashboardProjection.AgentDisplayFallback(agentId);
     }
 
     public void Dispose() => Store.OnChanged -= HandleStateChanged;
