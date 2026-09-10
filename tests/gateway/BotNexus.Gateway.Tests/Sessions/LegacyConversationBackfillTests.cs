@@ -570,6 +570,7 @@ public sealed class LegacyConversationBackfillTests
                     for (var i = 0; i < 5; i++)
                     {
                         try { File.Delete(_dbPath); return; }
+                        // delay-is-not-a-signal: backoff between retries of a file delete on a real filesystem
                         catch (IOException) { if (i >= 4) break; Thread.Sleep(50); }
                     }
                 }

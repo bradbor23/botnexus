@@ -176,6 +176,22 @@ public class TestAwaitBehaviourTests
         exception.Message.ShouldContain("the read loop to terminate");
     }
 
+    /// <summary>A tolerated expiry is reported, not thrown, so the caller's own fallback still runs.</summary>
+    [Fact]
+    public async Task TryEventuallyAsync_ConditionNeverTrue_ReturnsFalseRatherThanThrowing()
+    {
+        // deadline-is-the-assertion: expiry is the outcome being measured, so this must stay short.
+        (await TestAwait.TryEventuallyAsync(() => false, "a condition that never holds", timeout: TimeSpan.Zero))
+            .ShouldBeFalse();
+    }
+
+    /// <summary>A condition that holds is reported as such.</summary>
+    [Fact]
+    public async Task TryEventuallyAsync_ConditionTrue_ReturnsTrue()
+    {
+        (await TestAwait.TryEventuallyAsync(() => true, "a condition that already holds")).ShouldBeTrue();
+    }
+
     /// <summary>Elapsed-time tests can advance a shared clock without waiting for wall time.</summary>
     [Fact]
     public void ManualTimeProvider_Advance_MovesUtcNow()

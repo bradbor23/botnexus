@@ -124,14 +124,10 @@ public sealed class ProcessToolTailCeilingTests : IDisposable
 
     private static async Task WaitForOutputAsync(ProcessTool tool, int pid, string expected)
     {
-        var timeoutAt = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < timeoutAt)
-        {
-            var result = await tool.ExecuteAsync("wait", Args("output", pid: pid, tail: 100));
-            if (ResultText(result).Contains(expected, StringComparison.Ordinal))
-                return;
-            await Task.Delay(100);
-        }
+        await TestAwait.TryEventuallyAsync(
+            async () => ResultText(await tool.ExecuteAsync("wait", Args("output", pid: pid, tail: 100)))
+                .Contains(expected, StringComparison.Ordinal),
+            $"the process output to contain '{expected}'");
     }
 
     private static IReadOnlyDictionary<string, object?> Args(string action, int? pid = null, int? tail = null)

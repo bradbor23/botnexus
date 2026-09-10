@@ -415,9 +415,10 @@ public sealed class SignalRReliabilityTests : IAsyncDisposable
 
         // OnDisconnectedAsync is fire-and-forget on the server. Poll briefly so the test
         // doesn't depend on hub-internal timing being instantaneous.
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline && recording.MuteByAddressCalls.Count == 0)
-            await Task.Delay(50, cts.Token);
+        await TestAwait.EventuallyAsync(
+            () => recording.MuteByAddressCalls.Count > 0,
+            "the hub to record a mute-by-address call",
+            cancellationToken: cts.Token);
 
         var muteCall = recording.MuteByAddressCalls.ShouldHaveSingleItem();
         muteCall.ChannelType.Value.ShouldBe("signalr");

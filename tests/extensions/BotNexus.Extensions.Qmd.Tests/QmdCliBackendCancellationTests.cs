@@ -89,15 +89,10 @@ public sealed class QmdCliBackendCancellationTests
 
     private static async Task<bool> WaitForExitAsync(int pid, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (!IsProcessAlive(pid))
-                return true;
-            await Task.Delay(25);
-        }
-
-        return !IsProcessAlive(pid);
+        return await TestAwait.TryEventuallyAsync(
+            () => !IsProcessAlive(pid),
+            $"process {pid} to exit",
+            timeout);
     }
 
     [Fact]

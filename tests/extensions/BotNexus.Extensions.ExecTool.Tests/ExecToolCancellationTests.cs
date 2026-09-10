@@ -65,7 +65,7 @@ public class ExecToolCancellationTests : IDisposable
         ExecTool.GetBackgroundProcesses().ShouldBeEmpty();
 
         // 2. The child is dead, not an orphan outliving its turn.
-        WaitForPidGone(pid).ShouldBeTrue($"PID {pid} was still alive after a cancelled start (orphan leak).");
+        (await WaitForPidGoneAsync(pid)).ShouldBeTrue($"PID {pid} was still alive after a cancelled start (orphan leak).");
     }
 
     [Fact]
@@ -84,17 +84,10 @@ public class ExecToolCancellationTests : IDisposable
             TryKillPid(pid);
     }
 
-    private static bool WaitForPidGone(int pid)
+    private static async Task<bool> WaitForPidGoneAsync(int pid)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (!IsAlive(pid))
-                return true;
-            Thread.Sleep(100);
-        }
-
-        return !IsAlive(pid);
+        // The bool contract is preserved: a tolerated expiry is reported, never thrown.
+        return await TestAwait.TryEventuallyAsync(() => !IsAlive(pid), $"PID {pid} to disappear");
     }
 
     private static bool IsAlive(int pid)

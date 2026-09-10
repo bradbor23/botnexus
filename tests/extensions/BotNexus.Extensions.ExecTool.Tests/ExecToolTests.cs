@@ -418,24 +418,22 @@ public class ExecToolTests : IDisposable
 
     private static async Task WaitForProcessStartAsync(int pid)
     {
-        var timeoutAt = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (DateTime.UtcNow < timeoutAt)
-        {
-            try
+        // The expiry is tolerated: the caller's own lookup below reports what actually happened.
+        await TestAwait.TryEventuallyAsync(
+            () =>
             {
-                using var process = Process.GetProcessById(pid);
-                if (!process.HasExited)
+                try
                 {
-                    return;
+                    using var process = Process.GetProcessById(pid);
+                    return !process.HasExited;
                 }
-            }
-            catch (ArgumentException)
-            {
-                // Process has not started or exited before lookup.
-            }
-
-            await Task.Delay(100);
-        }
+                catch (ArgumentException)
+                {
+                    // Process has not started, or exited before lookup.
+                    return false;
+                }
+            },
+            $"process {pid} to be running");
 
         using var finalProcess = Process.GetProcessById(pid);
         finalProcess.HasExited.ShouldBeFalse();

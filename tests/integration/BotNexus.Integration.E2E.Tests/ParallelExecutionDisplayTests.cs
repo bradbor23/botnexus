@@ -235,16 +235,9 @@ public sealed class ParallelExecutionDisplayTests
         // A streaming indicator should appear
         var streamingIndicator = chat.StreamingIndicator;
         var indicatorVisible = false;
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await streamingIndicator.IsVisibleAsync())
-            {
-                indicatorVisible = true;
-                break;
-            }
-            await Task.Delay(100);
-        }
+        indicatorVisible = await TestAwait.TryEventuallyAsync(
+            async () => await streamingIndicator.IsVisibleAsync(),
+            "the streaming indicator to become visible");
 
         Assert.True(indicatorVisible,
             "No streaming indicator appeared while MULTI_DELTA was streaming. " +

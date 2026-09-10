@@ -34,7 +34,7 @@ public class ManagedProcessCancellationTests
     }
 
     [Fact]
-    public void Start_CancelledAfterProcessStarted_KillsTreeAndRegistersNothing()
+    public async Task Start_CancelledAfterProcessStarted_KillsTreeAndRegistersNothing()
     {
         var manager = new ProcessManager();
         using var cts = new CancellationTokenSource();
@@ -61,7 +61,7 @@ public class ManagedProcessCancellationTests
         manager.Get(pid).ShouldBeNull();
 
         // And the live child was actually torn down via the entireProcessTree kill path.
-        WaitForPidGone(pid).ShouldBeTrue($"PID {pid} survived a cancelled start (orphan leak).");
+        (await WaitForPidGoneAsync(pid)).ShouldBeTrue($"PID {pid} survived a cancelled start (orphan leak).");
     }
 
     [Fact]
@@ -106,17 +106,10 @@ public class ManagedProcessCancellationTests
             CreateNoWindow = true,
         };
 
-    private static bool WaitForPidGone(int pid)
+    private static async Task<bool> WaitForPidGoneAsync(int pid)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (!IsAlive(pid))
-                return true;
-            Thread.Sleep(100);
-        }
-
-        return !IsAlive(pid);
+        // The bool contract is preserved: a tolerated expiry is reported, never thrown.
+        return await TestAwait.TryEventuallyAsync(() => !IsAlive(pid), $"PID {pid} to disappear");
     }
 
     private static bool IsAlive(int pid)
