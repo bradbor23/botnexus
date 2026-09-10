@@ -1062,3 +1062,5 @@ If you can't resolve an issue:
 - [API Reference](../api-reference.md) — REST and SignalR endpoints
 - [Observability](../observability.md) — Tracing and monitoring
 - [Developer Guide](../getting-started-dev.md) — Build and test locally
+
+<!-- scratch marker for issue #84 demonstration; not for merge -->
