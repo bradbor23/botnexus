@@ -561,13 +561,18 @@
     private static string DisplayTitle(ActivityRow row) =>
         ConversationLabel.DisplayTitle(row.Title, row.ConversationId, row.OwningAgentId);
 
-    /// <summary>Resolve an agent id to its display name via the store, falling back to a title-cased id.</summary>
+    /// <summary>
+    /// Resolve an agent id to its display name via the store, falling back to a readable label.
+    /// The fallback matters for sub-agents: they are ephemeral and never enter the roster, so the
+    /// store cannot resolve them and this used to return the raw id - parent, marker, role and a
+    /// 32-hex correlation id - which rendered as ~400px of chip.
+    /// </summary>
     private string AgentLabel(string agentId)
     {
         var agent = Store.GetAgent(agentId);
         if (agent is { DisplayName.Length: > 0 })
             return agent.DisplayName;
-        return agentId;
+        return agentId.ToAgentDisplayLabel();
     }
 
     /// <summary>
@@ -579,7 +584,14 @@
     {
         var label = AgentLabel(agent.AgentId);
         var role = ActivityDashboardProjection.RoleLabel(agent);
-        return role is null ? label : $"{label} - {role}";
+        var head = role is null ? label : $"{label} - {role}";
+
+        // The chip label is now shortened for sub-agents, so the untruncated id has to live
+        // somewhere - the same rule OriginTooltip follows: the badge answers at a glance, the
+        // tooltip keeps the underlying value inspectable. Appended only when it adds something.
+        return string.Equals(label, agent.AgentId, StringComparison.Ordinal)
+            ? head
+            : $"{head} \u00b7 {agent.AgentId}";
     }
 
     /// <summary>
