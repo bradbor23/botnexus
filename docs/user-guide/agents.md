@@ -169,6 +169,26 @@ curl -X POST http://localhost:5005/api/chat \
 - **`model`** (required): Model ID (e.g., `gpt-4.1`, `claude-opus-4-6`)
 - **`enabled`** (default: `true`): Enable/disable this agent
 
+#### Persona fields
+
+Four optional fields describe an agent to the people using the portal:
+
+- **`responsibility`**: one short line naming what this agent owns. Shown under the agent's name
+  in the roster, and preferred over `description` in the identity chip because one line survives
+  truncation intact where prose gets cut mid-sentence.
+- **`boundaries`**: what this agent must not do. Shown in the agent detail panel.
+- **`emoji`** and **`avatarHue`**: how the agent is drawn. Leave `avatarHue` unset and a stable
+  colour is generated from the agent id, which is what most agents do.
+
+> **These describe an agent; they do not constrain it.** None of them is injected into the system
+> prompt, and nothing enforces them. `boundaries` in particular is *not* the same thing as the
+> **Boundaries** section you write into a system prompt above — that one the model actually reads.
+> The config field documents your intent for a human reader. For limits that have to hold, use
+> `toolIds`, `toolPolicy.denied` and `fileAccess`.
+
+Anyone with portal access can edit these from the persona drawer, so treat them as shared
+documentation rather than as settings only you change.
+
 ### Model Selection
 
 Restrict which models an agent can use:
