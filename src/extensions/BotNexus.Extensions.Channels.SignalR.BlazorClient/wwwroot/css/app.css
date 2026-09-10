@@ -5862,7 +5862,27 @@ h3.conversation-title.editable:hover {
     margin: 0 0 0.5rem;
     overflow: hidden;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    /* Four lines, not two. At two, 12 of 15 descriptions on a real roster were cut and 482px of
+       text was hidden - and because this clips VERTICALLY it survived every clipping sweep in the
+       #114/#122/#128/#132 work, all of which only tested `scrollWidth > clientWidth`.
+
+       Measured on the live roster at three widths (descriptions cut / text hidden / grid height):
+
+       | viewport | clamp 2          | clamp 4          |
+       |----------|------------------|------------------|
+       | 2000px   | 12, 482px, 684px | 5, 125px,  808px |
+       | 1280px   | 12, 482px, 1034px| 5, 125px, 1220px |
+       |  375px   | 12, 624px, 2578px| 9, 267px, 2935px |
+
+       The cost is height - up to +18% of grid height - and it is paid at every width because the
+       benefit is too. Not gated: a description is why you would pick one agent over another, so
+       hiding two thirds of them to keep cards uniform is the wrong trade.
+
+       Four rather than none: unclamped costs +30% grid height and lets one verbose agent set the
+       height of an entire row, since grid items stretch to the tallest in their row. Narrow
+       viewports still clamp 9 of 15 - a 279px card cannot hold much per line - which the clamp
+       cannot fix and more width would. */
+    -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
 }
 
