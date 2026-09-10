@@ -3,6 +3,7 @@ using System.Text.Json;
 using BotNexus.Agent.Core.Tools;
 using BotNexus.Agent.Core.Types;
 using BotNexus.Agent.Providers.Core.Models;
+using BotNexus.Domain.Text;
 
 namespace BotNexus.Extensions.Skills.Recording;
 
@@ -656,8 +657,13 @@ public sealed class SkillRecordTool(
     private static string Cell(string value)
         => Truncate(Flatten(value).Replace("|", "\\|"), 120);
 
+    /// <summary>
+    /// Shortens a value for display via <see cref="StringTextExtensions.SafeTruncate"/> (#2883).
+    /// Everything cut here is model-supplied tool argument text, which is exactly where a raw slice
+    /// splits a surrogate pair.
+    /// </summary>
     private static string Truncate(string value, int max)
-        => value.Length <= max ? value : value[..max] + "…";
+        => value.SafeTruncate(max, "…") ?? value;
 
     private static string? ReadString(IReadOnlyDictionary<string, object?> args, string key)
     {

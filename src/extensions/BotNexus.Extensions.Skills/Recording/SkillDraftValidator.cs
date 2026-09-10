@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BotNexus.Domain.Text;
 
 namespace BotNexus.Extensions.Skills.Recording;
 
@@ -272,8 +273,10 @@ public static class SkillDraftValidator
     /// Lookups are case-insensitive regardless of the comparer <paramref name="values"/> was built
     /// with. Leaving that to the caller is a footgun: a slot resolved by one comparer and validated
     /// by another produces a skill that validates and then loads with the placeholder still in it.
+    /// Declared as a <c>this string</c> extension per #2925, so the transformation is reachable from
+    /// any string value rather than only from callers who know this class name.
     /// </remarks>
-    public static string Substitute(string content, IReadOnlyDictionary<string, string> values)
+    public static string Substitute(this string content, IReadOnlyDictionary<string, string> values)
     {
         var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in values)
@@ -297,6 +300,11 @@ public static class SkillDraftValidator
         return seen;
     }
 
+    /// <summary>
+    /// Shortens a value for display. Goes through <see cref="StringTextExtensions.SafeTruncate"/>
+    /// (#2883) rather than range slicing: these values are model- and command-supplied, so a raw cut
+    /// can land inside a surrogate pair and emit a lone half of a character.
+    /// </summary>
     private static string Truncate(string value, int max)
-        => value.Length <= max ? value : value[..max] + "…";
+        => value.SafeTruncate(max, "…") ?? value;
 }
