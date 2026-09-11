@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.World;
 using BotNexus.Gateway.Abstractions.Conversations;
@@ -73,18 +74,22 @@ public sealed class ConversationPinTests
     public async Task GetSummariesAsync_Orders_Pinned_First()
     {
         using var fixture = new StoreFixture();
-        var store = fixture.CreateStore();
+        // CreateAsync stamps UpdatedAt from the store's own clock, overwriting whatever the caller
+        // set - so the ordering gap has to come from that clock, not from the values below.
+        // Seeded from the real clock, not a fixed past date: conversations created by the fixture
+        // carry real timestamps, and a clock starting in the past would stamp an EARLIER UpdatedAt
+        // than the one being compared against. Only the GAP needs to be deterministic.
+        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        var store = fixture.CreateStore(clock);
 
         var unpinned = CreateConversation(Agent("agent-a"), "Unpinned");
-        unpinned.UpdatedAt = DateTimeOffset.UtcNow;
+        unpinned.UpdatedAt = clock.GetUtcNow();
         await store.CreateAsync(unpinned);
 
-        // Small delay to ensure ordering by updated_at is deterministic
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(50);
+        clock.Advance(TimeSpan.FromSeconds(1));
 
         var pinned = CreateConversation(Agent("agent-a"), "Pinned");
-        pinned.UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1); // older updated_at, but pinned
+        pinned.UpdatedAt = clock.GetUtcNow().AddDays(-1); // older updated_at, but pinned
         await store.CreateAsync(pinned);
         await store.PinAsync(pinned.ConversationId, true);
 

@@ -16,11 +16,11 @@ internal sealed class CronStoreTestContext : IAsyncDisposable
     public string DbPath { get; }
     public SqliteCronStore Store { get; }
 
-    public static async Task<CronStoreTestContext> CreateAsync()
+    public static async Task<CronStoreTestContext> CreateAsync(TimeProvider? clock = null)
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "botnexus-cron-tests", Guid.NewGuid().ToString("N"));
         var dbPath = Path.Combine(tempDirectory, "cron.db");
-        var store = new SqliteCronStore(dbPath, new FileSystem());
+        var store = new SqliteCronStore(dbPath, new FileSystem(), clock: clock);
         await store.InitializeAsync();
         return new CronStoreTestContext(tempDirectory, dbPath, store);
     }

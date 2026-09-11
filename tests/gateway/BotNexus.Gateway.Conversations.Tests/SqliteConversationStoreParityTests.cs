@@ -13,6 +13,8 @@ public sealed class SqliteConversationStoreParityTests : ConversationStoreContra
 
     protected override IConversationStore CreateStore() => _fixture.CreateStore();
 
+    protected override IConversationStore CreateStore(TimeProvider clock) => _fixture.CreateStore(clock);
+
     // Exercise list materialisation under real LRU eviction pressure (#2226): the Sqlite store
     // has a bounded read-through cache, so cap it below the capacity-stress dataset size.
     protected override IConversationStore CreateCapacityConstrainedStore(int capacity)

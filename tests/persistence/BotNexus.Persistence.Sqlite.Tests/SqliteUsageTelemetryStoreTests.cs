@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Persistence.Sqlite.Telemetry;
 using Shouldly;
 
@@ -21,7 +22,7 @@ public sealed class SqliteUsageTelemetryStoreTests : IDisposable
         _dbPath = Path.Combine(_dir, "usage.db");
     }
 
-    private SqliteUsageTelemetryStore NewStore() => new(_dbPath);
+    private SqliteUsageTelemetryStore NewStore(TimeProvider? clock = null) => new(_dbPath, clock: clock);
 
     [Fact]
     public async Task Increment_CreatesRow_AndAccumulatesCounter()
@@ -84,17 +85,24 @@ public sealed class SqliteUsageTelemetryStoreTests : IDisposable
     [Fact]
     public async Task GetAll_OrdersByMostRecentlyUsedFirst()
     {
-        await using var store = NewStore();
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var store = NewStore(clock);
 
         await store.IncrementAsync("skills", "first", "use");
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(10);
+        clock.Advance(TimeSpan.FromSeconds(1));
         await store.IncrementAsync("skills", "second", "use");
 
         var all = await store.GetAllAsync("skills");
         all.Count.ShouldBe(2);
         all[0].Key.ShouldBe("second");
         all[1].Key.ShouldBe("first");
+
+        // Ordering alone would hold with the real wall clock too, so it cannot show the store
+        // honours the clock it was given. The exact gap can only come from the injected one.
+        (all[0].LastUsedAt!.Value - all[1].LastUsedAt!.Value).ShouldBe(
+            TimeSpan.FromSeconds(1),
+            "last_used_at must be stamped from the injected clock.");
     }
 
     [Fact]

@@ -101,6 +101,13 @@ public sealed class SqliteConversationStore : IConversationStore
     /// </summary>
     /// <param name="connectionString">The SQLite connection string.</param>
     /// <param name="logger">Logger instance.</param>
+    /// <summary>
+    /// Stamps <c>UpdatedAt</c> and the other conversation timestamps. Defaults to
+    /// <see cref="TimeProvider.System"/>; tests substitute a manual clock so ordering and
+    /// "was it touched" assertions need no sleep for the wall clock to pass its resolution.
+    /// </summary>
+    private readonly TimeProvider _clock;
+
     public SqliteConversationStore(string connectionString, ILogger<SqliteConversationStore> logger)
         : this(connectionString, logger, worldContext: null)
     {
@@ -119,8 +126,9 @@ public sealed class SqliteConversationStore : IConversationStore
     /// evicted by LRU; cold reads fall through to SQLite. Defaults to
     /// <see cref="DefaultConversationCacheCapacity"/>.
     /// </param>
-    public SqliteConversationStore(string connectionString, ILogger<SqliteConversationStore> logger, IWorldContext? worldContext, int cacheCapacity = DefaultConversationCacheCapacity)
+    public SqliteConversationStore(string connectionString, ILogger<SqliteConversationStore> logger, IWorldContext? worldContext, int cacheCapacity = DefaultConversationCacheCapacity, TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _connectionString = connectionString;
         _logger = logger;
         _worldContext = worldContext;
@@ -365,7 +373,7 @@ public sealed class SqliteConversationStore : IConversationStore
         try
         {
             var updated = CloneConversation(conversation);
-            updated.UpdatedAt = DateTimeOffset.UtcNow;
+            updated.UpdatedAt = _clock.GetUtcNow();
             StampWorldId(updated);
 
             await using var connection = CreateConnection();
@@ -406,7 +414,7 @@ public sealed class SqliteConversationStore : IConversationStore
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
 
-            var updatedAt = DateTimeOffset.UtcNow;
+            var updatedAt = _clock.GetUtcNow();
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 UPDATE conversations
@@ -468,7 +476,7 @@ public sealed class SqliteConversationStore : IConversationStore
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await EnsureAuditSchemaAsync(connection, ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
-            var updatedAt = DateTimeOffset.UtcNow;
+            var updatedAt = _clock.GetUtcNow();
 
             await using (var archive = connection.CreateCommand())
             {
@@ -576,7 +584,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var updatedAt = DateTimeOffset.UtcNow;
+            var updatedAt = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
 
@@ -616,7 +624,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             var pinnedAt = pin ? now : (DateTimeOffset?)null;
 
             await using var connection = CreateConnection();
@@ -666,7 +674,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -710,7 +718,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -759,7 +767,7 @@ public sealed class SqliteConversationStore : IConversationStore
             if (!string.Equals(first, second, StringComparison.Ordinal))
                 secondLock = await AcquireConversationLockAsync(second, ct).ConfigureAwait(false);
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -806,7 +814,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -863,7 +871,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -1225,7 +1233,7 @@ public sealed class SqliteConversationStore : IConversationStore
                   AND length(replace(substr(title, 9), '-', '')) = 32
                   AND substr(title, 9) NOT GLOB '*[^0-9a-fA-F-]*'
                 """;
-            archiveStaleMigration.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
+            archiveStaleMigration.Parameters.AddWithValue("$now", _clock.GetUtcNow().ToString("o"));
             var archived = await archiveStaleMigration.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (archived > 0)
                 _logger.LogInformation("Archived {Count} stale signalr:connection-id conversations (pre-v0.1.3 cleanup)", archived);

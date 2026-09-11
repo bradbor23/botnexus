@@ -8,4 +8,7 @@ namespace BotNexus.Gateway.Conversations.Tests;
 public sealed class InMemoryConversationStoreParityTests : ConversationStoreContractTests
 {
     protected override IConversationStore CreateStore() => new InMemoryConversationStore();
+
+    protected override IConversationStore CreateStore(TimeProvider clock)
+        => new InMemoryConversationStore(worldContext: null, clock);
 }
