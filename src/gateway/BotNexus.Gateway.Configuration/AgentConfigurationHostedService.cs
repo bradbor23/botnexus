@@ -47,6 +47,24 @@ internal sealed class AgentConfigurationHostedService(
 
         foreach (var source in _sources)
         {
+            // Subscribe BEFORE loading, and per source rather than in a second pass (#140).
+            //
+            // Loading everything first and only then attaching watchers left a window in which a
+            // config reload fired with no listener attached. The notification was simply dropped,
+            // and because the underlying IOptionsMonitor had already advanced its CurrentValue,
+            // the source's own change-suppression fingerprint then agreed with the NEW config
+            // while the registry still held the OLD one -- so every later notification carrying
+            // that content was suppressed as unchanged and the registry stayed stale until the
+            // process restarted. That is the intermittent "bundled agent never registers" report.
+            //
+            // Subscribing first cannot lose the notification, and the load that follows reads the
+            // already-advanced value, so both paths converge on the same descriptors. A callback
+            // that arrives mid-startup only records descriptors and schedules the debounced apply,
+            // so it is safe before the remaining sources have loaded.
+            var watcher = source.Watch(descriptors => OnSourceChanged(source, descriptors));
+            if (watcher is not null)
+                _watchers.Add(watcher);
+
             IReadOnlyList<AgentDescriptor> descriptors;
             try
             {
@@ -54,6 +72,8 @@ internal sealed class AgentConfigurationHostedService(
             }
             catch (Exception ex)
             {
+                // The watcher stays subscribed: a source that fails its initial load can still
+                // recover on a later reload instead of being dead until restart.
                 _logger.LogWarning(ex, "Failed to load agent descriptors from source '{SourceType}'.", source.GetType().Name);
                 continue;
             }
@@ -63,13 +83,6 @@ internal sealed class AgentConfigurationHostedService(
                 _latestSourceDescriptors[source] = descriptors;
                 ApplyMergedDescriptors();
             }
-        }
-
-        foreach (var source in _sources)
-        {
-            var watcher = source.Watch(descriptors => OnSourceChanged(source, descriptors));
-            if (watcher is not null)
-                _watchers.Add(watcher);
         }
     }
 
