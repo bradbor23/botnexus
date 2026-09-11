@@ -18,7 +18,7 @@ public sealed class AgentInteractionServiceLoggingTests
 
     public AgentInteractionServiceLoggingTests()
     {
-        _service = new AgentInteractionService(_store, new GatewayHubConnection(), _restClient, _logger);
+        _service = new AgentInteractionService(_store, OfflineTestHub.Create(), _restClient, _logger);
         _store.UpsertAgent(new AgentState
         {
             AgentId = "agent-1",

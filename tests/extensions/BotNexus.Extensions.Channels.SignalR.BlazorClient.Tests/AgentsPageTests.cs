@@ -14,7 +14,7 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
 public sealed class AgentsPageTests : IDisposable
 {
     private readonly BunitContext _ctx = new();
-    private readonly GatewayHubConnection _hub = new();
+    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();
     private readonly MockHttpMessageHandler _httpHandler = new();
 
     public AgentsPageTests()

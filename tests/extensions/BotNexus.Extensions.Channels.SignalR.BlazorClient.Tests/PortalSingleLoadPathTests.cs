@@ -63,7 +63,7 @@ public sealed class PortalSingleLoadPathTests
 
         var service = new PortalLoadService(
             restClient,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             store,
             Substitute.For<IGatewayEventHandler>());
 
@@ -86,7 +86,7 @@ public sealed class PortalSingleLoadPathTests
 
         var service = new PortalLoadService(
             restClient,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             store,
             Substitute.For<IGatewayEventHandler>());
 
@@ -110,7 +110,7 @@ public sealed class PortalSingleLoadPathTests
 
         var service = new PortalLoadService(
             restClient,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             store,
             Substitute.For<IGatewayEventHandler>());
 

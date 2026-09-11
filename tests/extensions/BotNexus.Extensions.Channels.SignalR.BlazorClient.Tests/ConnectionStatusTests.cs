@@ -22,7 +22,7 @@ public sealed class ConnectionStatusTests : IDisposable
     [Fact]
     public void Shows_Disconnected_when_hub_has_no_connection()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p
             .Add(c => c.Hub, hub));
@@ -37,7 +37,7 @@ public sealed class ConnectionStatusTests : IDisposable
     [Fact]
     public void Renders_connection_indicator_container()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p
             .Add(c => c.Hub, hub));
@@ -50,7 +50,7 @@ public sealed class ConnectionStatusTests : IDisposable
     [Fact]
     public void Has_title_attribute_matching_label()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p
             .Add(c => c.Hub, hub));
@@ -81,7 +81,7 @@ public sealed class ConnectionStatusTests : IDisposable
         // assert the expectations as documentation for other states.
         if (state == HubConnectionState.Disconnected)
         {
-            var hub = new GatewayHubConnection();
+            var hub = OfflineTestHub.Create();
             var cut = _ctx.Render<ConnectionStatus>(p => p.Add(c => c.Hub, hub));
 
             cut.Find(".connection-label").TextContent.ShouldBe(expectedLabel);

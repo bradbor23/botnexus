@@ -189,7 +189,7 @@ public sealed class SteeringQueueTests : IDisposable
         _store.AddSteeringEntry("conv-1", new SteeringEntry("e1", "Do this instead", SteeringEntryKind.Steer, SteeringEntryStatus.Pending));
 
         // Simulate SteeringFeedback.Injected via the event handler
-        var handler = new GatewayEventHandler(_store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
+        var handler = new GatewayEventHandler(_store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
 
         handler.HandleSteeringFeedback(new SteeringFeedbackPayload(
             AgentId: "agent-1",
@@ -220,7 +220,7 @@ public sealed class SteeringQueueTests : IDisposable
         // Add a pending entry
         _store.AddSteeringEntry("conv-1", new SteeringEntry("e1", "Queue this", SteeringEntryKind.Steer, SteeringEntryStatus.Pending));
 
-        var handler = new GatewayEventHandler(_store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
+        var handler = new GatewayEventHandler(_store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
 
         handler.HandleSteeringFeedback(new SteeringFeedbackPayload(
             AgentId: "agent-1",
@@ -289,7 +289,7 @@ public sealed class SteeringQueueTests : IDisposable
             Assert.Contains("Follow-up", cut.Markup);
         });
 
-        var handler = new GatewayEventHandler(_store, new GatewayHubConnection(),
+        var handler = new GatewayEventHandler(_store, OfflineTestHub.Create(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
         handler.HandleRunEnded(new AgentStreamEvent { SessionId = "session-1", ConversationId = "conv-1" });
 

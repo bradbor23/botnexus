@@ -164,7 +164,7 @@ public sealed class ProbeRound3BlazorTests : IDisposable
         var tcs = new TaskCompletionSource<IReadOnlyList<AgentSummary>>();
         restClient.GetAgentsAsync(Arg.Any<CancellationToken>()).Returns(tcs.Task);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var store = new ClientStateStore();
         var eventHandler = Substitute.For<IGatewayEventHandler>();
         var sut = new PortalLoadService(restClient, hub, store, eventHandler);
@@ -190,7 +190,7 @@ public sealed class ProbeRound3BlazorTests : IDisposable
         restClient.GetAgentsAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<AgentSummary>>(new HttpRequestException("Connection refused")));
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var store = new ClientStateStore();
         var eventHandler = Substitute.For<IGatewayEventHandler>();
         var sut = new PortalLoadService(restClient, hub, store, eventHandler);
@@ -209,7 +209,7 @@ public sealed class ProbeRound3BlazorTests : IDisposable
         restClient.GetAgentsAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<AgentSummary>>(new InvalidOperationException("boom")));
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var store = new ClientStateStore();
         var eventHandler = Substitute.For<IGatewayEventHandler>();
         var sut = new PortalLoadService(restClient, hub, store, eventHandler);
@@ -249,7 +249,7 @@ public sealed class ProbeRound3BlazorTests : IDisposable
         // #3212: visibility is route-derived; state the displayed pane explicitly.
         store.SelectView("agent-1", "conv-1", SelectionSource.RouteNavigation);
 
-        var handler = new GatewayEventHandler(store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
+        var handler = new GatewayEventHandler(store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
 
         handler.HandleSubAgentSpawned(new SubAgentEventPayload(
             SessionId: "sess-1",
@@ -294,7 +294,7 @@ public sealed class ProbeRound3BlazorTests : IDisposable
         // #3212: visibility is route-derived; state the displayed pane explicitly.
         store.SelectView("agent-1", "conv-1", SelectionSource.RouteNavigation);
 
-        var handler = new GatewayEventHandler(store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
+        var handler = new GatewayEventHandler(store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
 
         // Spawn first
         handler.HandleSubAgentSpawned(new SubAgentEventPayload(

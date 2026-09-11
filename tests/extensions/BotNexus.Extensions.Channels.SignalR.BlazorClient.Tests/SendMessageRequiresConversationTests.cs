@@ -35,7 +35,7 @@ public sealed class SendMessageRequiresConversationTests
     {
         _service = new AgentInteractionService(
             _store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             _restClient,
             NullLogger<AgentInteractionService>.Instance);
 

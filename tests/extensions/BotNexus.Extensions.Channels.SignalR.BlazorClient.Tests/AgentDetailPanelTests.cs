@@ -43,7 +43,7 @@ public sealed class AgentDetailPanelTests : IDisposable
         _httpHandler.SetupResponse("/api/providers", "[]");
         _httpHandler.SetupResponse("/api/models", "[]");
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         _ctx.Services.AddSingleton(hub);
 
         var cut = _ctx.Render<Agents>(p => p.Add(c => c.AgentId, "test-agent"));

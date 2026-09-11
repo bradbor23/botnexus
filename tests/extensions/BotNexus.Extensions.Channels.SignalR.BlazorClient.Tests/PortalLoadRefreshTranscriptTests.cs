@@ -20,7 +20,7 @@ public sealed class PortalLoadRefreshTranscriptTests
     private readonly ClientStateStore _store = new();
     private readonly IGatewayRestClient _restClient = Substitute.For<IGatewayRestClient>();
     private readonly IGatewayEventHandler _eventHandler = Substitute.For<IGatewayEventHandler>();
-    private readonly GatewayHubConnection _hub = new();
+    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();
     private readonly PortalLoadService _service;
 
     public PortalLoadRefreshTranscriptTests()

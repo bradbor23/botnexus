@@ -19,7 +19,7 @@ public sealed class GatewayEventHandlerLoggingTests
         // A fresh, unconnected GatewayHubConnection makes SubscribeAllAsync fail inside
         // HandleReconnectedAsync -- the exact recovery-failure path that previously wrote to
         // Console.Error.
-        _handler = new GatewayEventHandler(_store, new GatewayHubConnection(), _logger, _store);
+        _handler = new GatewayEventHandler(_store, OfflineTestHub.Create(), _logger, _store);
 
         _store.UpsertAgent(new AgentState
         {

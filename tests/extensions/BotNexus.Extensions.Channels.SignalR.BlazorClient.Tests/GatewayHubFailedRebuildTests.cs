@@ -26,7 +26,7 @@ public sealed class GatewayHubFailedRebuildTests
     [Fact]
     public async Task FailedConnect_LeavesWrapperAbleToConnectAgain()
     {
-        await using var hub = new GatewayHubConnection();
+        await using var hub = OfflineTestHub.Create();
 
         for (var attempt = 0; attempt < 5; attempt++)
         {
@@ -50,7 +50,7 @@ public sealed class GatewayHubFailedRebuildTests
     [Fact]
     public async Task FailedConnect_RethrowsSoCallersTreatItAsAFailedAttempt()
     {
-        await using var hub = new GatewayHubConnection();
+        await using var hub = OfflineTestHub.Create();
 
         await Should.ThrowAsync<Exception>(() => hub.ConnectAsync(UnreachableHubUrl, "mobile"));
     }
@@ -62,7 +62,7 @@ public sealed class GatewayHubFailedRebuildTests
     [Fact]
     public async Task StopAndDispose_AfterFailedConnect_IsSafe()
     {
-        await using var hub = new GatewayHubConnection();
+        await using var hub = OfflineTestHub.Create();
 
         await Should.ThrowAsync<Exception>(() => hub.ConnectAsync(UnreachableHubUrl, "mobile"));
 
@@ -88,7 +88,7 @@ public sealed class GatewayHubFailedRebuildTests
     [Fact]
     public void NamedHandler_SubscribedRepeatedly_CollapsesToASingleRegistration()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var calls = 0;
         void Handler() => calls++;
 
@@ -111,7 +111,7 @@ public sealed class GatewayHubFailedRebuildTests
     [Fact]
     public void FreshLambdaPerRebuild_Accumulates_WhichIsTheDefect()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var calls = 0;
 
         for (var i = 0; i < 5; i++)

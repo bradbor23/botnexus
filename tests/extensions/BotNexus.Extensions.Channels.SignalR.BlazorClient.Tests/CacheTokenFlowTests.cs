@@ -30,7 +30,7 @@ public sealed class CacheTokenFlowTests
         // #3212: visibility is route-derived; state the displayed pane explicitly.
         store.SelectView("agent-1", "conv-1", SelectionSource.RouteNavigation);
 
-        var handler = new GatewayEventHandler(store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
+        var handler = new GatewayEventHandler(store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, store);
         return (handler, store);
     }
 

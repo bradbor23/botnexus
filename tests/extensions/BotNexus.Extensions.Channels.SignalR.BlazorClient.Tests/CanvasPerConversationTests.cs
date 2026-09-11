@@ -12,7 +12,7 @@ public sealed class CanvasPerConversationTests
 {
     private readonly ClientStateStore _store = new();
     private readonly IGatewayRestClient _restClient = Substitute.For<IGatewayRestClient>();
-    private readonly GatewayHubConnection _hub = new();
+    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();
     private readonly GatewayEventHandler _handler;
     private readonly AgentInteractionService _interaction;
 

@@ -36,7 +36,7 @@ public sealed class MainLayoutNavTestIdTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         // The Skills nav entry is gated on the botnexus-skills extension being loaded. Without it

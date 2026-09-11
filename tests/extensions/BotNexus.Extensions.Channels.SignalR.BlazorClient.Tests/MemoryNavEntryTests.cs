@@ -52,7 +52,7 @@ public sealed class MemoryNavEntryTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         restClient.GetExtensionDetailsAsync(Arg.Any<CancellationToken>())

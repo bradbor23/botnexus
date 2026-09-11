@@ -1774,7 +1774,7 @@ public sealed class ChatPanelTests : IDisposable
         // A sub-agent spawns while the user is viewing their own conversation.
         var handler = new GatewayEventHandler(
             _store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance,
             _store);
         handler.HandleSubAgentSpawned(new SubAgentEventPayload(

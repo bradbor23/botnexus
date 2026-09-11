@@ -19,7 +19,7 @@ public sealed class FollowUpChipLifecycleTests
 
     public FollowUpChipLifecycleTests()
     {
-        _handler = new GatewayEventHandler(_store, new GatewayHubConnection(),
+        _handler = new GatewayEventHandler(_store, OfflineTestHub.Create(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
 
         _store.UpsertAgent(new AgentState

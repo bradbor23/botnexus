@@ -25,7 +25,7 @@ public sealed class PendingAskUserHydrationTests
 
     private readonly ClientStateStore _store = new();
     private readonly IGatewayRestClient _restClient = Substitute.For<IGatewayRestClient>();
-    private readonly GatewayHubConnection _hub = new();
+    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();
     private readonly AgentInteractionService _interaction;
 
     public PendingAskUserHydrationTests()

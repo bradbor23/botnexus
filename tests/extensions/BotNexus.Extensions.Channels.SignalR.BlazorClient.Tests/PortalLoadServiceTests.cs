@@ -8,15 +8,11 @@ public sealed class PortalLoadServiceTests
     private readonly ClientStateStore _store = new();
     private readonly IGatewayRestClient _restClient = Substitute.For<IGatewayRestClient>();
     private readonly IGatewayEventHandler _eventHandler = Substitute.For<IGatewayEventHandler>();
-    private readonly GatewayHubConnection _hub = new();
+    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();
     private readonly PortalLoadService _service;
 
     public PortalLoadServiceTests()
     {
-        // Off the network (#145). The REST client is a substitute, but the hub is real and
-        // InitializeAsync connects it, so without this the fixture opens a socket to its own hub
-        // URL and the outcome depends on what is listening on that port on the build host.
-        _hub.TestHttpHandler = OfflineTestHttp.Handler();
         _service = new PortalLoadService(_restClient, _hub, _store, _eventHandler);
     }
 

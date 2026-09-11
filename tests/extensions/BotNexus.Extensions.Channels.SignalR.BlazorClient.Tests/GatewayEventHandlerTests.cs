@@ -9,7 +9,7 @@ public sealed class GatewayEventHandlerTests
 
     public GatewayEventHandlerTests()
     {
-        _handler = new GatewayEventHandler(_store, new GatewayHubConnection(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
+        _handler = new GatewayEventHandler(_store, OfflineTestHub.Create(), Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance, _store);
 
         _store.UpsertAgent(new AgentState
         {

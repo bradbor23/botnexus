@@ -22,7 +22,7 @@ public sealed class DebugModeTests : IDisposable
         _prefs = Substitute.For<IPortalPreferencesService>();
         _prefs.Current.Returns(new PortalPreferences());
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         var http = OfflineTestHttp.Create("http://localhost/");

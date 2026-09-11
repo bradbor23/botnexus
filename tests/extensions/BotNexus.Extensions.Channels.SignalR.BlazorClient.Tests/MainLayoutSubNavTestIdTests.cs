@@ -40,7 +40,7 @@ public sealed class MainLayoutSubNavTestIdTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         // The Skills nav entry - and therefore its sub-nav - is gated on the skills extension being
