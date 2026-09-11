@@ -170,7 +170,7 @@ public sealed class GrepToolTests : IDisposable
     public async Task PrepareArgumentsAsync_WhenEvilRegexPattern_DoesNotHang()
     {
         // PrepareArguments also compiles the regex for validation — must not hang
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var args = new Dictionary<string, object?>
         {
             ["pattern"] = "(a+)+b"

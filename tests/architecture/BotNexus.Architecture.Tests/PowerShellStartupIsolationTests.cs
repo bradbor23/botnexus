@@ -10,20 +10,37 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task RunLintAt_StderrBeyondPipeCapacity_RetainsBothOutputs()
     {
+        // Generous on purpose: here the deadline's expiry is the FAILURE outcome, so it must
+        // tolerate a loaded runner. What is being waited on is a pwsh cold start plus a 2MB
+        // stderr drain, and nothing about the test gets slower by allowing more room. This
+        // budget was 10s -- shared with the never-exiting test below, whose expiry is its
+        // assertion -- and it duly expired on CI against code that was working (#143).
         await ExerciseLintBoundaryAsync(
             "[Console]::Error.Write(('E' * 2097152)); [Console]::Out.Write('stdout-complete'); exit 0",
-            cancelAfterStart: false);
+            cancelAfterStart: false,
+            budget: TimeSpan.FromSeconds(60));
     }
 
     [Fact]
     public async Task RunLintAt_NeverExitingChild_CancellationTerminatesOwnedProcess()
     {
+        // deadline-is-the-assertion: the child never exits, so the helper's budget expiring IS
+        // the pass. Load cannot make this fail -- it can only make the helper wait longer before
+        // throwing the TimeoutException the test demands. Keep it SHORT: a green run pays this
+        // budget in full, every time.
         await ExerciseLintBoundaryAsync(
             "[Console]::Out.Write('ready-never-exit'); [Threading.Tasks.Task]::Delay(-1).GetAwaiter().GetResult()",
-            cancelAfterStart: true);
+            cancelAfterStart: true,
+            budget: TimeSpan.FromSeconds(10));
     }
 
-    private static async Task ExerciseLintBoundaryAsync(string body, bool cancelAfterStart)
+    /// <param name="budget">
+    /// The helper's own deadline. It is a REQUIRED parameter rather than a shared constant because
+    /// the two callers need opposite things from it: for the never-exiting child its expiry is the
+    /// assertion and must stay short, and for the stderr flood its expiry is the failure and must
+    /// be generous. One budget serving both roles is what made the flood test flaky (#143).
+    /// </param>
+    private static async Task ExerciseLintBoundaryAsync(string body, bool cancelAfterStart, TimeSpan budget)
     {
         var fixture = Directory.CreateTempSubdirectory("lint-boundary-").FullName;
         using var unrelated = new DocsLintScriptTests.PowerShellStartupState();
@@ -32,7 +49,9 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
         var script = Path.Combine(fixture, "child.ps1");
         File.WriteAllText(script, "param($RepoRoot, $Rule)\n" + body);
         using var cancellation = new CancellationTokenSource();
-        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Emergency containment only, never the thing under test -- so derive it from the budget
+        // instead of hard-coding a second number that can silently drift below it.
+        using var guard = new CancellationTokenSource(budget + TimeSpan.FromSeconds(20));
         Process? observed = null;
         string? cache = null;
         Task<DocsLintScriptTests.LintRun>? run = null;
@@ -44,7 +63,7 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
                     observed = Process.GetProcessById(child.Id);
                     cache = root;
                     Directory.Exists(root).ShouldBeTrue("cache must remain owned while the child is live");
-                }, timeout: TimeSpan.FromSeconds(10));
+                }, timeout: budget);
             if (cancelAfterStart)
             {
                 var failure = await Should.ThrowAsync<TimeoutException>(async () =>
@@ -74,7 +93,7 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
         finally
         {
             // This independent guard safely kills a deliberately broken launcher in RED.
-            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             if (observed is not null)
             {
                 if (!observed.HasExited)
@@ -193,7 +212,7 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
         {
             // A cancelled protocol token must not cancel cleanup. Start both cleanup attempts
             // before awaiting either, so one failure cannot strand the other child.
-            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await Task.WhenAll(
                 StopIfRunningAsync(a, startedA, cleanup.Token),
                 StopIfRunningAsync(b, startedB, cleanup.Token)).WaitAsync(cleanup.Token);

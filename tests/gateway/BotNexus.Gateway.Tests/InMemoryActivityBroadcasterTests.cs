@@ -20,7 +20,7 @@ public sealed class InMemoryActivityBroadcasterTests
     public async Task SubscribeAsync_RegistersBeforeItReturns_SoAnImmediatePublishIsNotMissed()
     {
         var broadcaster = new InMemoryActivityBroadcaster(NullLogger<InMemoryActivityBroadcaster>.Instance);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var stream = broadcaster.SubscribeAsync(cts.Token);
 
@@ -40,7 +40,7 @@ public sealed class InMemoryActivityBroadcasterTests
     public async Task SubscribeAsync_DeregistersAfterEnumerationEnds()
     {
         var broadcaster = new InMemoryActivityBroadcaster(NullLogger<InMemoryActivityBroadcaster>.Instance);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var stream = broadcaster.SubscribeAsync(cts.Token);
         await using (var subscription = stream.GetAsyncEnumerator(cts.Token))
@@ -68,7 +68,7 @@ public sealed class InMemoryActivityBroadcasterTests
     {
         using var readySignal = new SemaphoreSlim(0, 1);
         var broadcaster = new ReadySignalingBroadcaster(readySignal);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         await using var subscription = broadcaster.SubscribeAsync(cts.Token).GetAsyncEnumerator(cts.Token);
         var moveNext = subscription.MoveNextAsync().AsTask();
@@ -87,7 +87,7 @@ public sealed class InMemoryActivityBroadcasterTests
         using var sharedSignal1 = new SemaphoreSlim(0, 1);
         using var sharedSignal2 = new SemaphoreSlim(0, 1);
         var shared = new TwoSubscriberReadyBroadcaster(sharedSignal1, sharedSignal2);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         await using var first = shared.SubscribeAsync(cts.Token).GetAsyncEnumerator(cts.Token);
         await using var second = shared.SubscribeAsync(cts.Token).GetAsyncEnumerator(cts.Token);

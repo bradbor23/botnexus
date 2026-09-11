@@ -85,7 +85,7 @@ public sealed class LiveGatewayIntegrationTests
 
         // Verify the hub endpoint is mapped by checking a simple HTTP request
         // (SignalR negotiate endpoint)
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var negotiateResponse = await client.PostAsync("/hub/gateway/negotiate?negotiateVersion=1", null, cts.Token);
         negotiateResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
     }

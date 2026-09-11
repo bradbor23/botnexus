@@ -45,7 +45,7 @@ public sealed class HttpSseTransportRobustnessTests
         var sse = $"event: message\ndata: {JsonSerializer.Serialize(response, JsonContext.Default.JsonRpcResponse)}\n\n";
 
         await transport.ParseSseStreamAsync(new StringReader(sse), CancellationToken.None);
-        var read = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
+        var read = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         read.Id.ShouldNotBeNull();
         await transport.DisposeAsync();
     }

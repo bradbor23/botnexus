@@ -88,6 +88,8 @@ public sealed class DelayToolTests
         // delay-is-not-a-signal: the delay is the behaviour this fake exists to simulate
         var tool = CreateDelayTool(delay: static (duration, token) => Task.Delay(duration, token));
         using var cts = new CancellationTokenSource();
+        // deadline-is-the-assertion: the tool is mid-delay and this cancellation is the behaviour under
+        // test. Expiry is the pass.
         cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
         var result = await ExecuteAsync(

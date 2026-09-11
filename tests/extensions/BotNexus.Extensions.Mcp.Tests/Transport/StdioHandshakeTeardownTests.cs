@@ -96,6 +96,8 @@ public sealed class StdioHandshakeTeardownTests
 
         try
         {
+            // deadline-is-the-assertion: the handshake never completes; the throw asserted below only
+            // happens when this expires.
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
             var act = () => client.InitializeAsync(cts.Token);
             await act.ShouldThrowAsync<OperationCanceledException>();

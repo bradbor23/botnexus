@@ -74,6 +74,8 @@ public sealed class TcpReadinessProbeTests
     public async Task WaitForTcpReadyAsync_ThrowsOnCancellation()
     {
         var port = GetUnusedPort();
+        // deadline-is-the-assertion: the port is deliberately unused, so the asserted
+        // OperationCanceledException only arrives on expiry.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>

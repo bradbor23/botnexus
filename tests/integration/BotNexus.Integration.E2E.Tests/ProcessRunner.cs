@@ -165,7 +165,7 @@ public static class ProcessRunner
                 {
                     _process.Kill(entireProcessTree: true);
                     // Best-effort wait so subsequent file cleanup doesn't race the child.
-                    using var killCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    using var killCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     try { await _process.WaitForExitAsync(killCts.Token); } catch { /* swallow */ }
                 }
             }

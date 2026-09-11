@@ -146,7 +146,7 @@ public sealed class DefaultAgentRegistryTests
     {
         var broadcaster = new InMemoryActivityBroadcaster(NullLogger<InMemoryActivityBroadcaster>.Instance);
         var registry = CreateRegistry(broadcaster);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var subscription = broadcaster.SubscribeAsync(cts.Token).GetAsyncEnumerator(cts.Token);
         // No sleep before publishing: SubscribeAsync registers the subscriber before it returns,
         // so by this line the publish cannot be missed. The 20ms wait this replaces was the flake -
@@ -169,7 +169,7 @@ public sealed class DefaultAgentRegistryTests
         var registry = CreateRegistry(broadcaster);
         registry.Register(CreateDescriptor("agent-a"));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var subscription = broadcaster.SubscribeAsync(cts.Token).GetAsyncEnumerator(cts.Token);
         // No sleep before publishing: SubscribeAsync registers the subscriber before it returns,
         // so by this line the publish cannot be missed. The 20ms wait this replaces was the flake -

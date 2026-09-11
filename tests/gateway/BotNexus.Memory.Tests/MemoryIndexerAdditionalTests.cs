@@ -284,7 +284,7 @@ public sealed class MemoryIndexerAdditionalTests
 
         public async Task WaitForFirstInsertAttemptAsync()
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await _firstInsertAttempt.Task.WaitAsync(cts.Token);
         }
     }

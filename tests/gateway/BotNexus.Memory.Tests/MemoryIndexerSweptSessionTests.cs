@@ -444,7 +444,7 @@ public sealed class MemoryIndexerSweptSessionTests
 
         public async Task WaitForInsertAsync()
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await _inserted.Task.WaitAsync(cts.Token);
         }
     }

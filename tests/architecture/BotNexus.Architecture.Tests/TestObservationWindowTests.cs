@@ -48,6 +48,26 @@ namespace BotNexus.Architecture.Tests;
 /// really is the assertion.
 /// </para>
 /// <para>
+/// <b>Why cancellation sources are fenced too (#143).</b> The fence originally recognised a deadline
+/// only when it was an argument to a KNOWN helper name. A budget written as
+/// <c>new CancellationTokenSource(TimeSpan.FromSeconds(10))</c> - or pushed on later with
+/// <c>CancelAfter</c> - names no helper, so it was invisible, and 53 of them had accumulated. One
+/// duly went red on CI: <c>PowerShellStartupIsolationTests</c> shared a single 10s budget between
+/// two tests that needed OPPOSITE things from it, and the half whose expiry meant failure inherited
+/// the short value the other half required.
+/// </para>
+/// <para>
+/// That triage is worth recording, because the ratio decided the design. Of the 53, thirty were
+/// observation or cleanup deadlines whose expiry means failure - real debt, now widened. The other
+/// twenty-three cancel the SUBJECT under test (a hung tool, a stalled stream, a caller abort) or
+/// probe for a service that may legitimately be absent; there a short value is correct and they now
+/// carry the marker. Note what was deliberately NOT done: a heuristic exempting anything near an
+/// <c>OperationCanceledException</c> would have classified most of them automatically, and it was
+/// rejected because it was wrong in both directions on the real corpus. A heuristic that silently
+/// exempts is how #123 shipped three markers that were simply false. The marker is written by hand,
+/// with a reason, or the deadline is generous.
+/// </para>
+/// <para>
 /// <b>Why tool-argument budgets are NOT regex-fenced.</b> <c>["timeout"] = 5</c> passed to a tool
 /// under test is the same wall-clock deadline spelled as data, and it is what took
 /// <c>FileWatcherToolTests</c> red. It is nevertheless left to review rather than to a scanner,
@@ -68,6 +88,16 @@ public class TestObservationWindowTests : ArchitectureTest
     /// <see cref="TestWaitHelperNames"/>.
     /// </summary>
     private static readonly string[] WaitHelpers = TestWaitHelperNames.BudgetedWaits;
+
+    /// <summary>
+    /// The other way to write a wall-clock deadline: build a <c>CancellationTokenSource</c> with a
+    /// budget, or push one onto an existing source with <c>CancelAfter</c>. These are deliberately
+    /// NOT folded into <see cref="TestWaitHelperNames.BudgetedWaits"/>. That list is derived from
+    /// <c>TestAwait</c>'s own signatures and has a coverage test policing it; these are language
+    /// constructs with no signature to derive from, and merging two lists that merely look alike is
+    /// what #133 got wrong.
+    /// </summary>
+    private static readonly string[] DeadlineConstructors = ["CancellationTokenSource", "CancelAfter"];
 
     private const int MinimumObservationSeconds = 15;
 
@@ -93,6 +123,49 @@ public class TestObservationWindowTests : ArchitectureTest
             $"asserting, say so with a '{ShortDeadlineScanner.JustificationMarker} <reason>' comment " +
             $"on the line or just above it.{Environment.NewLine}" +
             string.Join(Environment.NewLine, violations));
+    }
+
+    /// <summary>
+    /// The same rule for deadlines spelled as a cancellation source rather than as a helper argument
+    /// (#143). No baseline and no allowance, matching the sibling fact above.
+    /// </summary>
+    [Fact]
+    public void CancellationDeadlines_AreGenerousEnoughForALoadedHost()
+    {
+        var violations = Scan(DeadlineConstructors)
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .SelectMany(pair => pair.Value.Select(
+                site => $"{pair.Key}:{site.Line} cancels after only {site.Seconds:0.##}s"))
+            .ToList();
+
+        violations.ShouldBeEmpty(
+            $"A CancellationTokenSource budget is a wall-clock deadline (>= {MinimumObservationSeconds}s). " +
+            "Where the token bounds a wait for something the test expects to happen, its expiry is the " +
+            "FAILURE path and there is nothing to buy by keeping it tight. Where the token instead " +
+            "cancels the subject under test - a hung tool, a stalled stream, a probe for a service that " +
+            "may not be there - its expiry is the assertion, a short value is correct, and it must say " +
+            $"so with a '{ShortDeadlineScanner.JustificationMarker} <reason>' comment on the line or " +
+            $"just above it.{Environment.NewLine}" +
+            string.Join(Environment.NewLine, violations));
+    }
+
+    /// <summary>Pins the new forms, including the one that made this fence necessary.</summary>
+    [Theory]
+    [InlineData("using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));", true)]
+    [InlineData("cts.CancelAfter(TimeSpan.FromMilliseconds(200));", true)]
+    [InlineData("using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));", false)]
+    // Inline at the call site is the form that hid in plain sight the longest.
+    [InlineData("await t.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token);", true)]
+    // Claimed, with a reason, as the subject under test rather than an observation window.
+    [InlineData("// deadline-is-the-assertion: the tool hangs by design\n"
+        + "using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));", false)]
+    [InlineData("// a CancellationTokenSource(TimeSpan.FromSeconds(2)) would be too tight here", false)]
+    public void CancellationClassifier_SeesBudgetsWrittenAsCancellationSources(string source, bool expectedViolation)
+    {
+        ShortDeadlineScanner
+            .FindViolations(source, DeadlineConstructors, MinimumObservationSeconds)
+            .Any()
+            .ShouldBe(expectedViolation);
     }
 
     /// <summary>Pins the boundary between a deadline, an exempt one, and prose that merely shows one.</summary>

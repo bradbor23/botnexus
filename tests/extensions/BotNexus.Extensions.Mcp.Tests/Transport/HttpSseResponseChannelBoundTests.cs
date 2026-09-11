@@ -68,7 +68,7 @@ public sealed class HttpSseResponseChannelBoundTests
             new StringReader(BuildSseStream(1, overflow)), CancellationToken.None);
 
         // DropOldest: ids 1..10 were evicted, so the buffer now starts at 11.
-        var first = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+        var first = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         first.Id!.ToString().ShouldBe("11");
 
         // The drop is observable, not silent.
@@ -94,7 +94,7 @@ public sealed class HttpSseResponseChannelBoundTests
         for (var expected = 1; expected <= count; expected++)
         {
             var read = await transport.ReceiveAsync(
-                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+                new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
             read.Id!.ToString().ShouldBe(expected.ToString());
             read.Result!.Value.GetProperty("seq").GetInt32().ShouldBe(expected);
         }

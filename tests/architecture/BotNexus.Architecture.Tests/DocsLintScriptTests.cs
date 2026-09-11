@@ -434,7 +434,7 @@ public sealed class DocsLintScriptTests : ArchitectureTest, IDisposable
         async Task TerminateAndDrainAsync()
         {
             cleanupAttempted = true;
-            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             try
             {
                 if (!process.HasExited)

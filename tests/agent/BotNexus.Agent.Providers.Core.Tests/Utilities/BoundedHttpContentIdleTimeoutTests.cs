@@ -74,6 +74,8 @@ public class BoundedHttpContentIdleTimeoutTests
         using var stream = new ChunkThenStallStream("hello");
         var content = new StreamContent(stream);
         using var cts = new CancellationTokenSource();
+        // deadline-is-the-assertion: the stream stalls by design and this token is the idle cancellation
+        // under test. Expiry is the pass.
         cts.CancelAfter(TimeSpan.FromMilliseconds(100));
 
         var act = async () => await BoundedHttpContent.ReadStringWithLimitAsync(

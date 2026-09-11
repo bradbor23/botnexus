@@ -30,6 +30,8 @@ public abstract class E2ETestBase : IAsyncLifetime
         // Skip all tests if gateway not running
         try
         {
+            // deadline-is-the-assertion: availability probe: expiry means 'no gateway' and every E2E test
+            // skips. Widening it would delay every run that legitimately has nothing to talk to.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             using var http = new HttpClient();
             var r = await http.GetAsync($"{BaseUrl}/health", cts.Token);

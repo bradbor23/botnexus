@@ -84,6 +84,8 @@ public sealed class ToolExecutorTimeoutTests
         var context = new AgentContext(null, [], [tool]);
         var assistant = CreateAssistant("tc1", "hang");
 
+        // deadline-is-the-assertion: the tool hangs by design and this token is what stops it. Expiry is
+        // the pass.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var act = () => ToolExecutor.ExecuteAsync(context, assistant, config, _ => Task.CompletedTask, cts.Token);
 

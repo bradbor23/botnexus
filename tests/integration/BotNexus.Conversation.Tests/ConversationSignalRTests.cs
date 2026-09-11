@@ -16,7 +16,7 @@ public class ConversationSignalRTests(LiveGatewayFixture fixture, ITestOutputHel
     public async Task SubscribeAll_ReturnsSessions()
     {
         Skip.If(!fixture.IsAvailable, "Dev gateway not running at localhost:5006");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var result = await fixture.SignalR.SubscribeAllAsync(cts.Token);
 
         // Documents current behavior: SubscribeAll returns sessions list
@@ -29,7 +29,7 @@ public class ConversationSignalRTests(LiveGatewayFixture fixture, ITestOutputHel
     public async Task SubscribeAll_DocumentsConversationListIsFutureExtension()
     {
         Skip.If(!fixture.IsAvailable, "Dev gateway not running at localhost:5006");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var result = await fixture.SignalR.SubscribeAllAsync(cts.Token);
 
         // NOTE: conversations list in SubscribeAll response is a future extension (Wave 3).
