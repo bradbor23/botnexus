@@ -57,7 +57,30 @@ public sealed class PlatformConfigAgentSource(
     /// <inheritdoc />
     public Task<IReadOnlyList<AgentDescriptor>> LoadAsync(CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(LoadFromConfig(_configOptions.CurrentValue, cancellationToken));
+        var descriptors = LoadFromConfig(_configOptions.CurrentValue, cancellationToken);
+
+        // The suppression fingerprint means "the effective descriptors this source last handed
+        // to its consumer", so a load records it as well as a reload notification (#140).
+        //
+        // Leaving it to Watch's seed instead recorded whatever the monitor happened to hold at
+        // subscription time, which is not what the consumer applied if a reload landed between
+        // the load and the subscription: the seed agreed with the NEW config while the registry
+        // still held the OLD one, so the next notification carrying that content fingerprinted
+        // equal and was suppressed as unchanged -- permanently, until the process restarted.
+        try
+        {
+            lock (_fingerprintGate)
+                _lastEffectiveFingerprint = ComputeEffectiveFingerprint(descriptors);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Failed to record platform-config effective fingerprint for config directory '{ConfigDirectory}'.",
+                _configDirectory);
+        }
+
+        return Task.FromResult(descriptors);
     }
 
     /// <inheritdoc />
