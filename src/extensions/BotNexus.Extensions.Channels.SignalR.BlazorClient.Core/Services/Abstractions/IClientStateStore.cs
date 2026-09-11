@@ -98,6 +98,21 @@ public interface IClientStateStore
     ConversationState? GetConversation(string conversationId);
 
     /// <summary>Set active conversation for an agent, updating both agent and global selection.</summary>
+    /// <summary>
+    /// Drops a locally-synthesised conversation projection, and clears the active selection if it
+    /// pointed at it so the caller can re-select.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrow: it refuses anything that is NOT locally synthesised, so a caller cannot
+    /// use it to delete a real server-backed conversation. The one caller is the initial-load 404
+    /// handler, where a cron projection whose backing session is gone must not be left in the
+    /// sidebar as a row that can never be opened.
+    /// </remarks>
+    /// <param name="agentId">Owning agent.</param>
+    /// <param name="conversationId">Projection to drop.</param>
+    /// <returns><c>true</c> if a synthesised projection was removed.</returns>
+    bool RemoveSynthesisedConversation(string agentId, string conversationId);
+
     void SetActiveConversation(string agentId, string conversationId);
 
     /// <summary>The active conversation ID for the active agent.</summary>

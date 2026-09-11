@@ -42,13 +42,16 @@ public sealed class PortalLoadServiceTests
     }
 
     /// <summary>
-    /// Intended to reproduce: a stale cron-session projection whose backing session returns 404
-    /// from GetSessionHistoryAsync must NOT abort portal initialization.
+    /// A stale cron-session projection whose backing session returns 404 from
+    /// <c>GetSessionHistoryAsync</c> must not abort portal initialization, and must not be left in
+    /// the sidebar as a row that can never be opened.
     /// <para>
-    /// It no longer reaches that path - see the fence at the end of the body. #2305 removed the
-    /// cron-prefix inference that created the projection, so the stubbed 404 never fires. What this
-    /// test still genuinely covers is that initialization survives the session roster containing a
-    /// cron session at all, and that no 404 reaches the top-level catch.
+    /// The projection is staged explicitly (#156). It used to be created by the <c>cron:</c>
+    /// session-id prefix inference, which #2305 deleted - after which nothing created one, so this
+    /// test stopped reaching the path it names and passed for four releases on an assertion that
+    /// was trivially true. <c>UpsertAgent</c> merges rather than replacing, and the conversation
+    /// reconcile skips <c>IsLocallySynthesised</c> entries, so a projection seeded here survives
+    /// both the REST agent seed and an empty REST conversation list.
     /// </para>
     /// </summary>
     [Fact]
@@ -87,6 +90,20 @@ public sealed class PortalLoadServiceTests
         // the hub failing with a message that happened to contain no "404" - which held only while
         // nothing was listening on port 5000 of the build host.
 
+        // Stage the stale projection the scenario is named for. This is what makes the test real:
+        // it is selected during init, its history is fetched from the SESSION endpoint because it is
+        // synthesised, and that fetch is the stubbed 404 above.
+        var cronConversationId = $"cron-session:{staleCronSessionId}";
+        _store.UpsertAgent(new AgentState { AgentId = "agent-1", DisplayName = "Test Agent" });
+        var staleAgent = _store.GetAgent("agent-1")!;
+        staleAgent.Conversations[cronConversationId] = new ConversationState
+        {
+            ConversationId = cronConversationId,
+            Title = "Scheduled run",
+            IsLocallySynthesised = true,
+            ActiveSessionId = staleCronSessionId,
+        };
+
         // Act
         await _service.InitializeAsync("http://localhost:5000/hub/gateway");
 
@@ -100,7 +117,9 @@ public sealed class PortalLoadServiceTests
         // The stale virtual cron conversation must be removed after 404
         var cronConvId = $"cron-session:{staleCronSessionId}";
         Assert.False(agent.Conversations.ContainsKey(cronConvId),
-            "Stale cron-session projection should be removed after 404.");
+            "Stale cron-session projection should be removed after 404 - it can never be opened.");
+        // Selection must not dangle at the conversation that was just dropped.
+        Assert.NotEqual(cronConvId, agent.ActiveConversationId);
 
         // The history 404 must not have reached the top-level catch. LoadError is set here because
         // the offline handler refuses the hub connect, which is expected and is NOT this 404 - so
@@ -110,16 +129,9 @@ public sealed class PortalLoadServiceTests
         Assert.DoesNotContain("Not Found", _service.LoadError);
         Assert.Contains("offline by design", _service.LoadError);
 
-        // A FENCE over a known gap, not an endorsement of it. The stubbed 404 above never fires:
-        // #2305 deleted the `cron:` session-id prefix inference, so nothing projects a cron session
-        // into a synthesised conversation any more. With no projection there is nothing to select,
-        // LoadInitialHistoryAsync is never reached for it, and the ContainsKey assertion above is
-        // trivially true - this test has been passing for the wrong reason ever since.
-        //
-        // Asserting the absence makes that explicit and self-correcting: restore the projection and
-        // this line fails, which is the prompt to turn the test back into a real one rather than
-        // leaving it quietly vacuous. See the follow-up issue.
-        await _restClient.DidNotReceive().GetSessionHistoryAsync(
+        // The 404 really fired. Without this the test could go green again by never reaching the
+        // path, which is exactly how it failed silently between #2305 and #156.
+        await _restClient.Received().GetSessionHistoryAsync(
             staleCronSessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 

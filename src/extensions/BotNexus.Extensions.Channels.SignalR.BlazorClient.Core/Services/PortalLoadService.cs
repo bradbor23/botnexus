@@ -244,6 +244,18 @@ public sealed class PortalLoadService : IPortalLoadService
             // Conversation no longer exists on the backend (e.g. archived/deleted concurrently).
             Console.Error.WriteLine(
                 $"[PortalLoadService] History 404 for conversation '{conversation.ConversationId}': {ex.Message}");
+
+            // A SYNTHESISED projection whose backing session is gone has nothing left to show and
+            // cannot be opened, so it is dropped and the caller's loop selects the next one. A real
+            // conversation is kept: a 404 there is a transient server condition, not permission to
+            // delete the user's row - the store enforces that distinction.
+            //
+            // This is what the summary above has always promised and what InitializeAsync's
+            // re-selection loop is for. It was never implemented; the test that should have caught
+            // that could not reach this path (#156), so the loop was unreachable and a stale cron
+            // row survived every load.
+            if (conversation.IsLocallySynthesised)
+                _store.RemoveSynthesisedConversation(agent.AgentId, conversation.ConversationId);
         }
     }
 
