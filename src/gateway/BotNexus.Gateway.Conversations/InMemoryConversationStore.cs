@@ -26,13 +26,24 @@ public sealed class InMemoryConversationStore : IConversationStore
     /// callers should always provide <see cref="IWorldContext"/> via the world-aware overload so
     /// <c>Conversation.WorldId</c> is stamped on persistence.
     /// </remarks>
-    public InMemoryConversationStore() { }
+    public InMemoryConversationStore() : this(worldContext: null, clock: null) { }
 
     /// <summary>Initialises a new <see cref="InMemoryConversationStore"/> that stamps the current world id.</summary>
     /// <param name="worldContext">Resolves the gateway's current <see cref="WorldIdentity"/> for stamping.</param>
-    public InMemoryConversationStore(IWorldContext worldContext)
+    public InMemoryConversationStore(IWorldContext worldContext) : this(worldContext, clock: null) { }
+
+    /// <summary>
+    /// Stamps <c>UpdatedAt</c> and the other conversation timestamps. Defaults to
+    /// <see cref="TimeProvider.System"/>; tests substitute a manual clock so ordering and
+    /// "was it touched" assertions need no sleep for the wall clock to pass its resolution.
+    /// </summary>
+    private readonly TimeProvider _clock;
+
+    /// <summary>Initialises a store with an explicit world context and clock.</summary>
+    public InMemoryConversationStore(IWorldContext? worldContext, TimeProvider? clock)
     {
         _worldContext = worldContext;
+        _clock = clock ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -81,7 +92,7 @@ public sealed class InMemoryConversationStore : IConversationStore
         if (conversation.Status == ConversationStatus.Archived && conversation.ActiveSessionId is not null)
             throw new InvalidOperationException($"Conversation '{conversation.ConversationId}' cannot be archived while an active session is assigned.");
         StampWorldId(conversation);
-        conversation = conversation with { UpdatedAt = DateTimeOffset.UtcNow };
+        conversation = conversation with { UpdatedAt = _clock.GetUtcNow() };
         _conversations[conversation.ConversationId.Value] = conversation;
         return Task.CompletedTask;
     }
@@ -94,7 +105,7 @@ public sealed class InMemoryConversationStore : IConversationStore
             {
                 Status = ConversationStatus.Archived,
                 ActiveSessionId = null,
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = _clock.GetUtcNow()
             };
         return Task.CompletedTask;
     }
@@ -103,7 +114,7 @@ public sealed class InMemoryConversationStore : IConversationStore
     public Task TouchAsync(ConversationId conversationId, CancellationToken ct = default)
     {
         if (_conversations.TryGetValue(conversationId.Value, out var existing))
-            _conversations[conversationId.Value] = existing with { UpdatedAt = DateTimeOffset.UtcNow };
+            _conversations[conversationId.Value] = existing with { UpdatedAt = _clock.GetUtcNow() };
         return Task.CompletedTask;
     }
 
@@ -115,8 +126,8 @@ public sealed class InMemoryConversationStore : IConversationStore
             _conversations[conversationId.Value] = existing with
             {
                 IsPinned = pin,
-                PinnedAt = pin ? DateTimeOffset.UtcNow : null,
-                UpdatedAt = DateTimeOffset.UtcNow
+                PinnedAt = pin ? _clock.GetUtcNow() : null,
+                UpdatedAt = _clock.GetUtcNow()
             };
         }
         return Task.CompletedTask;
@@ -181,7 +192,7 @@ public sealed class InMemoryConversationStore : IConversationStore
             // Copy the binding list so a concurrent add builds on a private copy rather than
             // mutating a list that may be aliased by an already-returned GetAsync reference.
             var bindings = new List<ChannelBinding>(existing.ChannelBindings) { binding };
-            _conversations[conversationId.Value] = existing with { ChannelBindings = bindings, UpdatedAt = DateTimeOffset.UtcNow };
+            _conversations[conversationId.Value] = existing with { ChannelBindings = bindings, UpdatedAt = _clock.GetUtcNow() };
             return true;
         }
         finally { conversationLock.Release(); }
@@ -200,7 +211,7 @@ public sealed class InMemoryConversationStore : IConversationStore
             if (target is null)
                 return false;
             var bindings = existing.ChannelBindings.Where(b => b.BindingId != bindingId).ToList();
-            _conversations[conversationId.Value] = existing with { ChannelBindings = bindings, UpdatedAt = DateTimeOffset.UtcNow };
+            _conversations[conversationId.Value] = existing with { ChannelBindings = bindings, UpdatedAt = _clock.GetUtcNow() };
             return true;
         }
         finally { conversationLock.Release(); }
@@ -232,7 +243,7 @@ public sealed class InMemoryConversationStore : IConversationStore
             if (target is null)
                 return false;
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             var sourceBindings = source.ChannelBindings.Where(b => b.BindingId != bindingId).ToList();
             var destinationBindings = new List<ChannelBinding>(destination.ChannelBindings) { target };
             _conversations[fromConversationId.Value] = source with { ChannelBindings = sourceBindings, UpdatedAt = now };
@@ -261,7 +272,7 @@ public sealed class InMemoryConversationStore : IConversationStore
                 Title = patch.Title.IsSet ? patch.Title.Value : existing.Title,
                 Purpose = patch.Purpose.IsSet ? patch.Purpose.Value : existing.Purpose,
                 Instructions = patch.Instructions.IsSet ? patch.Instructions.Value : existing.Instructions,
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = _clock.GetUtcNow()
             };
             _conversations[conversationId.Value] = updated;
             return BackfillWorldId(updated);
@@ -285,7 +296,7 @@ public sealed class InMemoryConversationStore : IConversationStore
                 ThinkingOverride = patch.Thinking.IsSet ? patch.Thinking.Value : existing.ThinkingOverride,
                 ContextWindowOverride = patch.ContextWindow.IsSet ? patch.ContextWindow.Value : existing.ContextWindowOverride,
                 ToolOverrideJson = patch.ToolOverrideJson.IsSet ? patch.ToolOverrideJson.Value : existing.ToolOverrideJson,
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = _clock.GetUtcNow()
             };
             _conversations[conversationId.Value] = updated;
             return BackfillWorldId(updated);

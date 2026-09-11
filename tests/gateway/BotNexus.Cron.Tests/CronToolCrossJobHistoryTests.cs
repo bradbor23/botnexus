@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Cron.Tests.TestInfrastructure;
 using BotNexus.Cron.Tools;
 using BotNexus.Domain.Primitives;
@@ -21,10 +22,12 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task History_WithoutJobId_ReturnsRunsAcrossManageableJobsOnly()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-mine-1", "agent-a", CronRunStatus.Ok);
-        await SeedRunAsync(context, "job-mine-2", "agent-a", CronRunStatus.Error);
-        await SeedRunAsync(context, "job-theirs", "agent-b", CronRunStatus.Error);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-mine-1", "agent-a", CronRunStatus.Ok);
+        await SeedRunAsync(context, clock, "job-mine-2", "agent-a", CronRunStatus.Error);
+        await SeedRunAsync(context, clock, "job-theirs", "agent-b", CronRunStatus.Error);
 
         var tool = CreateScopedTool(context);
         var runs = await CronToolFailureAlertSurfaceTests.InvokeAsync(tool, new Dictionary<string, object?>
@@ -45,10 +48,12 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task History_WithoutJobId_FiltersToFailedRuns()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-ok", "agent-a", CronRunStatus.Ok);
-        await SeedRunAsync(context, "job-bad", "agent-a", CronRunStatus.Error);
-        await SeedRunAsync(context, "job-silent", "agent-a", CronRunStatus.NoToolCalls);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-ok", "agent-a", CronRunStatus.Ok);
+        await SeedRunAsync(context, clock, "job-bad", "agent-a", CronRunStatus.Error);
+        await SeedRunAsync(context, clock, "job-silent", "agent-a", CronRunStatus.NoToolCalls);
 
         var tool = CreateScopedTool(context);
         var runs = await CronToolFailureAlertSurfaceTests.InvokeAsync(tool, new Dictionary<string, object?>
@@ -75,9 +80,11 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task History_WithJobId_StillScopesToThatJob()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-one", "agent-a", CronRunStatus.Ok);
-        await SeedRunAsync(context, "job-two", "agent-a", CronRunStatus.Error);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-one", "agent-a", CronRunStatus.Ok);
+        await SeedRunAsync(context, clock, "job-two", "agent-a", CronRunStatus.Error);
 
         var tool = CreateScopedTool(context);
         var runs = await CronToolFailureAlertSurfaceTests.InvokeAsync(tool, new Dictionary<string, object?>
@@ -98,8 +105,10 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task History_WithoutJobId_ForAgentWithNoJobs_ReturnsEmpty()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-theirs", "agent-b", CronRunStatus.Error);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-theirs", "agent-b", CronRunStatus.Error);
 
         var tool = CreateScopedTool(context);
         var runs = await CronToolFailureAlertSurfaceTests.InvokeAsync(tool, new Dictionary<string, object?>
@@ -114,10 +123,12 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task Store_GetRecentRunsAsync_ScopesByJobIdsAndStatus()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-a", "agent-a", CronRunStatus.Error);
-        await SeedRunAsync(context, "job-b", "agent-a", CronRunStatus.Ok);
-        await SeedRunAsync(context, "job-c", "agent-b", CronRunStatus.Error);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-a", "agent-a", CronRunStatus.Error);
+        await SeedRunAsync(context, clock, "job-b", "agent-a", CronRunStatus.Ok);
+        await SeedRunAsync(context, clock, "job-c", "agent-b", CronRunStatus.Error);
 
         var scoped = await context.Store.GetRecentRunsAsync(
             [JobId.From("job-a"), JobId.From("job-b")],
@@ -139,8 +150,10 @@ public sealed class CronToolCrossJobHistoryTests
     [Fact]
     public async Task Store_GetRecentRunsAsync_WithEmptyScope_ReturnsNothing()
     {
-        await using var context = await CronStoreTestContext.CreateAsync();
-        await SeedRunAsync(context, "job-a", "agent-a", CronRunStatus.Error);
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var context = await CronStoreTestContext.CreateAsync(clock);
+        await SeedRunAsync(context, clock, "job-a", "agent-a", CronRunStatus.Error);
 
         var scoped = await context.Store.GetRecentRunsAsync([], statuses: null, limit: 20);
 
@@ -175,6 +188,7 @@ public sealed class CronToolCrossJobHistoryTests
 
     private static async Task SeedRunAsync(
         CronStoreTestContext context,
+        ManualTimeProvider clock,
         string jobId,
         string agentId,
         string status)
@@ -182,8 +196,9 @@ public sealed class CronToolCrossJobHistoryTests
         await context.Store.CreateAsync(CronStoreTestContext.CreateJob(jobId, agentId));
         var run = await context.Store.RecordRunStartAsync(JobId.From(jobId));
         await context.Store.RecordRunCompleteAsync(run.Id, status, status == CronRunStatus.Ok ? null : "boom");
-        // Distinct started_at instants so "newest first" is well-defined.
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(5);
+
+        // Distinct started_at instants so "newest first" is well-defined. Moving the store's own
+        // clock makes the gap exact instead of "at least 5ms", and costs nothing.
+        clock.Advance(TimeSpan.FromSeconds(1));
     }
 }

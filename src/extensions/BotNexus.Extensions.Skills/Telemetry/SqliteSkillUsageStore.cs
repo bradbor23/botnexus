@@ -40,13 +40,13 @@ public sealed class SqliteSkillUsageStore : ISkillUsageTelemetry, IAsyncDisposab
     /// Creates a store persisting to <paramref name="dbPath"/>. The parent directory is created on
     /// first use. Pass an <see cref="IFileSystem"/> in tests to run against an in-memory filesystem.
     /// </summary>
-    public SqliteSkillUsageStore(string dbPath, IFileSystem? fileSystem = null)
+    public SqliteSkillUsageStore(string dbPath, IFileSystem? fileSystem = null, TimeProvider? clock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         _dbPath = dbPath;
         _fileSystem = fileSystem ?? new FileSystem();
         _connectionString = $"Data Source={dbPath};Mode=ReadWriteCreate";
-        _store = new SqliteUsageTelemetryStore(dbPath, fileSystem);
+        _store = new SqliteUsageTelemetryStore(dbPath, fileSystem, clock);
     }
 
     /// <inheritdoc />

@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.World;
 using BotNexus.Gateway.Abstractions.Conversations;
@@ -812,7 +813,11 @@ public sealed class SqliteConversationStoreTests
     public async Task TouchAsync_CacheReflectsUpdatedAt_AfterTouchWithoutFullReload()
     {
         using var fixture = new StoreFixture();
-        var store = fixture.CreateStore();
+        // Seeded from the real clock, not a fixed past date: conversations created by the fixture
+        // carry real timestamps, and a clock starting in the past would stamp an EARLIER UpdatedAt
+        // than the one being compared against. Only the GAP needs to be deterministic.
+        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        var store = fixture.CreateStore(clock);
         var conversation = CreateConversation(Agent("agent-a"), "title");
         await store.CreateAsync(conversation);
 
@@ -820,8 +825,7 @@ public sealed class SqliteConversationStoreTests
         _ = await store.GetAsync(conversation.ConversationId);
         var before = (await store.GetAsync(conversation.ConversationId))!.UpdatedAt;
 
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(5); // ensure clock advances at least 1ms
+        clock.Advance(TimeSpan.FromSeconds(1));
         await store.TouchAsync(conversation.ConversationId);
 
         // GetAsync must return the updated timestamp from cache without a disk reload

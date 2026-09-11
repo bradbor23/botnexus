@@ -1,3 +1,4 @@
+using System.Globalization;
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.Text;
 using BotNexus.Domain.World;
@@ -16,6 +17,14 @@ public abstract class ConversationStoreContractTests
 {
     /// <summary>Creates a fresh store instance for a single test.</summary>
     protected abstract IConversationStore CreateStore();
+
+    /// <summary>
+    /// Creates a store whose timestamps come from <paramref name="clock"/>, so ordering and
+    /// "was it touched" assertions can move the clock instead of sleeping for the wall clock to
+    /// pass its resolution. Implementations that cannot inject one fall back to the default store;
+    /// the test then still asserts ordering, just without the exact gap.
+    /// </summary>
+    protected virtual IConversationStore CreateStore(TimeProvider clock) => CreateStore();
 
     /// <summary>
     /// Creates a store whose internal entity cache (if the implementation has one) is capped
@@ -356,13 +365,16 @@ public abstract class ConversationStoreContractTests
     [Fact]
     public async Task TouchAsync_UpdatesTimestamp()
     {
-        var store = CreateStore();
+        // Seeded from the real clock, not a fixed past date: conversations created by the fixture
+        // carry real timestamps, and a clock starting in the past would stamp an EARLIER UpdatedAt
+        // than the one being compared against. Only the GAP needs to be deterministic.
+        var clock = new ManualTimeProvider(TimeProvider.System.GetUtcNow());
+        var store = CreateStore(clock);
         var conv = MakeConversation();
         await store.CreateAsync(conv);
 
         var before = (await store.GetAsync(conv.ConversationId))!.UpdatedAt;
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(50); // Ensure time advances
+        clock.Advance(TimeSpan.FromSeconds(1));
         await store.TouchAsync(conv.ConversationId);
 
         var after = (await store.GetAsync(conv.ConversationId))!.UpdatedAt;

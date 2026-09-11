@@ -18,4 +18,12 @@ public sealed class FileConversationStoreParityTests : ConversationStoreContract
         _fs.Directory.CreateDirectory(rootPath);
         return new FileConversationStore(rootPath, NullLogger<FileConversationStore>.Instance, _fs);
     }
+
+    protected override IConversationStore CreateStore(TimeProvider clock)
+    {
+        var rootPath = "/conversations";
+        _fs.Directory.CreateDirectory(rootPath);
+        return new FileConversationStore(
+            rootPath, NullLogger<FileConversationStore>.Instance, _fs, worldContext: null, clock);
+    }
 }

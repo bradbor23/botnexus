@@ -39,6 +39,13 @@ public sealed class FileConversationStore : IConversationStore
     /// <param name="rootPath">Base directory under which <c>{agentId}/{conversationId}.json</c> files are stored.</param>
     /// <param name="logger">Logger.</param>
     /// <param name="fileSystem">Abstracted file system.</param>
+    /// <summary>
+    /// Stamps <c>UpdatedAt</c> and the other conversation timestamps. Defaults to
+    /// <see cref="TimeProvider.System"/>; tests substitute a manual clock so ordering and
+    /// "was it touched" assertions need no sleep for the wall clock to pass its resolution.
+    /// </summary>
+    private readonly TimeProvider _clock;
+
     public FileConversationStore(string rootPath, ILogger<FileConversationStore> logger, IFileSystem fileSystem)
         : this(rootPath, logger, fileSystem, worldContext: null)
     {
@@ -56,12 +63,14 @@ public sealed class FileConversationStore : IConversationStore
         string rootPath,
         ILogger<FileConversationStore> logger,
         IFileSystem fileSystem,
-        IWorldContext? worldContext)
+        IWorldContext? worldContext,
+        TimeProvider? clock = null)
     {
         _rootPath = rootPath;
         _logger = logger;
         _fileSystem = fileSystem;
         _worldContext = worldContext;
+        _clock = clock ?? TimeProvider.System;
         _fileSystem.Directory.CreateDirectory(rootPath);
     }
 
@@ -127,7 +136,7 @@ public sealed class FileConversationStore : IConversationStore
         if (conversation.Status == ConversationStatus.Archived && conversation.ActiveSessionId is not null)
             throw new InvalidOperationException($"Conversation '{conversation.ConversationId}' cannot be archived while an active session is assigned.");
         StampWorldId(conversation);
-        conversation = conversation with { UpdatedAt = DateTimeOffset.UtcNow };
+        conversation = conversation with { UpdatedAt = _clock.GetUtcNow() };
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try { await WriteFileAsync(conversation, ct).ConfigureAwait(false); }
         finally { _lock.Release(); }
@@ -143,7 +152,7 @@ public sealed class FileConversationStore : IConversationStore
             if (conversation is null)
                 return;
             await WriteFileAsync(
-                conversation with { Status = ConversationStatus.Archived, ActiveSessionId = null, UpdatedAt = DateTimeOffset.UtcNow },
+                conversation with { Status = ConversationStatus.Archived, ActiveSessionId = null, UpdatedAt = _clock.GetUtcNow() },
                 ct).ConfigureAwait(false);
         }
         finally { _lock.Release(); }
@@ -158,7 +167,7 @@ public sealed class FileConversationStore : IConversationStore
             var conversation = await FindByConversationIdAsync(conversationId, ct).ConfigureAwait(false);
             if (conversation is null)
                 return;
-            await WriteFileAsync(conversation with { UpdatedAt = DateTimeOffset.UtcNow }, ct).ConfigureAwait(false);
+            await WriteFileAsync(conversation with { UpdatedAt = _clock.GetUtcNow() }, ct).ConfigureAwait(false);
         }
         finally { _lock.Release(); }
     }
@@ -173,8 +182,8 @@ public sealed class FileConversationStore : IConversationStore
             if (conversation is null)
                 return;
             conversation.IsPinned = pin;
-            conversation.PinnedAt = pin ? DateTimeOffset.UtcNow : null;
-            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            conversation.PinnedAt = pin ? _clock.GetUtcNow() : null;
+            conversation.UpdatedAt = _clock.GetUtcNow();
             await WriteFileAsync(conversation, ct).ConfigureAwait(false);
         }
         finally { _lock.Release(); }
@@ -238,7 +247,7 @@ public sealed class FileConversationStore : IConversationStore
             if (conversation is null)
                 return false;
             conversation.ChannelBindings.Add(binding);
-            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            conversation.UpdatedAt = _clock.GetUtcNow();
             await WriteFileAsync(conversation, ct).ConfigureAwait(false);
             return true;
         }
@@ -258,7 +267,7 @@ public sealed class FileConversationStore : IConversationStore
             if (target is null)
                 return false;
             conversation.ChannelBindings.Remove(target);
-            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            conversation.UpdatedAt = _clock.GetUtcNow();
             await WriteFileAsync(conversation, ct).ConfigureAwait(false);
             return true;
         }
@@ -281,7 +290,7 @@ public sealed class FileConversationStore : IConversationStore
             if (target is null)
                 return false;
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             source.ChannelBindings.Remove(target);
             source.UpdatedAt = now;
             destination.ChannelBindings.Add(target);
@@ -309,7 +318,7 @@ public sealed class FileConversationStore : IConversationStore
                 conversation.Purpose = patch.Purpose.Value;
             if (patch.Instructions.IsSet)
                 conversation.Instructions = patch.Instructions.Value;
-            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            conversation.UpdatedAt = _clock.GetUtcNow();
             await WriteFileAsync(conversation, ct).ConfigureAwait(false);
             return BackfillWorldId(conversation);
         }
@@ -334,7 +343,7 @@ public sealed class FileConversationStore : IConversationStore
                 conversation.ContextWindowOverride = patch.ContextWindow.Value;
             if (patch.ToolOverrideJson.IsSet)
                 conversation.ToolOverrideJson = patch.ToolOverrideJson.Value;
-            conversation.UpdatedAt = DateTimeOffset.UtcNow;
+            conversation.UpdatedAt = _clock.GetUtcNow();
             await WriteFileAsync(conversation, ct).ConfigureAwait(false);
             return BackfillWorldId(conversation);
         }

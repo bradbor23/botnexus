@@ -12,9 +12,17 @@ public sealed class SqliteCronStore(
     string dbPath,
     IFileSystem? fileSystem = null,
     ILogger<SqliteCronStore>? logger = null,
-    Func<int>? retentionDaysAccessor = null) : ICronStore
+    Func<int>? retentionDaysAccessor = null,
+    TimeProvider? clock = null) : ICronStore
 {
     private readonly string _dbPath = dbPath;
+
+    /// <summary>
+    /// Stamps run timestamps and the retention window. Defaults to <see cref="TimeProvider.System"/>;
+    /// tests substitute a manual clock so "newest first" ordering can be asserted without sleeping
+    /// for the wall clock to pass its resolution.
+    /// </summary>
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     // #2641 AC6: the cost rollup window can never exceed the retention horizon, because the
     // retention service has already deleted everything older. Read through an accessor rather than
@@ -323,7 +331,7 @@ public sealed class SqliteCronStore(
         {
             var created = job with
             {
-                CreatedAt = job.CreatedAt == default ? DateTimeOffset.UtcNow : job.CreatedAt,
+                CreatedAt = job.CreatedAt == default ? _clock.GetUtcNow() : job.CreatedAt,
 
                 // #2554: the activation stamp is store-owned. Whatever the caller put on the
                 // record is discarded. It is set to null ("unknown"), not to "now": a create is
@@ -503,7 +511,7 @@ public sealed class SqliteCronStore(
             command.Parameters.AddWithValue(
                 "$expectedAgentId",
                 (object?)expectedOwnership?.AgentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$scheduleActivatedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$scheduleActivatedAt", _clock.GetUtcNow().ToString("O"));
             var affected = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
             // Zero rows is ambiguous on its own - the job may simply be gone - so distinguish the
@@ -737,7 +745,7 @@ public sealed class SqliteCronStore(
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             var run = new CronRun
             {
                 Id = RunId.Create(),
@@ -864,7 +872,7 @@ public sealed class SqliteCronStore(
                     completion_tokens = COALESCE($completionTokens, completion_tokens)
                 WHERE id = $runId
                 """;
-            command.Parameters.AddWithValue("$completedAt", DateTimeOffset.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$completedAt", _clock.GetUtcNow().ToString("O"));
             command.Parameters.AddWithValue("$status", status);
             command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
             command.Parameters.AddWithValue("$sessionId", sessionId.HasValue ? (object)sessionId.Value.Value : DBNull.Value);
@@ -905,7 +913,7 @@ public sealed class SqliteCronStore(
         // number that looks exactly like a correct one is worse than refusing to answer.
         var truncated = requestedDays > retentionDays;
         var effectiveDays = truncated ? retentionDays : requestedDays;
-        var windowStart = DateTimeOffset.UtcNow.AddDays(-effectiveDays);
+        var windowStart = _clock.GetUtcNow().AddDays(-effectiveDays);
 
         await using var connection = CreateConnection();
         await connection.OpenAsync(ct).ConfigureAwait(false);

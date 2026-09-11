@@ -48,10 +48,18 @@ public sealed class SqliteUsageTelemetryStore : IUsageTelemetry, IAsyncDisposabl
     /// Creates a store persisting to <paramref name="dbPath"/>. The parent directory is created on
     /// first use. Pass an <see cref="IFileSystem"/> in tests to run against an in-memory filesystem.
     /// </summary>
-    public SqliteUsageTelemetryStore(string dbPath, IFileSystem? fileSystem = null)
+    private readonly TimeProvider _clock;
+
+    /// <param name="clock">
+    /// Stamps <c>last_used_at</c>. Defaults to <see cref="TimeProvider.System"/>; tests substitute a
+    /// manual clock so "most recently used" ordering can be asserted without sleeping for the wall
+    /// clock to advance past its resolution.
+    /// </param>
+    public SqliteUsageTelemetryStore(string dbPath, IFileSystem? fileSystem = null, TimeProvider? clock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         _dbPath = dbPath;
+        _clock = clock ?? TimeProvider.System;
         _fileSystem = fileSystem ?? new FileSystem();
         _walMaintenance = new SqliteWalMaintenance(fileSystem);
         _connectionString = $"Data Source={dbPath};Mode=ReadWriteCreate";
@@ -123,7 +131,7 @@ public sealed class SqliteUsageTelemetryStore : IUsageTelemetry, IAsyncDisposabl
         {
             await using var connection = CreateConnection();
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            var now = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+            var now = _clock.GetUtcNow().ToString("O", CultureInfo.InvariantCulture);
 
             await using var entity = connection.CreateCommand();
             entity.CommandText = """
@@ -178,7 +186,7 @@ public sealed class SqliteUsageTelemetryStore : IUsageTelemetry, IAsyncDisposabl
             command.Parameters.AddWithValue("$ns", @namespace);
             command.Parameters.AddWithValue("$key", key);
             command.Parameters.AddWithValue("$createdBy", (object?)createdBy ?? DBNull.Value);
-            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$now", _clock.GetUtcNow().ToString("O", CultureInfo.InvariantCulture));
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         finally

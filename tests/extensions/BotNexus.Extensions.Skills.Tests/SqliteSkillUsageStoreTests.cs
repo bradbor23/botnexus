@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Abstractions.TestingHelpers;
 using BotNexus.Extensions.Skills.Telemetry;
 using Shouldly;
@@ -21,7 +22,7 @@ public sealed class SqliteSkillUsageStoreTests : IDisposable
         _dbPath = Path.Combine(_dir, "skill-usage.db");
     }
 
-    private SqliteSkillUsageStore NewStore() => new(_dbPath);
+    private SqliteSkillUsageStore NewStore(TimeProvider? clock = null) => new(_dbPath, clock: clock);
 
     // ── happy paths ────────────────────────────────────────────────────────────
 
@@ -87,17 +88,24 @@ public sealed class SqliteSkillUsageStoreTests : IDisposable
     [Fact]
     public async Task GetAll_OrdersByMostRecentlyUsedFirst()
     {
-        await using var store = NewStore();
+        var clock = new ManualTimeProvider(
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture));
+        await using var store = NewStore(clock);
 
         await store.RecordUseAsync("first");
-        // delay-is-not-a-signal: the clock must really advance so the two timestamps differ; this is a LOWER bound, so a loaded host lengthens it and can never shorten it
-        await Task.Delay(10);
+        clock.Advance(TimeSpan.FromSeconds(1));
         await store.RecordUseAsync("second");
 
         var all = await store.GetAllAsync();
         all.Count.ShouldBe(2);
         all[0].SkillName.ShouldBe("second");
         all[1].SkillName.ShouldBe("first");
+
+        // Ordering alone would hold with the real wall clock too. The exact gap proves the clock
+        // this store was constructed with is the one reaching the underlying telemetry store.
+        (all[0].LastUsedAt!.Value - all[1].LastUsedAt!.Value).ShouldBe(
+            TimeSpan.FromSeconds(1),
+            "last_used_at must be stamped from the injected clock.");
     }
 
     [Fact]
