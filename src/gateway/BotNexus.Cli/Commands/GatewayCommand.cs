@@ -69,13 +69,18 @@ internal sealed class GatewayCommand
         });
 
         // Status command
-        var statusCommand = new Command("status", "Check gateway process status");
+        var statusCommand = new Command("status", "Check gateway process status")
+        {
+            sourceOption
+        };
         statusCommand.SetHandler(async context =>
         {
             var target = context.ParseResult.GetValueForOption(targetOption);
+            var source = context.ParseResult.GetValueForOption(sourceOption);
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
             var home = CliPaths.ResolveTarget(target);
-            context.ExitCode = await StatusAsync(home, verbose, context.GetCancellationToken());
+            var repoRoot = CliPaths.ResolveSource(source);
+            context.ExitCode = await StatusAsync(home, repoRoot, verbose, context.GetCancellationToken());
         });
 
         // Restart command
@@ -354,8 +359,11 @@ internal sealed class GatewayCommand
         return 0;
     }
 
-    private async Task<int> StatusAsync(string home, bool verbose, CancellationToken cancellationToken)
+    private async Task<int> StatusAsync(string home, string repoRoot, bool verbose, CancellationToken cancellationToken)
     {
+        // Pass the binary path, exactly as StopAsync does since #102. Omitting it is what made the
+        // #2772 discovery fallback unreachable from this command.
+        var gatewayBinary = CliPaths.GatewayBinary(repoRoot);
         var interactive = AnsiConsole.Profile.Capabilities.Interactive;
         GatewayStatus status;
 
@@ -367,13 +375,13 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Checking gateway status...", async ctx =>
                 {
-                    capturedStatus = await _processManager.GetStatusAsync(home, cancellationToken);
+                    capturedStatus = await _processManager.GetStatusAsync(home, gatewayBinary, cancellationToken);
                 });
             status = capturedStatus;
         }
         else
         {
-            status = await _processManager.GetStatusAsync(home, cancellationToken);
+            status = await _processManager.GetStatusAsync(home, gatewayBinary, cancellationToken);
         }
 
         AnsiConsole.WriteLine();

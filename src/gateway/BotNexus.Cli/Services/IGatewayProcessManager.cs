@@ -43,7 +43,10 @@ public interface IGatewayProcessManager
     /// <returns>
     /// The current gateway status, including state, PID, and uptime if running.
     /// </returns>
-    Task<GatewayStatus> GetStatusAsync(string? homePath = null, CancellationToken cancellationToken = default);
+    Task<GatewayStatus> GetStatusAsync(
+        string? homePath = null,
+        string? gatewayBinaryPath = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Synchronously checks whether the gateway process is currently running.

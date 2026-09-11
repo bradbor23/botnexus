@@ -282,7 +282,9 @@ public sealed class GatewayPidIdentityTests : IDisposable
 
             status.State.ShouldBe(GatewayState.NotRunning);
             status.Pid.ShouldBeNull();
-            File.Exists(PidFilePath).ShouldBeFalse();
+            File.Exists(PidFilePath).ShouldBeTrue(
+                "status is read-only: the recycled-PID verdict is what matters, and deleting the file " +
+                "here removed the only record `stop` could have used");
 
             victim.Refresh();
             victim.HasExited.ShouldBeFalse();
