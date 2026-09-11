@@ -9458,8 +9458,16 @@ h3.conversation-title.editable:hover {
     z-index: 41;
     display: flex;
     flex-direction: column;
+    /* Size to the longest job name. The panel is absolutely positioned inside a ~114px-wide
+       .toolbar-dropdown, so shrink-to-fit resolves against THAT box, comes out under 20rem and is
+       clamped back up to min-width - it never consults the rows, and the 28rem max-width below is
+       unreachable. Measured on a real 8-job install: 2 names ellipsised at 320px with 128px of
+       declared headroom unused. max-content reaches 332px there and clips nothing.
+       The viewport term is belt-and-braces: a narrow window pushes this entry into the "More" menu,
+       where the panel does not render at all, but the cap costs nothing if that ever changes. */
+    width: max-content;
     min-width: 20rem;
-    max-width: 28rem;
+    max-width: min(28rem, calc(100vw - 1rem));
     /* Eight jobs fit; a long list scrolls rather than running off the viewport. */
     max-height: min(60vh, 28rem);
     overflow-y: auto;
