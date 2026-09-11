@@ -284,7 +284,7 @@ public sealed class GatewayRestClientTests
     [Fact]
     public void Configure_not_called_throws_on_request()
     {
-        var client = new GatewayRestClient(new HttpClient());
+        var client = new GatewayRestClient(OfflineTestHttp.Create());
         Should.Throw<InvalidOperationException>(() => client.GetAgentsAsync().GetAwaiter().GetResult());
     }
 

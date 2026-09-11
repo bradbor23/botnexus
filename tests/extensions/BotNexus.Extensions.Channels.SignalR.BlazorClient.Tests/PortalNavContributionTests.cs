@@ -65,7 +65,7 @@ public sealed class PortalNavContributionTests : IDisposable
                 new("botnexus-skills", "Skills", "1.0.0", true, null, null, null)
             });
 
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var gatewayInfo = new GatewayInfoService(http, restClient);
         _features = new ExtensionFeatureService(restClient);
 

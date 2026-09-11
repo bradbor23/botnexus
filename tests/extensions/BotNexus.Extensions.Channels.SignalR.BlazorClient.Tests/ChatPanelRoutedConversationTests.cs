@@ -60,7 +60,7 @@ public sealed class ChatPanelRoutedConversationTests : IDisposable
             new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create("http://localhost/"));
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
     }
 

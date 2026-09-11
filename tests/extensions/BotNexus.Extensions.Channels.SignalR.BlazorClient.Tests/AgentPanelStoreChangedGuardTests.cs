@@ -45,7 +45,7 @@ public sealed class AgentPanelStoreChangedGuardTests : IDisposable
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp =>
             new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient { BaseAddress = new Uri(BaseUri) });
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create(BaseUri));
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
     }
 

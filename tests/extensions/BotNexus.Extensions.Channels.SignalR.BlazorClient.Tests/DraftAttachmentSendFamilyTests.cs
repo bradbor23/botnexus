@@ -41,7 +41,7 @@ public sealed class DraftAttachmentSendFamilyTests : IDisposable
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(new SlashCommandDispatcher(_interaction));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
         _store.UpsertAgent(new AgentState { AgentId = "agent-1", DisplayName = "Agent", IsConnected = true });

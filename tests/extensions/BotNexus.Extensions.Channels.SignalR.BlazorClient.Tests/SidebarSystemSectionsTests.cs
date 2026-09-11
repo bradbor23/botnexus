@@ -40,7 +40,7 @@ public sealed class SidebarSystemSectionsTests : IDisposable
 
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
 
         _ctx.Services.AddSingleton<IClientStateStore>(_store);
         _ctx.Services.AddSingleton(interaction);

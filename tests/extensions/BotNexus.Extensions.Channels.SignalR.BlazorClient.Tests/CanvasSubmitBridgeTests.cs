@@ -23,7 +23,7 @@ public sealed class CanvasSubmitBridgeTests : IDisposable
     {
         _store.SeedAgents([new AgentSummary("agent-1", "Alpha")]);
         _ctx.Services.AddSingleton<IClientStateStore>(_store);
-        _ctx.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddScoped(_ => OfflineTestHttp.Create("http://localhost/"));
         _ctx.Services.AddSingleton<IAgentInteractionService>(_interaction);
         _ctx.JSInterop.SetupVoid("canvasBridge.register", _ => true);
         _ctx.JSInterop.SetupVoid("canvasBridge.unregister", _ => true);

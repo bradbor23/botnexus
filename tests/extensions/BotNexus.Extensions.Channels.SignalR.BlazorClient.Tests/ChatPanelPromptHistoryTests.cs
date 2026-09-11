@@ -36,7 +36,7 @@ public sealed class ChatPanelPromptHistoryTests : IDisposable
         _ctx.Services.AddSingleton(_interaction);
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(new SlashCommandDispatcher(_interaction));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create("http://localhost/"));
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences { ArchiveConfirmEnabled = false });
         _ctx.Services.AddSingleton(preferences);

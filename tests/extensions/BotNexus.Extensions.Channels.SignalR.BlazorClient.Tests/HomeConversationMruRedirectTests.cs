@@ -46,7 +46,7 @@ public sealed class HomeConversationMruRedirectTests : IDisposable
         _ctx.Services.AddSingleton<IConversationMruService>(_mru);
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
     }

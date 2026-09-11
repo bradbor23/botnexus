@@ -31,7 +31,7 @@ public sealed class ProbeRound2ComponentTests : IDisposable
         var restClient = Substitute.For<IGatewayRestClient>();
         _ctx.Services.AddSingleton(restClient);
         _ctx.Services.AddSingleton(Substitute.For<IChannelErrorReporter>());
-        var http = new HttpClient();
+        var http = OfflineTestHttp.Create();
         _ctx.Services.AddSingleton(http);
         _ctx.Services.AddSingleton(new ExtensionFeatureService(restClient));
         _ctx.Services.AddSingleton(new CronApiClient(http));
@@ -206,7 +206,7 @@ public sealed class ProbeRound2ComponentTests : IDisposable
         var hub = new GatewayHubConnection();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var gatewayInfo = new GatewayInfoService(http, restClient);
 
         ctx.Services.AddSingleton<IClientStateStore>(store);
@@ -255,7 +255,7 @@ public sealed class ProbeRound2ComponentTests : IDisposable
         var hub = new GatewayHubConnection();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var gatewayInfo = new GatewayInfoService(http, restClient);
 
         _ctx.Services.AddSingleton(portalLoad);

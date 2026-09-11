@@ -24,7 +24,7 @@ public sealed class ChatPanelTests : IDisposable
         _ctx.Services.AddSingleton(_interaction);
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences { ArchiveConfirmEnabled = false });
         _ctx.Services.AddSingleton(preferences);

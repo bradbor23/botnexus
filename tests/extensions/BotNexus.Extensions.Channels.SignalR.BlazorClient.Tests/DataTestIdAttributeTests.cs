@@ -30,7 +30,7 @@ public sealed class DataTestIdAttributeTests : IDisposable
         var hub = new GatewayHubConnection();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var gatewayInfo = new GatewayInfoService(http, restClient);
         var mockPrefs = Substitute.For<IPortalPreferencesService>();
         mockPrefs.Current.Returns(new PortalPreferences());

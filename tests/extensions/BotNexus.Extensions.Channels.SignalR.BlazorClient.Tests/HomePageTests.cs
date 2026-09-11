@@ -137,7 +137,7 @@ public sealed class HomePageTests : IDisposable
         _ctx.Services.AddSingleton(Substitute.For<IAgentInteractionService>());
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         var cut = _ctx.Render<Home>();
@@ -161,7 +161,7 @@ public sealed class HomePageTests : IDisposable
         _ctx.Services.AddSingleton(Substitute.For<IAgentInteractionService>());
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         var cut = _ctx.Render<Home>();
@@ -185,7 +185,7 @@ public sealed class HomePageTests : IDisposable
         _portalLoad.IsLoading.Returns(true, false);
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p.Add(c => c.AgentId, "agent-2"));
@@ -218,7 +218,7 @@ public sealed class HomePageTests : IDisposable
             agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p
@@ -246,7 +246,7 @@ public sealed class HomePageTests : IDisposable
             agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p.Add(c => c.AgentId, "agent-2"));
@@ -283,7 +283,7 @@ public sealed class HomePageTests : IDisposable
             agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p
@@ -322,7 +322,7 @@ public sealed class HomePageTests : IDisposable
             agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p
@@ -361,7 +361,7 @@ public sealed class HomePageTests : IDisposable
             agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p
@@ -398,7 +398,7 @@ public sealed class HomePageTests : IDisposable
         _store.GetAgent(Arg.Any<string>()).Returns(ci => agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p
@@ -424,7 +424,7 @@ public sealed class HomePageTests : IDisposable
         _store.GetAgent(Arg.Any<string>()).Returns(ci => agents.GetValueOrDefault(ci.ArgAt<string>(0)));
 
         _ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
 
         _ctx.Render<Home>(p => p.Add(c => c.AgentId, "farnsworth"));
@@ -464,7 +464,7 @@ public sealed class HomePageTests : IDisposable
         ctx.Services.AddSingleton<IConversationMruService, ConversationMruService>();
         ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         ctx.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        ctx.Services.AddSingleton(new HttpClient());
+        ctx.Services.AddSingleton(OfflineTestHttp.Create());
         ctx.Services.AddSingleton(Substitute.For<IPortalPreferencesService>());
         ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
