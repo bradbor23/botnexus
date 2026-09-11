@@ -290,6 +290,32 @@ public sealed class ClientStateStore : IClientStateStore, IDisplayedConversation
     }
 
     /// <inheritdoc />
+    public bool RemoveSynthesisedConversation(string agentId, string conversationId)
+    {
+        if (!_agents.TryGetValue(agentId, out var agent))
+            return false;
+        if (!agent.Conversations.TryGetValue(conversationId, out var conversation))
+            return false;
+
+        // The guard is the point of this method: a real conversation that 404s is a transient
+        // server condition, not a reason to delete the user's row.
+        if (!conversation.IsLocallySynthesised)
+            return false;
+
+        agent.Conversations.Remove(conversationId);
+
+        // Leave the selection resolvable rather than pointing at a conversation that is gone. The
+        // caller re-selects; this only stops the dangling reference.
+        if (agent.ActiveConversationId == conversationId)
+            agent.ActiveConversationId = null;
+        if (agent.SessionId is { Length: > 0 } && agent.SessionId == conversation.ActiveSessionId)
+            agent.SessionId = null;
+
+        NotifyChanged();
+        return true;
+    }
+
+    /// <inheritdoc />
     public ConversationState? GetConversation(string conversationId)
     {
         foreach (var agent in _agents.Values)
