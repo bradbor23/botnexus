@@ -22,7 +22,7 @@ public sealed class ConnectionStatusReconnectingTests : IDisposable
     [Fact]
     public void Shows_Reconnecting_while_redial_loop_is_active()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p
             .Add(c => c.Hub, hub)
@@ -43,7 +43,7 @@ public sealed class ConnectionStatusReconnectingTests : IDisposable
     [Fact]
     public void Shows_Disconnected_when_redial_loop_is_not_active()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p
             .Add(c => c.Hub, hub)
@@ -60,7 +60,7 @@ public sealed class ConnectionStatusReconnectingTests : IDisposable
     [Fact]
     public void Defaults_to_Disconnected_when_parameter_is_omitted()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
 
         var cut = _ctx.Render<ConnectionStatus>(p => p.Add(c => c.Hub, hub));
 

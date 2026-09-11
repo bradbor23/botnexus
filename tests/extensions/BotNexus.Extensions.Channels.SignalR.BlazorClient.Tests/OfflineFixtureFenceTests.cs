@@ -42,34 +42,100 @@ public sealed class OfflineFixtureFenceTests
     private static readonly Regex UnstubbedClient =
         new(@"new HttpClient\s*(?:\(\s*\))?\s*(?:\{|;|\)|,|$)", RegexOptions.Multiline);
 
+    /// <summary>
+    /// Matches a raw hub construction in BOTH shapes: <c>new GatewayHubConnection(...)</c> and the
+    /// target-typed <c>GatewayHubConnection _hub = new();</c>.
+    /// <para>
+    /// The second alternative is not defensive padding. The first version of this fence matched only
+    /// the explicit form, and six fixtures used the target-typed one - including
+    /// <c>PortalLoadServiceTests</c>, the file whose failures prompted the fence. It passed its own
+    /// mutation test because the mutation happened to use the shape it did match. A fence has to be
+    /// pointed at the shape the code actually uses, not the shape you had in mind.
+    /// </para>
+    /// <para>
+    /// Unlike the client above there is no "with a handler" form to exempt: the handler is a settable
+    /// property, so it is set on a LATER line and a per-line regex could never see it. Requiring one
+    /// factory keeps the rule checkable by a single line and gives the reason one place to live.
+    /// </para>
+    /// </summary>
+    private static readonly Regex RawHubConstruction =
+        new(@"new\s+GatewayHubConnection\s*\(|GatewayHubConnection\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*new\s*\(",
+            RegexOptions.Multiline);
+
+    /// <summary>
+    /// SignalR builds its own HTTP client, so <see cref="OfflineTestHttp"/> does not cover the hub:
+    /// a fixture holding a real <c>GatewayHubConnection</c> still opens a socket when something
+    /// drives <c>InitializeAsync</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is not hypothetical either. Both <c>PortalLoadServiceTests</c> 404 tests assert that a
+    /// history 404 never reaches <c>InitializeAsync</c>'s top-level catch, by checking
+    /// <c>LoadError</c> mentions no "404" - and the only other thing that can reach that catch is
+    /// the hub connect. They passed while nothing was listening on the fixture's port and failed
+    /// once a stray dev server answered 404 there, having caught ITS 404 instead of the one under
+    /// test. Reaching the connect requires the REST calls to succeed first, which is why only a
+    /// fixture that substitutes <c>IGatewayRestClient</c> ever got far enough to notice.
+    /// </remarks>
+    [Fact]
+    public void Fixtures_DoNotConstructHubsThatReachTheNetwork()
+    {
+        var offenders = new List<string>();
+
+        foreach (var file in FixtureSources())
+        {
+            var lines = File.ReadAllLines(file);
+            for (var index = 0; index < lines.Length; index++)
+            {
+                var code = StripComment(lines[index]);
+                if (RawHubConstruction.IsMatch(code))
+                    offenders.Add($"{Path.GetFileName(file)}:{index + 1}");
+            }
+        }
+
+        offenders.ShouldBeEmpty(
+            "A fixture must build its hub with OfflineTestHub.Create(), so the suite never depends " +
+            "on what is listening on a port of the host running it. SignalR builds its own HTTP " +
+            "client, so OfflineTestHttp does not cover this - the hub's negotiate goes to a real " +
+            $"socket.{Environment.NewLine}" +
+            string.Join(Environment.NewLine, offenders));
+    }
+
+    /// <summary>Pins the hub boundary, including that the approved factory is not an offender.</summary>
+    [Theory]
+    [InlineData("var hub = new GatewayHubConnection();", true)]
+    [InlineData("        new GatewayHubConnection(),", true)]
+    [InlineData("var h = new GatewayEventHandler(store, new GatewayHubConnection(), logger, store);", true)]
+    // The shape the first version of this fence missed, in six files.
+    [InlineData("    private readonly GatewayHubConnection _hub = new();", true)]
+    [InlineData("GatewayHubConnection hub = new() { };", true)]
+    [InlineData("var hub = OfflineTestHub.Create();", false)]
+    [InlineData("        OfflineTestHub.Create(),", false)]
+    [InlineData("    private readonly GatewayHubConnection _hub = OfflineTestHub.Create();", false)]
+    public void HubFence_MatchesOnlyRawConstructions(string source, bool expectedOffender)
+        => RawHubConstruction.IsMatch(source).ShouldBe(expectedOffender);
+
+    /// <summary>The factory must refuse without a socket, like its HttpClient sibling.</summary>
+    [Fact]
+    public void OfflineHub_CarriesAHandlerThatRefusesWithoutASocket()
+    {
+        var hub = OfflineTestHub.Create();
+
+        hub.TestHttpHandler.ShouldNotBeNull();
+    }
+
     [Fact]
     public void Fixtures_DoNotConstructHttpClientsThatReachTheNetwork()
     {
         var offenders = new List<string>();
 
-        foreach (var file in Directory.EnumerateFiles(ProjectRoot(), "*.cs", SearchOption.AllDirectories))
+        foreach (var file in FixtureSources())
         {
-            var name = Path.GetFileName(file);
-            // The helper and this fence both name the banned form in prose, by necessity.
-            if (string.Equals(name, "OfflineTestHttp.cs", StringComparison.Ordinal)
-                || string.Equals(name, "OfflineFixtureFenceTests.cs", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
-                || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
             var lines = File.ReadAllLines(file);
             for (var index = 0; index < lines.Length; index++)
             {
-                var line = lines[index];
-                var comment = line.IndexOf("//", StringComparison.Ordinal);
-                var code = comment < 0 ? line : line[..comment];
+                var code = StripComment(lines[index]);
                 if (UnstubbedClient.IsMatch(code))
-                    offenders.Add($"{name}:{index + 1}");
+                    offenders.Add($"{Path.GetFileName(file)}:{index + 1}");
             }
         }
 
@@ -107,6 +173,35 @@ public sealed class OfflineFixtureFenceTests
         var thrown = await Should.ThrowAsync<HttpRequestException>(() => client.GetAsync("/api/cron"));
 
         thrown.Message.ShouldContain("offline by design");
+    }
+
+    /// <summary>
+    /// Fixture sources to scan. The offline helpers and this fence are excluded because all three
+    /// necessarily name the banned forms - in an approved construction or in prose.
+    /// </summary>
+    private static IEnumerable<string> FixtureSources()
+    {
+        var excluded = new[] { "OfflineTestHttp.cs", "OfflineTestHub.cs", "OfflineFixtureFenceTests.cs" };
+
+        foreach (var file in Directory.EnumerateFiles(ProjectRoot(), "*.cs", SearchOption.AllDirectories))
+        {
+            if (excluded.Contains(Path.GetFileName(file), StringComparer.Ordinal))
+                continue;
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return file;
+        }
+    }
+
+    /// <summary>Drops a trailing line comment, so prose naming a banned form is not an offender.</summary>
+    private static string StripComment(string line)
+    {
+        var comment = line.IndexOf("//", StringComparison.Ordinal);
+        return comment < 0 ? line : line[..comment];
     }
 
     /// <summary>

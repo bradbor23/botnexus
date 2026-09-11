@@ -22,7 +22,7 @@ public sealed class SessionDebugPanelWiringTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         var http = OfflineTestHttp.Create("http://localhost/");

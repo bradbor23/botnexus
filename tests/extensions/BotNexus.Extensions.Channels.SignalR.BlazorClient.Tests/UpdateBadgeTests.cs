@@ -27,7 +27,7 @@ public sealed class UpdateBadgeTests : IDisposable
         portalLoad.IsLoading.Returns(false);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         var http = OfflineTestHttp.Create("http://localhost/");

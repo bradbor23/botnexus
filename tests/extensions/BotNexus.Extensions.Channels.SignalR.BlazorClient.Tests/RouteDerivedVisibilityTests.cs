@@ -34,7 +34,7 @@ public sealed class RouteDerivedVisibilityTests
     public RouteDerivedVisibilityTests()
     {
         _handler = new GatewayEventHandler(
-            _store, new GatewayHubConnection(), NullLogger<GatewayEventHandler>.Instance, _store);
+            _store, OfflineTestHub.Create(), NullLogger<GatewayEventHandler>.Instance, _store);
 
         // Two agents. agent-1 has the displayed conversation (conv-shown) plus a second,
         // non-displayed one (conv-hidden). agent-2 is an entirely different agent.

@@ -28,7 +28,7 @@ public sealed class GatewayCommandDispatchTests
         var rest = Substitute.For<IGatewayRestClient>();
         var service = new AgentInteractionService(
             store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             rest,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentInteractionService>.Instance);
 

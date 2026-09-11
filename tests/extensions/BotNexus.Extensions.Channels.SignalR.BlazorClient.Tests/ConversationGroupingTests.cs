@@ -26,7 +26,7 @@ public sealed class ConversationGroupingTests : IDisposable
         _portalLoad.IsLoading.Returns(true);
         _portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         var http = OfflineTestHttp.Create("http://localhost/");
@@ -467,7 +467,7 @@ public sealed class ConversationGroupingTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
         ctx.Services.AddSingleton(portalLoad);
-        ctx.Services.AddSingleton(new GatewayHubConnection());
+        ctx.Services.AddSingleton(OfflineTestHub.Create());
         ctx.Services.AddSingleton(new GatewayInfoService(httpWithMock, restClient));
         ctx.Services.AddSingleton(Substitute.For<IUpdateStatusService>());
         var mockPrefs = Substitute.For<IPortalPreferencesService>();

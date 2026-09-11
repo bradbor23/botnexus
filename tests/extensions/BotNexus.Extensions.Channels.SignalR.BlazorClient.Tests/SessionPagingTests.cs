@@ -107,7 +107,7 @@ public sealed class SessionPagingTests
     private static AgentInteractionService CreateInteractionService(IClientStateStore store, IGatewayRestClient restClient)
         => new(
             store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             restClient,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentInteractionService>.Instance);
 
@@ -296,7 +296,7 @@ public sealed class SessionPagingTests
         var restClient = Substitute.For<IGatewayRestClient>();
         var service = new PortalLoadService(
             restClient,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             store,
             Substitute.For<IGatewayEventHandler>());
 

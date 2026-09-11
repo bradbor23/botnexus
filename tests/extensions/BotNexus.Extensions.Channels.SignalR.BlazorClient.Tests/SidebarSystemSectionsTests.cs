@@ -46,7 +46,7 @@ public sealed class SidebarSystemSectionsTests : IDisposable
         _ctx.Services.AddSingleton(interaction);
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(portalLoad);
-        _ctx.Services.AddSingleton(new GatewayHubConnection());
+        _ctx.Services.AddSingleton(OfflineTestHub.Create());
         _ctx.Services.AddSingleton(new GatewayInfoService(http, restClient));
         _ctx.Services.AddSingleton(Substitute.For<IUpdateStatusService>());
         var prefs = Substitute.For<IPortalPreferencesService>();

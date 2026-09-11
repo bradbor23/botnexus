@@ -27,7 +27,7 @@ public sealed class DataTestIdAttributeTests : IDisposable
         portalLoad.IsLoading.Returns(true);
         portalLoad.LoadError.Returns((string?)null);
 
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
         var http = OfflineTestHttp.Create("http://localhost/");
@@ -433,7 +433,7 @@ public sealed class DataTestIdAttributeTests : IDisposable
     [Fact]
     public void ConnectionStatus_has_connection_status_testid()
     {
-        var hub = new GatewayHubConnection();
+        var hub = OfflineTestHub.Create();
         var cut = _ctx.Render<ConnectionStatus>(p => p.Add(c => c.Hub, hub));
 
         cut.Find("[data-testid='connection-status']");

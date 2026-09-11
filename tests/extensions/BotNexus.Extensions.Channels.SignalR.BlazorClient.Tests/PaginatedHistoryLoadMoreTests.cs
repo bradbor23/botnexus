@@ -19,7 +19,7 @@ public sealed class PaginatedHistoryLoadMoreTests
     {
         _service = new AgentInteractionService(
             _store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             _restClient,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentInteractionService>.Instance);
         _store.UpsertAgent(new AgentState { AgentId = "agent-1", DisplayName = "Agent 1", IsConnected = true });

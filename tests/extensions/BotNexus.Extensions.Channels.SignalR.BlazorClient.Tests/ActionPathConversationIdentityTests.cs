@@ -33,7 +33,7 @@ public sealed class ActionPathConversationIdentityTests
     {
         _service = new AgentInteractionService(
             _store,
-            new GatewayHubConnection(),
+            OfflineTestHub.Create(),
             _restClient,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentInteractionService>.Instance);
 

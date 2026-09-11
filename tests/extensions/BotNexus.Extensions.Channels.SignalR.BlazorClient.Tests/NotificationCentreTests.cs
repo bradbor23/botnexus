@@ -27,7 +27,7 @@ public sealed class NotificationCentreTests : IDisposable
     public NotificationCentreTests()
     {
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-        _ctx.Services.AddSingleton(new GatewayHubConnection());
+        _ctx.Services.AddSingleton(OfflineTestHub.Create());
 
         // Registered exactly as production does. Left unplanned, the JS calls return null under
         // Loose interop, which is what an absent script looks like - so the default here is a
