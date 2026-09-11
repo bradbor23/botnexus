@@ -72,6 +72,146 @@ public sealed class SchemaFormTests : IDisposable
                 p.Add(c => c.ValueChanged, EventCallback.Factory.Create(this, onChange));
         });
 
+    // -- Collapsible groups (#143) -------------------------------------------
+
+    // A section with `count` nested objects, each holding `fieldsPer` leaf fields. Shapes the real
+    // Gateway section: one root object whose children are the groups that carry the toggles.
+    private static JsonObject SectionWithGroups(int count, int fieldsPer, string rootName = "gateway")
+    {
+        var groups = new JsonObject();
+        for (var g = 0; g < count; g++)
+        {
+            var props = new JsonObject();
+            for (var f = 0; f < fieldsPer; f++)
+                props[$"f{f}"] = Scalar("string", "text", $"Field {f}");
+            groups[$"g{g}"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["x-ui-label"] = $"Group {g}",
+                ["properties"] = props,
+            };
+        }
+        return Envelope(new JsonObject
+        {
+            [rootName] = new JsonObject
+            {
+                ["type"] = "object",
+                ["x-ui-label"] = "Gateway",
+                ["properties"] = groups,
+            },
+        });
+    }
+
+    /// <summary>
+    /// The measured defect: the live Gateway section renders 184 fields in one 20975px column, 23
+    /// screens of scroll, because nothing collapses. Past the size gate its groups start collapsed,
+    /// so the section opens as a navigable index instead.
+    /// </summary>
+    [Fact]
+    public void Large_section_starts_with_its_groups_collapsed()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        var toggles = cut.FindAll("[data-testid^='group-toggle-']");
+        Assert.Equal(12, toggles.Count);
+        Assert.All(toggles, t => Assert.Equal("false", t.GetAttribute("aria-expanded")));
+
+        // Collapsed means the fields are genuinely absent, not merely hidden by CSS - bUnit has no
+        // layout engine, so a display:none assertion would prove nothing here.
+        Assert.Empty(cut.FindAll("[data-testid^='field-']"));
+    }
+
+    /// <summary>
+    /// The other side of the gate, and the reason it exists: the eight short sections on the live
+    /// install carry 18 fields or fewer. They must look exactly as they did before this feature.
+    /// </summary>
+    [Fact]
+    public void Small_section_starts_expanded_and_shows_no_toolbar()
+    {
+        var cut = Render(SectionWithGroups(count: 3, fieldsPer: 4), new JsonObject());
+
+        var toggles = cut.FindAll("[data-testid^='group-toggle-']");
+        Assert.Equal(3, toggles.Count);
+        Assert.All(toggles, t => Assert.Equal("true", t.GetAttribute("aria-expanded")));
+        Assert.Equal(12, cut.FindAll("[data-testid^='field-']").Count);
+    }
+
+    [Fact]
+    public void Toggling_a_group_reveals_only_that_group()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].Click();
+
+        Assert.Equal("true", cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].GetAttribute("aria-expanded"));
+        // Six fields from g0 and nothing from the other eleven groups.
+        Assert.Equal(6, cut.FindAll("[data-testid^='field-']").Count);
+        Assert.NotEmpty(cut.FindAll("[data-testid='field-gateway.g0.f0']"));
+        Assert.Empty(cut.FindAll("[data-testid='field-gateway.g1.f0']"));
+
+        // And it closes again, so the chevron is a toggle rather than a one-way door.
+        cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].Click();
+        Assert.Empty(cut.FindAll("[data-testid^='field-']"));
+    }
+
+    /// <summary>
+    /// Collapsing by default costs one real thing: the browser's own Ctrl+F cannot see inside a
+    /// collapsed group. "Expand all" is the mitigation, so it is load-bearing, not decoration.
+    /// </summary>
+    [Fact]
+    public void Expand_all_lays_the_whole_section_open_and_collapse_all_closes_it()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+        Assert.Empty(cut.FindAll("[data-testid^='field-']"));
+
+        cut.FindAll("[data-testid='schema-expand-all']")[0].Click();
+        Assert.Equal(72, cut.FindAll("[data-testid^='field-']").Count);
+        Assert.All(cut.FindAll("[data-testid^='group-toggle-']"),
+            t => Assert.Equal("true", t.GetAttribute("aria-expanded")));
+
+        cut.FindAll("[data-testid='schema-collapse-all']")[0].Click();
+        Assert.Empty(cut.FindAll("[data-testid^='field-']"));
+    }
+
+    [Fact]
+    public void Group_toggle_is_a_real_button_carrying_its_field_count()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        var toggle = cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0];
+        // A <button>, not a click handler on the legend text: that is what makes the group
+        // keyboard-reachable and announced as expandable.
+        Assert.Equal("BUTTON", toggle.TagName);
+        Assert.Equal("button", toggle.GetAttribute("type"));
+        Assert.NotNull(toggle.GetAttribute("aria-controls"));
+        // The count is what makes a collapsed list scannable - you can pick a group without
+        // opening several to find out what is in them.
+        Assert.Contains("6", toggle.TextContent);
+    }
+
+    /// <summary>
+    /// The section's own root must never carry a toggle. Collapsing it would hide the entire panel
+    /// behind a single line - measured at 102px against 20975px, which is not a feature.
+    /// </summary>
+    [Fact]
+    public void Section_root_is_not_collapsible()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        Assert.NotEmpty(cut.FindAll("[data-testid='object-gateway']"));
+        Assert.Empty(cut.FindAll("[data-testid='group-toggle-gateway']"));
+        // Its legend is still plain text, so the section title always reads.
+        Assert.Contains("Gateway", cut.Find("[data-testid='object-gateway'] > legend").TextContent);
+    }
+
+    [Fact]
+    public void Toolbar_is_hidden_when_there_is_nothing_to_act_on()
+    {
+        // One group: "Expand all" would be a button that does what the one chevron already does.
+        var cut = Render(SectionWithGroups(count: 1, fieldsPer: 3), new JsonObject());
+        Assert.Empty(cut.FindAll("[data-testid='schema-form-toolbar']"));
+    }
+
     // -- 1. Renders all widget types ----------------------------------------
 
     [Fact]

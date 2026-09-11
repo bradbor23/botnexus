@@ -8311,6 +8311,116 @@ h3.conversation-title.editable:hover {
     background: var(--bg-secondary);
 }
 
+/* ── Collapsible groups ───────────────────────────────────────────────────── */
+
+/* The legend above floats with width:100%, and the card relied on `legend + *` to clear it. A
+   COLLAPSED card has no in-flow child left to do that, so it would render zero-height with its own
+   title spilling out. flow-root makes the card contain its float instead. */
+.schema-object-collapsible.collapsed {
+    display: flow-root;
+    /* A collapsed card is a ROW in an index, not a card with nothing in it. It keeps the expanded
+       card's horizontal padding so the titles stay in one line down the page, and loses the
+       vertical padding it no longer needs - the point of collapsing is to fit more groups on a
+       screen, and the untrimmed version wasted ~40px per row doing the opposite. */
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+}
+
+/* The legend's 0.6rem bottom margin separates it from content that, here, is not there. */
+.schema-object-collapsible.collapsed > legend {
+    margin-bottom: 0;
+}
+
+/* The toggle is a real <button> so it is focusable and announced; it inherits the legend's type so
+   a collapsed row reads identically to the heading it replaces. */
+.schema-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.schema-group-toggle:hover .schema-group-toggle-label {
+    color: var(--text-primary);
+}
+
+.schema-group-chevron {
+    flex: none;
+    font-size: 0.7em;
+    color: var(--text-muted);
+    transition: transform 120ms ease;
+}
+
+.schema-group-chevron.expanded {
+    transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .schema-group-chevron {
+        transition: none;
+    }
+}
+
+.schema-group-toggle-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* The field count is what makes a collapsed list worth reading: it says how much is behind each
+   row, so you can pick a group without opening several to find out. */
+.schema-group-count {
+    flex: none;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    font-size: var(--text-caption);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+.schema-object-collapsible.collapsed .schema-group-count {
+    background: var(--color-wash);
+}
+
+/* ── Expand / collapse all ────────────────────────────────────────────────── */
+
+.schema-form-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.9rem;
+}
+
+.schema-form-toolbar-count {
+    margin-right: auto;
+    font-size: var(--text-caption);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.schema-form-toolbar-btn {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: var(--text-caption);
+    cursor: pointer;
+}
+
+.schema-form-toolbar-btn:hover {
+    background: var(--color-wash);
+    color: var(--text-primary);
+}
+
 /* ── Buckets inside a card ────────────────────────────────────────────────── */
 
 .schema-subgroup {

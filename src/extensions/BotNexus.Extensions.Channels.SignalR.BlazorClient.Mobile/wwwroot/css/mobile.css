@@ -951,6 +951,71 @@ body {
     color: #a9c4e0;
 }
 
+/* Collapsible groups. SchemaForm is shared with the desktop portal, so these classes arrive here
+   too and would otherwise render as a raw browser button. Mobile's .schema-object is flex rather
+   than float-legend, so it needs no equivalent of the desktop flow-root fix. */
+.settings-body .schema-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: #a9c4e0;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+}
+
+.settings-body .schema-group-chevron {
+    flex: none;
+    font-size: 9px;
+    color: #7a9cbf;
+}
+
+.settings-body .schema-group-chevron.expanded {
+    transform: rotate(90deg);
+}
+
+.settings-body .schema-group-toggle-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.settings-body .schema-group-count {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(100, 160, 220, 0.15);
+    font-size: 11px;
+    font-weight: 500;
+    color: #7a9cbf;
+}
+
+.settings-body .schema-form-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.settings-body .schema-form-toolbar-count {
+    margin-right: auto;
+    font-size: 11px;
+    color: #7a9cbf;
+}
+
+.settings-body .schema-form-toolbar-btn {
+    padding: 5px 10px;
+    border: 1px solid rgba(100, 160, 220, 0.25);
+    border-radius: 6px;
+    background: #0d1926;
+    color: #a9c4e0;
+    font-size: 12px;
+}
+
 .settings-body .schema-dict-entry {
     display: flex;
     flex-direction: column;
