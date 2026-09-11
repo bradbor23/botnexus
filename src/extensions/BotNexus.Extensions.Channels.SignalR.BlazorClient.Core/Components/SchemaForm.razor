@@ -1,8 +1,12 @@
+@using System.Text.Json
 @using System.Text.Json.Nodes
 @using System.Globalization
 @using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
 @using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services
 @inject IModelOptionsProvider ModelOptions
+@inject IJSRuntime JS
 
 @*
     Generic config renderer (PBI 3/6 of #1579, issue #1611). Walks the UI-schema envelope from
@@ -20,6 +24,19 @@
 else
 {
     <div class="schema-form" data-testid="schema-form">
+        @if (CollapsibleGroupPaths().Count > 1)
+        {
+            @* Only shown when there is more than one group to act on. It is also the mitigation for
+               the one real cost of collapsing by default: the browser's own Ctrl+F cannot see inside
+               a collapsed group, so there must be a one-click way to lay the whole section open. *@
+            <div class="schema-form-toolbar" data-testid="schema-form-toolbar">
+                <span class="schema-form-toolbar-count">@CollapsibleGroupPaths().Count groups</span>
+                <button type="button" class="schema-form-toolbar-btn" data-testid="schema-expand-all"
+                        @onclick="ExpandAllAsync">Expand all</button>
+                <button type="button" class="schema-form-toolbar-btn" data-testid="schema-collapse-all"
+                        @onclick="CollapseAllAsync">Collapse all</button>
+            </div>
+        }
         @foreach (var group in GroupedRoot)
         {
             <div class="schema-group" data-group="@group.Key">
@@ -29,7 +46,7 @@ else
                 }
                 @foreach (var (name, node) in group.Value)
                 {
-                    @RenderNode(name, node, name)
+                    @RenderNode(name, node, name, 0)
                 }
             </div>
         }
@@ -78,6 +95,129 @@ else
     public string? SectionKey { get; set; }
 
     private const string SecretSentinel = "***";
+
+    /// <summary>
+    /// Above this many leaf fields in the rendered section, depth-1 groups start COLLAPSED. Below it
+    /// they start open, so a short section looks exactly as it did before this was added.
+    /// <para>
+    /// Measured on the live install rather than guessed: the Gateway section carries 184 fields and
+    /// scrolls 20975px (23 screens at 900px tall); Providers carries 18 and the remaining seven
+    /// sections two or fewer. Any threshold between 19 and 183 separates them, so this sits well
+    /// clear of both.
+    /// </para>
+    /// </summary>
+    private const int CollapseByDefaultFieldCount = 40;
+
+    /// <summary>localStorage key holding only the groups the user has toggled AWAY from the default.</summary>
+    private const string CollapseStateKey = "botnexus-config-groups-collapsed";
+
+    // Explicit user choices, path -> collapsed. Deliberately NOT a snapshot of every group's state:
+    // storing only deviations means changing the default above does not fight values already in a
+    // browser, and an untouched group always follows the size rule.
+    private readonly Dictionary<string, bool> _groupOverrides = new(StringComparer.Ordinal);
+    private bool _overridesLoaded;
+
+    /// <summary>Leaf fields under a node, recursively. Objects, dictionaries and lists are containers.</summary>
+    private static int CountFields(JsonObject node)
+    {
+        if (IsObject(node))
+            return node["properties"]?.AsObject() is { } props
+                ? props.Sum(kv => kv.Value is JsonObject o ? CountFields(o) : 0)
+                : 0;
+        if (IsDictionary(node))
+            return node["additionalProperties"] is JsonObject v ? CountFields(v) : 0;
+        if (IsArray(node))
+            return node["items"] is JsonObject it ? CountFields(it) : 0;
+        return 1;
+    }
+
+    /// <summary>Leaf fields in the section actually being rendered (honours <see cref="SectionKey"/>).</summary>
+    private int SectionFieldCount() =>
+        RootProperties is { } props ? props.Sum(kv => kv.Value is JsonObject o ? CountFields(o) : 0) : 0;
+
+    private bool CollapseByDefault => SectionFieldCount() > CollapseByDefaultFieldCount;
+
+    /// <summary>Whether a group is collapsed: an explicit user choice if there is one, else the size rule.</summary>
+    private bool IsCollapsed(string path) =>
+        _groupOverrides.TryGetValue(path, out var collapsed) ? collapsed : CollapseByDefault;
+
+    /// <summary>Every depth-1 object path in the rendered section - the level the toggles live at.</summary>
+    private List<string> CollapsibleGroupPaths()
+    {
+        var paths = new List<string>();
+        if (RootProperties is null)
+            return paths;
+        foreach (var (rootName, rootNode) in RootProperties.Where(kv => kv.Value is JsonObject)
+                                                           .Select(kv => (kv.Key, kv.Value!.AsObject())))
+        {
+            if (!IsObject(rootNode))
+                continue;
+            if (rootNode["properties"]?.AsObject() is not { } props)
+                continue;
+            foreach (var kv in props)
+                if (kv.Value is JsonObject child && IsObject(child))
+                    paths.Add($"{rootName}.{kv.Key}");
+        }
+        return paths;
+    }
+
+    private async Task ToggleGroupAsync(string path)
+    {
+        _groupOverrides[path] = !IsCollapsed(path);
+        await PersistOverridesAsync();
+    }
+
+    private Task ExpandAllAsync() => SetAllAsync(collapsed: false);
+
+    private Task CollapseAllAsync() => SetAllAsync(collapsed: true);
+
+    private async Task SetAllAsync(bool collapsed)
+    {
+        foreach (var path in CollapsibleGroupPaths())
+            _groupOverrides[path] = collapsed;
+        await PersistOverridesAsync();
+    }
+
+    private async Task PersistOverridesAsync()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_groupOverrides);
+            await JS.InvokeVoidAsync("localStorage.setItem", CollapseStateKey, json);
+        }
+        catch
+        {
+            // No JS host (test renderer), or storage denied/full. The toggle still worked for this
+            // session - losing the preference must never break the form.
+        }
+    }
+
+    private async Task LoadOverridesAsync()
+    {
+        try
+        {
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", CollapseStateKey);
+            if (string.IsNullOrWhiteSpace(stored))
+                return;
+            if (JsonSerializer.Deserialize<Dictionary<string, bool>>(stored) is { } map)
+                foreach (var kv in map)
+                    _groupOverrides[kv.Key] = kv.Value;
+        }
+        catch
+        {
+            // Unreadable or malformed - fall back to the size rule rather than throwing on render.
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _overridesLoaded)
+            return;
+        _overridesLoaded = true;
+        await LoadOverridesAsync();
+        if (_groupOverrides.Count > 0)
+            StateHasChanged();
+    }
 
     private JsonObject? RootProperties
     {
@@ -290,12 +430,40 @@ else
     }
 
     // Recursive node dispatcher: object -> children; dict -> entries; array -> items; else widget.
-    private RenderFragment RenderNode(string name, JsonObject node, string path) => __builder =>
+    private RenderFragment RenderNode(string name, JsonObject node, string path, int depth) => __builder =>
     {
         if (IsObject(node))
         {
-            <fieldset class="schema-object" data-testid="@($"object-{path}")">
-                <legend>@Label(name, node)</legend>
+            @* A nested object is collapsible; the section's own root (depth 0) is not, because
+               collapsing it would hide the whole panel behind one line. Measured on the live
+               Gateway section: 26 groups at depth 1, 20975px of scroll expanded, 3485px collapsed. *@
+            var collapsible = depth >= 1;
+            var collapsed = collapsible && IsCollapsed(path);
+            <fieldset class="schema-object @(collapsible ? "schema-object-collapsible" : null) @(collapsed ? "collapsed" : null)"
+                      data-testid="@($"object-{path}")">
+                @if (collapsible)
+                {
+                    @* A real <button> in the legend, not a click handler on the legend text: this is
+                       the only way the group is reachable by keyboard and announced as expandable. *@
+                    <legend>
+                        <button type="button" class="schema-group-toggle"
+                                data-testid="@($"group-toggle-{path}")"
+                                aria-expanded="@(collapsed ? "false" : "true")"
+                                aria-controls="@($"grp-{FieldId(path)}")"
+                                title="@(collapsed ? "Expand" : "Collapse") @Label(name, node)"
+                                @onclick="() => ToggleGroupAsync(path)">
+                            <span class="schema-group-chevron @(collapsed ? null : "expanded")" aria-hidden="true">&#x25B6;</span>
+                            <span class="schema-group-toggle-label">@Label(name, node)</span>
+                            <span class="schema-group-count">@CountFields(node)</span>
+                        </button>
+                    </legend>
+                }
+                else
+                {
+                    <legend>@Label(name, node)</legend>
+                }
+                @if (!collapsed)
+                {
                 @if (Description(node) is { } objectDescription)
                 {
                     <p class="schema-object-description">@objectDescription</p>
@@ -304,6 +472,7 @@ else
                    here and then thrown away - only group.Value was read - so every field inside
                    a section rendered as one flat run regardless of the group it declared. The
                    schema has carried the buckets all along; this just draws them. *@
+                <div class="schema-object-body" id="@($"grp-{FieldId(path)}")">
                 @foreach (var group in OrderAndGroup(node["properties"]?.AsObject()))
                 {
                     <div class="schema-subgroup" data-group="@group.Key">
@@ -313,9 +482,11 @@ else
                         }
                         @foreach (var (childName, childNode) in group.Value)
                         {
-                            @RenderNode(childName, childNode, $"{path}.{childName}")
+                            @RenderNode(childName, childNode, $"{path}.{childName}", depth + 1)
                         }
                     </div>
+                }
+                </div>
                 }
             </fieldset>
         }
@@ -340,7 +511,7 @@ else
                             <button type="button" class="dict-rename" data-testid="@($"dict-rename-{path}-{key}")"
                                     @onclick="() => RenameDictEntry(path, node, key)">Rename</button>
                         }
-                        @RenderNode(key, valueSchema, $"{path}.{key}")
+                        @RenderNode(key, valueSchema, $"{path}.{key}", depth + 1)
                         <button type="button" class="dict-entry-delete" data-testid="@($"dict-delete-{path}-{key}")"
                                 @onclick="() => RemoveDictEntry(path, key)">Delete</button>
                     </div>
@@ -368,7 +539,7 @@ else
                 {
                     var index = i;
                     <div class="schema-array-item" data-index="@index">
-                        @RenderNode($"[{index}]", itemSchema, $"{path}[{index}]")
+                        @RenderNode($"[{index}]", itemSchema, $"{path}[{index}]", depth + 1)
                         <button type="button" class="array-item-up" data-testid="@($"array-up-{path}-{index}")"
                                 disabled="@(index == 0)" @onclick="() => MoveListItem(path, index, -1)">Up</button>
                         <button type="button" class="array-item-down" data-testid="@($"array-down-{path}-{index}")"
