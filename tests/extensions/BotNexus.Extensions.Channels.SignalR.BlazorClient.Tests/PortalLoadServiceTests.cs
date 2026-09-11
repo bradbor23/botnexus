@@ -13,6 +13,10 @@ public sealed class PortalLoadServiceTests
 
     public PortalLoadServiceTests()
     {
+        // Off the network (#145). The REST client is a substitute, but the hub is real and
+        // InitializeAsync connects it, so without this the fixture opens a socket to its own hub
+        // URL and the outcome depends on what is listening on that port on the build host.
+        _hub.TestHttpHandler = OfflineTestHttp.Handler();
         _service = new PortalLoadService(_restClient, _hub, _store, _eventHandler);
     }
 
@@ -38,10 +42,14 @@ public sealed class PortalLoadServiceTests
     }
 
     /// <summary>
-    /// Reproduces the exact bug: a stale cron-session projection whose backing session
-    /// returns 404 from GetSessionHistoryAsync must NOT abort portal initialization.
-    /// Before the fix, this threw HttpRequestException 404 and set LoadError, blocking
-    /// all agents and conversations from loading.
+    /// Intended to reproduce: a stale cron-session projection whose backing session returns 404
+    /// from GetSessionHistoryAsync must NOT abort portal initialization.
+    /// <para>
+    /// It no longer reaches that path - see the fence at the end of the body. #2305 removed the
+    /// cron-prefix inference that created the projection, so the stubbed 404 never fires. What this
+    /// test still genuinely covers is that initialization survives the session roster containing a
+    /// cron session at all, and that no 404 reaches the top-level catch.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task InitializeAsync_stale_cron_session_history_404_does_not_abort_initialization()
@@ -74,11 +82,10 @@ public sealed class PortalLoadServiceTests
             .Returns<SessionHistoryResponseDto?>(_ =>
                 throw new HttpRequestException("Not Found", null, HttpStatusCode.NotFound));
 
-        // Hub connect will throw since we have no real hub — but the test validates
-        // that we get PAST the history loading. We override ConnectAsync behavior by
-        // catching the exception in the outer try block (which sets LoadError to a hub error, not a 404).
-        // Actually: _hub.ConnectAsync will throw NullReferenceException or similar.
-        // To isolate, let's verify the stale projection was removed before hub connect.
+        // The hub connect fails by design: the fixture's TestHttpHandler refuses it without a
+        // socket, so LoadError is always set and always says so. Before that, this test depended on
+        // the hub failing with a message that happened to contain no "404" - which held only while
+        // nothing was listening on port 5000 of the build host.
 
         // Act
         await _service.InitializeAsync("http://localhost:5000/hub/gateway");
@@ -95,13 +102,25 @@ public sealed class PortalLoadServiceTests
         Assert.False(agent.Conversations.ContainsKey(cronConvId),
             "Stale cron-session projection should be removed after 404.");
 
-        // If there's a LoadError, it should NOT mention "404" or "Not Found" — that would
-        // indicate the 404 leaked to the top-level catch.
-        if (_service.LoadError is not null)
-        {
-            Assert.DoesNotContain("404", _service.LoadError);
-            Assert.DoesNotContain("Not Found", _service.LoadError);
-        }
+        // The history 404 must not have reached the top-level catch. LoadError is set here because
+        // the offline handler refuses the hub connect, which is expected and is NOT this 404 - so
+        // the check is that no 404 is in it, now that the only other candidate is deterministic.
+        Assert.NotNull(_service.LoadError);
+        Assert.DoesNotContain("404", _service.LoadError);
+        Assert.DoesNotContain("Not Found", _service.LoadError);
+        Assert.Contains("offline by design", _service.LoadError);
+
+        // A FENCE over a known gap, not an endorsement of it. The stubbed 404 above never fires:
+        // #2305 deleted the `cron:` session-id prefix inference, so nothing projects a cron session
+        // into a synthesised conversation any more. With no projection there is nothing to select,
+        // LoadInitialHistoryAsync is never reached for it, and the ContainsKey assertion above is
+        // trivially true - this test has been passing for the wrong reason ever since.
+        //
+        // Asserting the absence makes that explicit and self-correcting: restore the projection and
+        // this line fails, which is the prompt to turn the test back into a real one rather than
+        // leaving it quietly vacuous. See the follow-up issue.
+        await _restClient.DidNotReceive().GetSessionHistoryAsync(
+            staleCronSessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -135,12 +154,15 @@ public sealed class PortalLoadServiceTests
         Assert.NotNull(agent);
         Assert.True(agent.Conversations.ContainsKey("conv-1"));
 
-        // LoadError should not mention 404
-        if (_service.LoadError is not null)
-        {
-            Assert.DoesNotContain("404", _service.LoadError);
-            Assert.DoesNotContain("Not Found", _service.LoadError);
-        }
+        // Same as the cron case: the only thing that may reach the top-level catch is the refused
+        // hub connect, so a 404 in LoadError can only be the history one leaking.
+        Assert.NotNull(_service.LoadError);
+        Assert.DoesNotContain("404", _service.LoadError);
+        Assert.DoesNotContain("Not Found", _service.LoadError);
+        Assert.Contains("offline by design", _service.LoadError);
+
+        await _restClient.Received().GetHistoryAsync(
+            "conv-1", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
