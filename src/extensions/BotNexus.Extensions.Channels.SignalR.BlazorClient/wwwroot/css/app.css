@@ -8395,15 +8395,9 @@ h3.conversation-title.editable:hover {
 .schema-form-toolbar {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 0.5rem;
     margin-bottom: 0.9rem;
-}
-
-.schema-form-toolbar-count {
-    margin-right: auto;
-    font-size: var(--text-caption);
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
 }
 
 .schema-form-toolbar-btn {

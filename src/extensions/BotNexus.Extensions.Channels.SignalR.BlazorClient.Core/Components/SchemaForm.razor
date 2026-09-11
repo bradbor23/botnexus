@@ -24,13 +24,16 @@
 else
 {
     <div class="schema-form" data-testid="schema-form">
-        @if (CollapsibleGroupPaths().Count > 1)
+        @if (ShowCollapseToolbar)
         {
             @* Only shown when there is more than one group to act on. It is also the mitigation for
                the one real cost of collapsing by default: the browser's own Ctrl+F cannot see inside
                a collapsed group, so there must be a one-click way to lay the whole section open. *@
+            @* No total here on purpose. The honest number is not knowable before the tree is walked -
+               dictionary and list entries contribute collapsible groups whose paths come from the
+               config data - and the first version displayed a schema-only count that read "20
+               groups" over 26 rendered toggles. The per-row counts are exact; this is not. *@
             <div class="schema-form-toolbar" data-testid="schema-form-toolbar">
-                <span class="schema-form-toolbar-count">@CollapsibleGroupPaths().Count groups</span>
                 <button type="button" class="schema-form-toolbar-btn" data-testid="schema-expand-all"
                         @onclick="ExpandAllAsync">Expand all</button>
                 <button type="button" class="schema-form-toolbar-btn" data-testid="schema-collapse-all"
@@ -109,12 +112,21 @@ else
     private const int CollapseByDefaultFieldCount = 40;
 
     /// <summary>localStorage key holding only the groups the user has toggled AWAY from the default.</summary>
-    private const string CollapseStateKey = "botnexus-config-groups-collapsed";
+    private const string CollapseStateKey = "botnexus-config-groups-collapsed-v2";
 
     // Explicit user choices, path -> collapsed. Deliberately NOT a snapshot of every group's state:
     // storing only deviations means changing the default above does not fight values already in a
     // browser, and an untouched group always follows the size rule.
     private readonly Dictionary<string, bool> _groupOverrides = new(StringComparer.Ordinal);
+
+    // Expand all / Collapse all as a MODE rather than a list of paths to act on.
+    //
+    // It was a list, and that was wrong in a way only the live page showed: "Expand all" opened 20
+    // of 31 groups. Enumerating collapsible paths from the SCHEMA cannot see objects that appear as
+    // DICTIONARY VALUES - their paths come from the config data, so the set is not knowable until
+    // the value is walked, and it grows as expanding reveals deeper objects. A mode needs no set:
+    // it applies to every group the renderer makes collapsible, at any depth.
+    private bool? _allOverride;
     private bool _overridesLoaded;
 
     /// <summary>Leaf fields under a node, recursively. Objects, dictionaries and lists are containers.</summary>
@@ -137,28 +149,45 @@ else
 
     private bool CollapseByDefault => SectionFieldCount() > CollapseByDefaultFieldCount;
 
-    /// <summary>Whether a group is collapsed: an explicit user choice if there is one, else the size rule.</summary>
-    private bool IsCollapsed(string path) =>
-        _groupOverrides.TryGetValue(path, out var collapsed) ? collapsed : CollapseByDefault;
+    /// <summary>
+    /// Whether to offer Expand all / Collapse all. Either the section is big enough that its groups
+    /// start collapsed - in which case the controls are the way back out - or the schema plainly
+    /// shows more than one group to act on.
+    /// <para>
+    /// The second test alone was not enough: a section whose groups all come from DICTIONARY
+    /// entries has no schema-visible nested objects at all, so it rendered collapsed groups with no
+    /// way to open them in bulk. Found by a test written for the sibling bug in Expand all.
+    /// </para>
+    /// </summary>
+    private bool ShowCollapseToolbar => CollapseByDefault || SchemaNestedObjectCount() > 1;
 
-    /// <summary>Every depth-1 object path in the rendered section - the level the toggles live at.</summary>
-    private List<string> CollapsibleGroupPaths()
+    /// <summary>
+    /// Whether a group is collapsed. A per-group choice wins; then an Expand all / Collapse all
+    /// mode; then the size rule.
+    /// </summary>
+    private bool IsCollapsed(string path) =>
+        _groupOverrides.TryGetValue(path, out var collapsed) ? collapsed : _allOverride ?? CollapseByDefault;
+
+    /// <summary>
+    /// Nested objects the schema alone guarantees. Used ONLY to decide whether the toolbar is worth
+    /// showing: it is a lower bound, never a number to display or a set to act on, because the
+    /// renderer also makes collapsible the objects it finds inside dictionaries and lists, whose
+    /// paths depend on the config data rather than the schema.
+    /// </summary>
+    private int SchemaNestedObjectCount()
     {
-        var paths = new List<string>();
+        var n = 0;
         if (RootProperties is null)
-            return paths;
-        foreach (var (rootName, rootNode) in RootProperties.Where(kv => kv.Value is JsonObject)
-                                                           .Select(kv => (kv.Key, kv.Value!.AsObject())))
+            return 0;
+        foreach (var kv in RootProperties)
         {
-            if (!IsObject(rootNode))
+            if (kv.Value is not JsonObject rootNode || !IsObject(rootNode))
                 continue;
             if (rootNode["properties"]?.AsObject() is not { } props)
                 continue;
-            foreach (var kv in props)
-                if (kv.Value is JsonObject child && IsObject(child))
-                    paths.Add($"{rootName}.{kv.Key}");
+            n += props.Count(p => p.Value is JsonObject child && IsObject(child));
         }
-        return paths;
+        return n;
     }
 
     private async Task ToggleGroupAsync(string path)
@@ -171,18 +200,25 @@ else
 
     private Task CollapseAllAsync() => SetAllAsync(collapsed: true);
 
+    /// <summary>
+    /// Clears every per-group choice and sets the mode, so this genuinely means ALL - including the
+    /// groups inside dictionaries and lists that a schema walk cannot enumerate.
+    /// </summary>
     private async Task SetAllAsync(bool collapsed)
     {
-        foreach (var path in CollapsibleGroupPaths())
-            _groupOverrides[path] = collapsed;
+        _groupOverrides.Clear();
+        _allOverride = collapsed;
         await PersistOverridesAsync();
     }
+
+    /// <summary>Persisted shape: the mode plus only the groups toggled away from it.</summary>
+    private sealed record CollapseState(bool? All, Dictionary<string, bool> Paths);
 
     private async Task PersistOverridesAsync()
     {
         try
         {
-            var json = JsonSerializer.Serialize(_groupOverrides);
+            var json = JsonSerializer.Serialize(new CollapseState(_allOverride, _groupOverrides));
             await JS.InvokeVoidAsync("localStorage.setItem", CollapseStateKey, json);
         }
         catch
@@ -199,9 +235,12 @@ else
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", CollapseStateKey);
             if (string.IsNullOrWhiteSpace(stored))
                 return;
-            if (JsonSerializer.Deserialize<Dictionary<string, bool>>(stored) is { } map)
-                foreach (var kv in map)
+            if (JsonSerializer.Deserialize<CollapseState>(stored) is { } state)
+            {
+                _allOverride = state.All;
+                foreach (var kv in state.Paths ?? [])
                     _groupOverrides[kv.Key] = kv.Value;
+            }
         }
         catch
         {

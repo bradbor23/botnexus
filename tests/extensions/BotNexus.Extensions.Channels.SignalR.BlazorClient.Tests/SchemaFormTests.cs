@@ -126,7 +126,7 @@ public sealed class SchemaFormTests : IDisposable
     /// install carry 18 fields or fewer. They must look exactly as they did before this feature.
     /// </summary>
     [Fact]
-    public void Small_section_starts_expanded_and_shows_no_toolbar()
+    public void Small_section_starts_expanded()
     {
         var cut = Render(SectionWithGroups(count: 3, fieldsPer: 4), new JsonObject());
 
@@ -134,6 +134,10 @@ public sealed class SchemaFormTests : IDisposable
         Assert.Equal(3, toggles.Count);
         Assert.All(toggles, t => Assert.Equal("true", t.GetAttribute("aria-expanded")));
         Assert.Equal(12, cut.FindAll("[data-testid^='field-']").Count);
+        // The controls are still offered - three groups is more than one thing to act on - they
+        // simply are not needed to see anything. This test used to be NAMED for asserting their
+        // absence while its body never looked, which is worse than either behaviour.
+        Assert.NotEmpty(cut.FindAll("[data-testid='schema-form-toolbar']"));
     }
 
     [Fact]
@@ -207,9 +211,118 @@ public sealed class SchemaFormTests : IDisposable
     [Fact]
     public void Toolbar_is_hidden_when_there_is_nothing_to_act_on()
     {
-        // One group: "Expand all" would be a button that does what the one chevron already does.
+        // One small group: "Expand all" would be a button that does what the one chevron already
+        // does. A LARGE section still gets the controls even with one group, because there the
+        // groups start collapsed and these are the way back out.
         var cut = Render(SectionWithGroups(count: 1, fieldsPer: 3), new JsonObject());
         Assert.Empty(cut.FindAll("[data-testid='schema-form-toolbar']"));
+        Assert.NotEmpty(cut.FindAll("[data-testid='group-toggle-gateway.g0']"));
+    }
+
+    /// <summary>
+    /// The bug the live page found and the unit tests did not: "Expand all" opened 20 of 31 groups.
+    /// It acted on a list of paths enumerated from the SCHEMA, which cannot contain objects that
+    /// appear as DICTIONARY VALUES - those paths come from the config data. Every earlier test used
+    /// plain nested objects, so the whole suite passed while the feature was broken on the one shape
+    /// the real config uses most.
+    /// </summary>
+    [Fact]
+    public void Expand_all_also_opens_groups_nested_inside_a_dictionary()
+    {
+        // A dictionary whose VALUES are objects: the schema knows the value shape but not the keys.
+        var entry = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject { ["path"] = Scalar("string", "text", "Path") },
+        };
+        var groups = new JsonObject
+        {
+            ["locations"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["x-ui-label"] = "Locations",
+                ["additionalProperties"] = entry,
+            },
+        };
+        // Plus enough plain fields to push the section past the collapse-by-default gate.
+        for (var i = 0; i < 45; i++)
+            groups[$"plain{i}"] = Scalar("string", "text", $"Plain {i}");
+
+        var schema = Envelope(new JsonObject
+        {
+            ["gateway"] = new JsonObject
+            {
+                ["type"] = "object", ["x-ui-label"] = "Gateway", ["properties"] = groups,
+            },
+        });
+        // Dictionary keys live in the VALUE, which is exactly why the schema cannot enumerate them.
+        var value = new JsonObject
+        {
+            ["gateway"] = new JsonObject
+            {
+                ["locations"] = new JsonObject
+                {
+                    ["alpha"] = new JsonObject { ["path"] = "/one" },
+                    ["beta"] = new JsonObject { ["path"] = "/two" },
+                },
+            },
+        };
+
+        var cut = Render(schema, value);
+
+        // Both dictionary entries are collapsible groups, addressed by their DATA keys.
+        Assert.NotEmpty(cut.FindAll("[data-testid='group-toggle-gateway.locations.alpha']"));
+        Assert.NotEmpty(cut.FindAll("[data-testid='group-toggle-gateway.locations.beta']"));
+
+        cut.FindAll("[data-testid='schema-expand-all']")[0].Click();
+
+        // ALL means all: no toggle may be left closed, at any depth or from any source.
+        var closed = cut.FindAll("[data-testid^='group-toggle-']")
+                        .Where(t => t.GetAttribute("aria-expanded") == "false")
+                        .Select(t => t.GetAttribute("data-testid"))
+                        .ToList();
+        Assert.Empty(closed);
+
+        cut.FindAll("[data-testid='schema-collapse-all']")[0].Click();
+        Assert.All(cut.FindAll("[data-testid^='group-toggle-']"),
+            t => Assert.Equal("false", t.GetAttribute("aria-expanded")));
+    }
+
+    /// <summary>
+    /// Expand all must beat a per-group choice made earlier, or "all" would quietly mean "all except
+    /// the ones you touched".
+    /// </summary>
+    [Fact]
+    public void Expand_all_overrides_an_earlier_per_group_choice()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        // Open one by hand, then collapse everything: the hand-opened one must close too.
+        cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].Click();
+        Assert.Equal("true", cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].GetAttribute("aria-expanded"));
+
+        cut.FindAll("[data-testid='schema-collapse-all']")[0].Click();
+        Assert.Equal("false", cut.FindAll("[data-testid='group-toggle-gateway.g0']")[0].GetAttribute("aria-expanded"));
+
+        // And the reverse: close one by hand, then expand everything.
+        cut.FindAll("[data-testid='schema-expand-all']")[0].Click();
+        cut.FindAll("[data-testid='group-toggle-gateway.g1']")[0].Click();
+        Assert.Equal("false", cut.FindAll("[data-testid='group-toggle-gateway.g1']")[0].GetAttribute("aria-expanded"));
+
+        cut.FindAll("[data-testid='schema-expand-all']")[0].Click();
+        Assert.Equal("true", cut.FindAll("[data-testid='group-toggle-gateway.g1']")[0].GetAttribute("aria-expanded"));
+    }
+
+    [Fact]
+    public void Toolbar_shows_no_total_because_the_honest_one_is_not_knowable_yet()
+    {
+        var cut = Render(SectionWithGroups(count: 12, fieldsPer: 6), new JsonObject());
+
+        var toolbar = cut.Find("[data-testid='schema-form-toolbar']");
+        // The first version printed a schema-only count here and read "20 groups" over 26 toggles.
+        Assert.DoesNotContain("groups", toolbar.TextContent);
+        Assert.NotEmpty(cut.FindAll("[data-testid='schema-expand-all']"));
+        Assert.NotEmpty(cut.FindAll("[data-testid='schema-collapse-all']"));
     }
 
     // -- 1. Renders all widget types ----------------------------------------

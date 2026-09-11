@@ -997,14 +997,9 @@ body {
 .settings-body .schema-form-toolbar {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
     margin-bottom: 10px;
-}
-
-.settings-body .schema-form-toolbar-count {
-    margin-right: auto;
-    font-size: 11px;
-    color: #7a9cbf;
 }
 
 .settings-body .schema-form-toolbar-btn {
