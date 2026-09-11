@@ -239,9 +239,9 @@ public sealed class MainLayoutTests : IDisposable
 
         var cut = RenderLayout();
 
-        // Cron conversations are now in a collapsed Scheduled group; expand it first
-        await cut.InvokeAsync(() => cut.Find("[data-testid='cron-group-toggle']").Click());
-
+        // No expansion step any more: the Scheduled group moved to the toolbar schedules panel, so
+        // a cron conversation renders directly in the (expanded) conversation list. The badge
+        // assertion below is unchanged - that behaviour did not move.
         Assert.Contains("Cron", cut.Markup);
         var archiveBtn = cut.Find(".conversation-archive-btn");
         // An unattended conversation reopens on its next trigger, so it pauses rather than deletes.

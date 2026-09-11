@@ -238,9 +238,10 @@
 
 @code {
 
-    private bool _cronGroupCollapsed = true;
-    private HashSet<string> _cronConversationIds = new(StringComparer.OrdinalIgnoreCase);
-    private const string CronCollapsedKey = "botnexus-cron-collapsed";
+    // Every cron job, for the toolbar schedules panel - not just the ones that have produced a
+    // conversation, which is all the removed sidebar group could ever show.
+    private IReadOnlyList<CronJobDto> _cronJobs = [];
+    private bool _schedulesOpen;
 
     // #2441: collapse state persists with the same localStorage key pattern
     // as the Scheduled group, and both default to collapsed so the nav starts tight.
@@ -560,6 +561,13 @@
             <span class="toolbar-item" data-nav-key="@item.Key">
                 <Icon Name="@item.Icon" Size="16" />
                 <span class="toolbar-item-label">@item.Label</span>
+                @* The real Cron entry carries a chevron, so the ghost must too. Without it the
+                   measurer under-reads that entry's natural width and leaves it in the bar at a
+                   width where it no longer fits. *@
+                @if (item.Key == NavOrderKeys.Cron)
+                {
+                    <span class="toolbar-dropdown-chevron" aria-hidden="true">&#x25BE;</span>
+                }
             </span>
         }
         else if (item.Contribution is { } contribution)
@@ -580,6 +588,77 @@
                 <Icon Name="@item.Icon" Size="16" />
                 <span class="toolbar-item-label">@item.Label</span>
             </a>
+        }
+        else if (item.Key == NavOrderKeys.Cron && !inOverflow)
+        {
+            @* A SPLIT control, deliberately, rather than turning the entry into a button.
+               `nav-cron-jobs` is a preserved selector under #2973 with in-repo and unknown external
+               consumers, and MainLayoutNavTestIdTests asserts it resolves to exactly ONE element
+               carrying href="cron". So the anchor stays an anchor and keeps navigating; the chevron
+               beside it is a separate control that opens the schedules panel.
+
+               Inside the overflow menu this branch is skipped and the plain anchor renders instead:
+               a menu nested inside a menu is worse than a link to the page. *@
+            @* testids here are deliberately NOT `nav-*`: #2973 reserves that prefix for ids the
+               shared NavAnchor helper emits, and MainLayoutNavTestIdTests fails any hand-written
+               `nav-` literal. These are dropdown chrome, not nav entries. *@
+            <div class="toolbar-dropdown" data-testid="schedules-dropdown">
+                <a href="@item.Route"
+                   class="toolbar-item toolbar-dropdown-label @NavClass(item.Key)"
+                   data-testid="@(item.TestId ?? NavTestId(item.Route))"
+                   data-testid-alias="@(item.TestId is null ? null : NavTestId(item.Route))"
+                   data-nav-key="@item.Key"
+                   @onclick="OnToolbarNavClick">
+                    <Icon Name="@item.Icon" Size="16" />
+                    <span class="toolbar-item-label">@item.Label</span>
+                </a>
+                <button type="button"
+                        class="toolbar-item toolbar-dropdown-toggle @(_schedulesOpen ? "open" : "")"
+                        data-testid="schedules-toggle"
+                        aria-expanded="@(_schedulesOpen ? "true" : "false")"
+                        aria-haspopup="menu"
+                        aria-label="@($"Show schedules ({SchedulePanelJobs().Count})")"
+                        title="Show schedules"
+                        @onclick="ToggleSchedules">
+                    <span class="toolbar-dropdown-chevron" aria-hidden="true">&#x25BE;</span>
+                </button>
+
+                @if (_schedulesOpen)
+                {
+                    <div class="toolbar-overflow-backdrop" @onclick="CloseSchedules"></div>
+                    <div class="toolbar-schedule-menu" data-testid="schedules-menu" role="menu">
+                        @{ var scheduleJobs = SchedulePanelJobs(); }
+                        @if (scheduleJobs.Count == 0)
+                        {
+                            <div class="toolbar-schedule-empty" data-testid="schedules-empty">
+                                No schedules yet.
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var job in scheduleJobs)
+                            {
+                                <a href="@ScheduleHref(job)"
+                                   class="toolbar-schedule-row @(job.Enabled ? null : "disabled")"
+                                   data-testid="schedule-row"
+                                   data-cron-job-id="@job.Id"
+                                   role="menuitem"
+                                   title="@($"{(string.IsNullOrWhiteSpace(job.Name) ? job.Id : job.Name)} \u00b7 {job.Schedule}")"
+                                   @onclick="CloseSchedules">
+                                    <span class="toolbar-schedule-name">@(string.IsNullOrWhiteSpace(job.Name) ? job.Id : job.Name)</span>
+                                    <span class="toolbar-schedule-cron">@job.Schedule</span>
+                                    @if (!job.Enabled)
+                                    {
+                                        <span class="toolbar-schedule-off" data-testid="schedule-disabled">off</span>
+                                    }
+                                </a>
+                            }
+                        }
+                        <a href="cron" class="toolbar-schedule-all" data-testid="schedules-view-all"
+                           role="menuitem" @onclick="CloseSchedules">View all in Cron Jobs &rarr;</a>
+                    </div>
+                }
+            </div>
         }
         else
         {
@@ -746,17 +825,23 @@
                                 .ThenByDescending(c => c.UpdatedAt)
                                 .ToList();
                             var pinnedConversations = allUserConversations.Where(IsPinnedConversation).ToList();
-                            var cronConversations = allUserConversations.Where(IsCronConversation).ToList();
                             @* #2122: webhook-originated runs get their own section. Membership comes
                                from the SAME typed projection that already computes
                                ConversationListGroup.Automated - no second classifier, no heuristic.
-                               Pinned still wins over source, and cron is subtracted first so a
-                               conversation can never appear in two groups. *@
+                               Pinned still wins over source, so a conversation can never appear in
+                               two groups.
+
+                               Cron is no longer subtracted here. The Scheduled group moved to the
+                               toolbar's schedules panel, which lists every cron JOB rather than only
+                               the ones that have produced a conversation - and a cron conversation is
+                               still a conversation, so it belongs in this list by recency. Keeping
+                               the subtraction after removing the group would have made those
+                               conversations unreachable from the sidebar entirely. *@
                             var webhookConversations = allUserConversations
-                                .Where(c => !IsPinnedConversation(c) && !IsCronConversation(c) && IsWebhookConversation(c))
+                                .Where(c => !IsPinnedConversation(c) && IsWebhookConversation(c))
                                 .ToList();
                             var normalConversations = allUserConversations
-                                .Where(c => !IsPinnedConversation(c) && !IsCronConversation(c) && !IsWebhookConversation(c))
+                                .Where(c => !IsPinnedConversation(c) && !IsWebhookConversation(c))
                                 .Where(MatchesActivityFilter)
                                 .ToList();
 
@@ -828,23 +913,6 @@
                                 }
                             </div>
 
-                            @if (cronConversations.Count > 0)
-                            {
-                                <div class="conversation-group conversation-group-scheduled" data-testid="conversation-group-scheduled">
-                                    <button class="conversation-group-header conversation-group-header-toggle" data-testid="cron-group-toggle" @onclick="ToggleCronGroup">
-                                        <span class="group-chevron @(!_cronGroupCollapsed ? "expanded" : "")">&#x25B6;</span>
-                                        <span class="conversation-group-label">&#x23F0; Scheduled</span>
-                                        <span class="conversation-group-count" data-testid="cron-group-count">@cronConversations.Count</span>
-                                    </button>
-                                    @if (!_cronGroupCollapsed)
-                                    {
-                                        @foreach (var conversation in cronConversations)
-                                        {
-                                            @RenderConversationItem(activeAgent, conversation)
-                                        }
-                                    }
-                                </div>
-                            }
 
                             @* #2122: Automated (webhook) runs are their own 4th section rather than
                                being folded in with Scheduled. Same pattern as the Scheduled group:
@@ -987,9 +1055,6 @@
         {
             var stored = await JS.InvokeAsync<string?>("localStorage.getItem", SidebarKey);
             _sidebarOpen = stored == "true";
-            var cronStored = await JS.InvokeAsync<string?>("localStorage.getItem", CronCollapsedKey);
-            _cronGroupCollapsed = cronStored != "false";
-            // Absent key -> collapsed, matching the Scheduled group's first-run behaviour.
             var webhookStored = await JS.InvokeAsync<string?>("localStorage.getItem", WebhookCollapsedKey);
             _webhookGroupCollapsed = webhookStored != "false";
             // Absent key -> expanded: these are the user's attended lists, so collapsing is opt-in.
@@ -1034,7 +1099,7 @@
                 await Interaction.RefreshConversationsAsync(activeAgentId);
 
             await LoadSidebarAgentsAsync();
-            await LoadCronConversationIdsAsync();
+            await LoadCronJobsAsync();
             StateHasChanged();
         }
     }
@@ -1268,21 +1333,12 @@
     // the cron API. #3073: both clauses now live in the shared PortalConversationGrouping.IsScheduled
     // so the mobile picker classifies identically; this is a CALL of the single client-wide cron
     // predicate, not a copy of it.
-    private bool IsCronConversation(ConversationState c) =>
-        PortalConversationGrouping.IsScheduled(c, Store.ActiveSelectionSource, _cronConversationIds);
-
     // #2122: webhook membership reads the SAME typed projection as the cron check above. There is
     // one classifier (ConversationRenderProjection) and this is a read of it, not a copy of it.
     private bool IsWebhookConversation(ConversationState c) =>
         c.Project(Store.ActiveSelectionSource).Group == ConversationListGroup.Automated;
 
     private static bool IsPinnedConversation(ConversationState c) => c.IsPinned;
-
-    private async Task ToggleCronGroup()
-    {
-        _cronGroupCollapsed = !_cronGroupCollapsed;
-        await JS.InvokeVoidAsync("localStorage.setItem", CronCollapsedKey, _cronGroupCollapsed ? "true" : "false");
-    }
 
     private async Task ToggleWebhookGroup()
     {
@@ -1761,16 +1817,46 @@
         return uri.Equals($"tools/{toolId}", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task LoadCronConversationIdsAsync()
+    /// <summary>
+    /// Loads the cron jobs behind the toolbar's schedules panel. Was
+    /// <c>LoadCronConversationIdsAsync</c>, which kept only the conversation ids - which is why the
+    /// sidebar group it fed could show just the schedules that had already RUN, three of eight on a
+    /// real install. Failure leaves the list empty and the panel says so; the nav must not break
+    /// because the cron API is unavailable.
+    /// </summary>
+    private async Task LoadCronJobsAsync()
     {
         try
         {
             var (jobs, _) = await CronApi.ListAsync();
-            _cronConversationIds = PortalConversationGrouping.CronConversationIds(jobs)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _cronJobs = jobs ?? [];
         }
-        catch { _cronConversationIds = new(StringComparer.OrdinalIgnoreCase); }
+        catch { _cronJobs = []; }
     }
+
+    /// <summary>
+    /// Schedules for the toolbar panel: enabled first, then by name, so the list reads the same way
+    /// twice in a row. Disabled jobs are kept rather than filtered - a schedule that exists but is
+    /// switched off is exactly the thing an operator opens this panel to check.
+    /// </summary>
+    private IReadOnlyList<CronJobDto> SchedulePanelJobs() =>
+        _cronJobs
+            .OrderByDescending(j => j.Enabled)
+            .ThenBy(j => string.IsNullOrWhiteSpace(j.Name) ? j.Id : j.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// Where a schedule row points: its conversation when it has produced one, otherwise the Cron
+    /// Jobs page, which is the only place an unrun schedule can be inspected.
+    /// </summary>
+    private string ScheduleHref(CronJobDto job) =>
+        !string.IsNullOrWhiteSpace(job.ConversationId) && !string.IsNullOrWhiteSpace(job.AgentId)
+            ? $"agent/{Uri.EscapeDataString(job.AgentId!)}/conversation/{Uri.EscapeDataString(job.ConversationId!)}"
+            : "cron";
+
+    private void ToggleSchedules() => _schedulesOpen = !_schedulesOpen;
+
+    private void CloseSchedules() => _schedulesOpen = false;
 
     private static string? ResolveConversationTitle(AgentState agent, string conversationId)
         => agent.Conversations.TryGetValue(conversationId, out var conv) ? conv.Title : conversationId;

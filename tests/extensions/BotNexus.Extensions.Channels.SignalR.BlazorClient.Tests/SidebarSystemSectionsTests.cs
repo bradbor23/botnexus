@@ -88,13 +88,13 @@ public sealed class SidebarSystemSectionsTests : IDisposable
 
     /// <summary>
     /// A server-stamped <c>Source=Webhook</c> conversation renders inside its own Automated group -
-    /// not in Scheduled (where the enum doc comment said it was folded) and not in Conversations.
+    /// not in Conversations. Scheduled is no longer one of the places it could land: that group
+    /// moved to the toolbar schedules panel, and cron conversations now sit in Conversations.
     /// </summary>
     [Fact]
     public void WebhookConversations_RenderInTheirOwnAutomatedGroup()
     {
         SeedCollapsed("botnexus-webhook-collapsed", false);
-        SeedCollapsed("botnexus-cron-collapsed", false);
 
         Seed(
             Conv("c-hook", "Hook Run", source: "Webhook"),
@@ -106,10 +106,10 @@ public sealed class SidebarSystemSectionsTests : IDisposable
         cut.WaitForAssertion(() =>
             Assert.Contains("Hook Run", cut.Find("[data-testid='conversation-group-automated']").TextContent));
 
-        Assert.DoesNotContain("Hook Run", cut.Find("[data-testid='conversation-group-scheduled']").TextContent);
         Assert.DoesNotContain("Hook Run", cut.Find("[data-testid='conversation-group-conversations']").TextContent);
-        // And the scheduled group keeps only the cron run.
-        Assert.Contains("Cron Run", cut.Find("[data-testid='conversation-group-scheduled']").TextContent);
+        // Webhook still wins over nothing else: the cron run is a plain list entry now.
+        Assert.Contains("Cron Run", cut.Find("[data-testid='conversation-group-conversations']").TextContent);
+        Assert.Empty(cut.FindAll("[data-testid='conversation-group-scheduled']"));
     }
 
     /// <summary>The Automated group is not rendered at all when no webhook conversation exists.</summary>
@@ -250,8 +250,8 @@ public sealed class SidebarSystemSectionsTests : IDisposable
         cut.WaitForAssertion(() =>
         {
             Assert.Equal("2", cut.Find("[data-testid='pinned-group-count']").TextContent.Trim());
-            Assert.Equal("3", cut.Find("[data-testid='conversations-group-count']").TextContent.Trim());
-            Assert.Equal("1", cut.Find("[data-testid='cron-group-count']").TextContent.Trim());
+            // Four, not three: the cron run is counted here now that Scheduled no longer claims it.
+            Assert.Equal("4", cut.Find("[data-testid='conversations-group-count']").TextContent.Trim());
             Assert.Equal("2", cut.Find("[data-testid='webhook-group-count']").TextContent.Trim());
 
             // Collapsed groups still show their counts - the whole point of the badge.

@@ -65,25 +65,13 @@ public sealed class ConversationGroupingTests : IDisposable
         _store.SelectView("a-1", string.Empty, SelectionSource.UserClick);
     }
 
-    // Seeds the persisted "Scheduled" group collapse state to expanded ("false").
-    // MainLayout.OnAfterRenderAsync reads localStorage["botnexus-cron-collapsed"]; under the Loose
-    // JS mock an unseeded read returns null -> the group stays collapsed and only re-expands via a
-    // toggle click. Because that read runs on an async continuation, it can re-collapse the group
-    // after the click, producing a flaky "item missing from group body" failure under CI timing.
-    // Seeding "false" makes the group render expanded deterministically with no toggle race.
-    private void ExpandScheduledGroupByDefault() =>
-        _ctx.JSInterop.Setup<string?>("localStorage.getItem", "botnexus-cron-collapsed").SetResult("false");
-
+    /// <summary>
+    /// #2305: a server-stamped <c>Source=Cron</c> conversation stays in the sidebar's own list.
+    /// The Scheduled group it used to sit in is gone - see the toolbar schedules panel.
+    /// </summary>
     [Fact]
-    public void CronConversations_RenderedInScheduledGroup()
+    public void CronConversations_StayInTheConversationsList()
     {
-        // Seed the Scheduled group as expanded so the rendered output is deterministic.
-        // Without this, MainLayout.OnAfterRenderAsync reads localStorage (null under Loose mode
-        // -> collapsed) on an async continuation that can re-collapse the group *after* a manual
-        // toggle click, racing the assertion and intermittently failing in CI. Seeding the stored
-        // value to "false" makes OnAfterRenderAsync land on expanded and removes the race entirely.
-        ExpandScheduledGroupByDefault();
-
         // Arrange: one server-stamped Source=Cron conversation (#2305: no id-prefix inference)
         SeedAgentWithConversations(
             new ConversationSummaryDto("conv-daily-check", "a-1", "Daily Check", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
@@ -92,28 +80,23 @@ public sealed class ConversationGroupingTests : IDisposable
 
         var cut = RenderLayout();
 
-        // The scheduled group should exist
-        var scheduledGroup = cut.Find("[data-testid='conversation-group-scheduled']");
-        Assert.NotNull(scheduledGroup);
-
-        // WaitForAssertion lets the async OnAfterRenderAsync settle before we read the group body,
-        // so the cron conversation is reliably rendered inside the expanded Scheduled group.
+        // The Scheduled group is gone - its replacement is the toolbar schedules panel, which lists
+        // cron JOBS rather than only the ones that produced a conversation. A cron conversation is
+        // still a conversation, so it must remain reachable in the sidebar's own list; keeping the
+        // old subtraction after removing the group would have hidden it from both places.
         cut.WaitForAssertion(() =>
-            Assert.Contains("Daily Check", cut.Find("[data-testid='conversation-group-scheduled']").TextContent));
+            Assert.Contains("Daily Check", cut.Find("[data-testid='conversation-group-conversations']").TextContent));
+        Assert.Empty(cut.FindAll("[data-testid='conversation-group-scheduled']"));
     }
 
     /// <summary>
-    /// #2305: a conversation whose SERVER-stamped source is <c>Cron</c> is grouped under Scheduled.
-    /// This replaces the deleted mutable virtual-session flag/kind fixture -
-    /// the typed origin is now the only mechanism.
+    /// #2305: the typed origin is the only mechanism that marks a conversation as cron - this
+    /// replaces the deleted mutable virtual-session flag/kind fixture. It no longer moves the row
+    /// to a group of its own, but it must still be the thing that classifies it.
     /// </summary>
     [Fact]
-    public void CronConversations_TypedSource_RenderedInScheduledGroup()
+    public void CronConversations_TypedSource_IsClassifiedFromTheTypedOriginAlone()
     {
-        // Seed the Scheduled group as expanded so the rendered output is deterministic (see the
-        // sibling test above for the OnAfterRenderAsync re-collapse race this avoids).
-        ExpandScheduledGroupByDefault();
-
         SeedAgentWithConversations(
             new ConversationSummaryDto("c-1", "a-1", "Cron Task", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
             new ConversationSummaryDto("c-2", "a-1", "Normal Chat", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
@@ -122,23 +105,18 @@ public sealed class ConversationGroupingTests : IDisposable
 
         var cut = RenderLayout();
 
-        var scheduledGroup = cut.Find("[data-testid='conversation-group-scheduled']");
-        Assert.NotNull(scheduledGroup);
-
         cut.WaitForAssertion(() =>
-            Assert.Contains("Cron Task", cut.Find("[data-testid='conversation-group-scheduled']").TextContent));
+            Assert.Contains("Cron Task", cut.Find("[data-testid='conversation-group-conversations']").TextContent));
     }
 
     /// <summary>
-    /// #2304: a conversation the SERVER marked <c>source="Cron"</c> is grouped under Scheduled and
-    /// badged from the typed projection alone - no conversation-id prefix, no mutable
-    /// virtual-session flag, no cron-job id lookup.
+    /// #2304: a conversation the SERVER marked <c>source="Cron"</c> is badged from the typed
+    /// projection alone - no conversation-id prefix, no mutable virtual-session flag, no cron-job
+    /// id lookup. The badge is what survived the group's removal.
     /// </summary>
     [Fact]
-    public void ServerSuppliedCronSource_RenderedInScheduledGroup_WithCronBadge()
+    public void ServerSuppliedCronSource_IsBadgedInTheConversationsList()
     {
-        ExpandScheduledGroupByDefault();
-
         SeedAgentWithConversations(
             new ConversationSummaryDto("c-1", "a-1", "Scheduled Run", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
             new ConversationSummaryDto("c-2", "a-1", "Normal Chat", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
@@ -146,17 +124,15 @@ public sealed class ConversationGroupingTests : IDisposable
 
         var cut = RenderLayout();
 
+        // The BADGE is the part that matters and is unchanged: the typed projection alone marks the
+        // row as Cron. Only its location moved, from the removed Scheduled group into the list.
         cut.WaitForAssertion(() =>
         {
-            var scheduledGroup = cut.Find("[data-testid='conversation-group-scheduled']");
-            Assert.Contains("Scheduled Run", scheduledGroup.TextContent);
-            Assert.Contains("Cron", scheduledGroup.TextContent);
+            var convsGroup = cut.Find("[data-testid='conversation-group-conversations']");
+            Assert.Contains("Scheduled Run", convsGroup.TextContent);
+            Assert.Contains("Cron", convsGroup.TextContent);
+            Assert.Contains("Normal Chat", convsGroup.TextContent);
         });
-
-        // The normal conversation stays in the normal group.
-        var convsGroup = cut.Find("[data-testid='conversation-group-conversations']");
-        Assert.Contains("Normal Chat", convsGroup.TextContent);
-        Assert.DoesNotContain("Scheduled Run", convsGroup.TextContent);
     }
 
     /// <summary>
@@ -213,43 +189,114 @@ public sealed class ConversationGroupingTests : IDisposable
         Assert.Equal(ConversationSource.Channel, _store.GetConversation("c-1")!.Source);
     }
 
+    /// <summary>
+    /// The Scheduled group's collapsed-by-default behaviour carried over to its replacement: the
+    /// toolbar schedules panel is closed until the chevron is used, so the nav still starts tight.
+    /// </summary>
     [Fact]
-    public void ScheduledGroup_CollapsedByDefault()
+    public void SchedulesPanel_ClosedByDefault_AndOpensOnTheChevron()
     {
-        // Arrange: a server-stamped Source=Cron conversation
         SeedAgentWithConversations(
-            new ConversationSummaryDto("conv-job-1", "a-1", "Cron Job", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
             new ConversationSummaryDto("c-1", "a-1", "Normal Chat", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
         );
 
         var cut = RenderLayout();
 
-        // The scheduled group should exist
-        var scheduledGroup = cut.Find("[data-testid='conversation-group-scheduled']");
-        Assert.NotNull(scheduledGroup);
+        // FindAll, not Find, for every read of the toggle. A `Find` whose selector was already
+        // resolved before the click hands back a wrapper that reports the PRE-click attribute -
+        // this test failed on a genuinely-open panel until the reads were made fresh queries.
+        Assert.Equal("false", cut.FindAll("[data-testid='schedules-toggle']")[0].GetAttribute("aria-expanded"));
+        Assert.Empty(cut.FindAll("[data-testid='schedules-menu']"));
 
-        // But the cron conversation items should NOT be visible (collapsed by default)
-        var itemsInGroup = scheduledGroup.QuerySelectorAll("[data-testid='conversation-list-item']");
-        Assert.Empty(itemsInGroup);
+        cut.FindAll("[data-testid='schedules-toggle']")[0].Click();
+
+        Assert.Equal("true", cut.FindAll("[data-testid='schedules-toggle']")[0].GetAttribute("aria-expanded"));
+        Assert.Single(cut.FindAll("[data-testid='schedules-menu']"));
+
+        // And it closes again on the same control, so the chevron is a toggle and not a one-way door.
+        cut.FindAll("[data-testid='schedules-toggle']")[0].Click();
+
+        Assert.Equal("false", cut.FindAll("[data-testid='schedules-toggle']")[0].GetAttribute("aria-expanded"));
+        Assert.Empty(cut.FindAll("[data-testid='schedules-menu']"));
     }
 
+    /// <summary>
+    /// Narrow enough and Cron Jobs moves into the "More" menu. There it must degrade to a plain
+    /// link: a panel nested inside a panel has nowhere to open, so the split control is dropped and
+    /// the entry becomes an ordinary anchor to /cron. This is the branch that keeps the feature from
+    /// making the entry unreachable on a narrow window.
+    /// </summary>
     [Fact]
-    public void ScheduledGroup_ShowsCount()
+    public async Task SchedulesPanel_DegradesToAPlainLink_InsideTheOverflowMenu()
     {
-        // Arrange: two server-stamped Source=Cron conversations
         SeedAgentWithConversations(
-            new ConversationSummaryDto("conv-job-1", "a-1", "Cron Job 1", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
-            new ConversationSummaryDto("conv-job-2", "a-1", "Cron Job 2", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "HumanAgent", "Cron"),
             new ConversationSummaryDto("c-1", "a-1", "Normal Chat", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
         );
 
         var cut = RenderLayout();
+        Assert.Single(cut.FindAll("[data-testid='schedules-dropdown']"));
 
-        // Find the Scheduled group's count badge. #2122 added count badges to Pinned,
-        // Conversations and Webhooks too, so the bare class selector is no longer unique -
-        // this now targets the SAME badge by its own test id. The asserted value is unchanged.
-        var countBadge = cut.Find("[data-testid='cron-group-count']");
-        Assert.Equal("2", countBadge.TextContent.Trim());
+        // What the measurer would report on a narrow window. One item fits, so everything after the
+        // first - Cron Jobs included - is pushed into the menu.
+        await cut.InvokeAsync(() => cut.Instance.SetVisibleNavCount(1));
+
+        cut.FindAll("[data-testid='toolbar-more']")[0].Click();
+
+        var menu = cut.FindAll("[data-testid='toolbar-overflow-menu']")[0];
+        var cron = menu.QuerySelector("[data-testid='nav-cron-jobs']");
+        Assert.NotNull(cron);
+        Assert.Equal("cron", cron!.GetAttribute("href"));
+
+        // No split control and no panel anywhere on the page while the entry lives in the menu.
+        Assert.Empty(cut.FindAll("[data-testid='schedules-dropdown']"));
+        Assert.Empty(cut.FindAll("[data-testid='schedules-toggle']"));
+        Assert.Empty(cut.FindAll("[data-testid='schedules-menu']"));
+    }
+
+    /// <summary>
+    /// The count moved from cron CONVERSATIONS to cron JOBS, which is the substance of the change:
+    /// the old group could only count schedules that had already run. A job with no conversation
+    /// must appear here, so this seeds the cron API rather than the conversation store.
+    /// </summary>
+    [Fact]
+    public void SchedulesPanel_ListsEveryJob_IncludingOnesThatHaveNeverRun()
+    {
+        var handler = new MockCronHttpHandler();
+        handler.SetCronResponse("""
+            [
+              {"id":"j-1","name":"Nightly Digest","schedule":"0 4 * * *","enabled":true,"conversationId":"conv-a","agentId":"a-1"},
+              {"id":"j-2","name":"Never Run Yet","schedule":"0 */2 * * *","enabled":true},
+              {"id":"j-3","name":"Switched Off","schedule":"0 9 * * 1","enabled":false}
+            ]
+            """);
+        var (ctx, store) = BuildCronLayoutContext(handler);
+        using var _panelCtx = ctx;
+
+        store.SeedAgents([new AgentSummary("a-1", "Alpha")]);
+        store.SeedConversations("a-1", [
+            new ConversationSummaryDto("conv-a", "a-1", "Digest Conv", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
+        ]);
+        store.SelectView("a-1", string.Empty, SelectionSource.UserClick);
+
+        var cut = ctx.Render<MainLayout>(p => p.Add(c => c.Body, (RenderFragment)(_ => { })));
+
+        // The job list arrives asynchronously in OnAfterRenderAsync, so the panel is opened inside
+        // the retry rather than once before it.
+        cut.WaitForAssertion(() =>
+        {
+            if (cut.FindAll("[data-testid='schedules-menu']").Count == 0)
+                cut.Find("[data-testid='schedules-toggle']").Click();
+
+            var rows = cut.FindAll("[data-testid='schedule-row']");
+            Assert.Equal(3, rows.Count);
+        });
+
+        var menu = cut.Find("[data-testid='schedules-menu']");
+        Assert.Contains("Nightly Digest", menu.TextContent);
+        Assert.Contains("Never Run Yet", menu.TextContent);   // the case the old group could not show
+        Assert.Contains("0 */2 * * *", menu.TextContent);      // the schedule itself is the identity
+        Assert.Single(cut.FindAll("[data-testid='schedule-disabled']"));
+        Assert.Single(cut.FindAll("[data-testid='schedules-view-all']"));
     }
 
     [Fact]
@@ -350,20 +397,64 @@ public sealed class ConversationGroupingTests : IDisposable
         var convsGroup = cut.Find("[data-testid='conversation-group-conversations']");
         Assert.Contains("Normal Chat", convsGroup.TextContent);
 
-        // Pinned should NOT be in the normal conversations group
+        // Pinned should NOT be in the normal conversations group - that rule is unchanged.
         Assert.DoesNotContain("Pinned Chat", convsGroup.TextContent);
 
-        // Cron should NOT be in the normal conversations group
-        Assert.DoesNotContain("Cron Job", convsGroup.TextContent);
+        // Cron SHOULD be here now, badged. This is the deliberate inversion: the Scheduled group
+        // moved to the toolbar schedules panel, which lists cron JOBS, and a cron conversation is
+        // still a conversation. Had the old subtraction stayed, it would have been in no group at
+        // all - visible in neither the sidebar nor the panel.
+        Assert.Contains("Cron Job", convsGroup.TextContent);
+        Assert.Contains("Cron", convsGroup.TextContent);
     }
 
+    /// <summary>
+    /// A conversation a cron job points at stays reachable, and the job itself is named in the
+    /// toolbar panel. Previously this asserted the conversation appeared in the Scheduled group.
+    /// </summary>
     [Fact]
-    public void ConversationAssignedToCronJob_RenderedInScheduledGroup()
+    public void ConversationAssignedToCronJob_StaysInTheListAndTheJobIsNamedInThePanel()
     {
         // Arrange: set up a mock HTTP handler that returns cron jobs with a conversationId
         var handler = new MockCronHttpHandler();
         handler.SetCronResponse("[{\"id\":\"job-1\",\"name\":\"Daily Digest\",\"schedule\":\"0 8 * * *\",\"enabled\":true,\"conversationId\":\"conv:assigned-to-cron\"}]");
-        using var ctx = new BunitContext();
+        var (ctx, store) = BuildCronLayoutContext(handler);
+        using var _ctxScope = ctx;
+
+        store.SeedAgents([new AgentSummary("a-1", "Alpha")]);
+        store.SeedConversations("a-1", [
+            new ConversationSummaryDto("conv:assigned-to-cron", "a-1", "Digest Conv", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+            new ConversationSummaryDto("conv:normal", "a-1", "Normal Conv", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
+        ]);
+        store.SelectView("a-1", string.Empty, SelectionSource.UserClick);
+
+        var cut = ctx.Render<MainLayout>(p => p
+            .Add(c => c.Body, (RenderFragment)(_ => { })));
+
+        // Both conversations sit in the one list now; neither is pulled into a separate group.
+        var convsGroup = cut.Find("[data-testid='conversation-group-conversations']");
+        Assert.Contains("Digest Conv", convsGroup.TextContent);
+        Assert.Contains("Normal Conv", convsGroup.TextContent);
+
+        // The job list arrives asynchronously in OnAfterRenderAsync (LoadCronJobsAsync), so the
+        // panel is opened inside the retry rather than once before it.
+        cut.WaitForAssertion(() =>
+        {
+            if (cut.FindAll("[data-testid='schedules-menu']").Count == 0)
+                cut.Find("[data-testid='schedules-toggle']").Click();
+
+            Assert.Contains("Daily Digest", cut.Find("[data-testid='schedules-menu']").TextContent);
+        });
+    }
+
+    /// <summary>
+    /// The layout's full service graph with a mocked cron API. Extracted because two tests need it:
+    /// the conversation-assignment test that already had it inline, and the schedules-panel test
+    /// that needs jobs with no conversation - the case the removed sidebar group could never show.
+    /// </summary>
+    private static (BunitContext Ctx, ClientStateStore Store) BuildCronLayoutContext(MockCronHttpHandler handler)
+    {
+        var ctx = new BunitContext();
         var httpWithMock = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
@@ -390,30 +481,7 @@ public sealed class ConversationGroupingTests : IDisposable
         ctx.Services.AddSingleton(new ToolsApiClient(httpWithMock));
         ctx.Services.AddStubNavOrderApiClient();
         ctx.JSInterop.Mode = JSRuntimeMode.Loose;
-        // Render the Scheduled group expanded by default so the assertion does not depend on a
-        // toggle click racing the async OnAfterRenderAsync localStorage read (see the
-        // ExpandScheduledGroupByDefault helper for the shared-context tests).
-        ctx.JSInterop.Setup<string?>("localStorage.getItem", "botnexus-cron-collapsed").SetResult("false");
-
-        store.SeedAgents([new AgentSummary("a-1", "Alpha")]);
-        store.SeedConversations("a-1", [
-            new ConversationSummaryDto("conv:assigned-to-cron", "a-1", "Digest Conv", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
-            new ConversationSummaryDto("conv:normal", "a-1", "Normal Conv", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
-        ]);
-        store.SelectView("a-1", string.Empty, SelectionSource.UserClick);
-
-        var cut = ctx.Render<MainLayout>(p => p
-            .Add(c => c.Body, (RenderFragment)(_ => { })));
-
-        // The cron->conversation id mapping is fetched asynchronously in OnAfterRenderAsync
-        // (LoadCronConversationIdsAsync). WaitForAssertion retries until that async load and the
-        // resulting re-render have settled, so the assigned conversation reliably appears in the
-        // expanded Scheduled group without a fixed Task.Delay or a toggle click.
-        cut.WaitForAssertion(() =>
-            Assert.Contains("Digest Conv", cut.Find("[data-testid='conversation-group-scheduled']").TextContent));
-
-        // The normal conversation should NOT be in the scheduled group
-        Assert.DoesNotContain("Normal Conv", cut.Find("[data-testid='conversation-group-scheduled']").TextContent);
+        return (ctx, store);
     }
 
     private sealed class MockCronHttpHandler : HttpMessageHandler
