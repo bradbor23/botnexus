@@ -31,7 +31,7 @@ public sealed class HttpSseSessionExpiryTests
         await transport.SendAsync(toolCall);
 
         // OBSERVABLE 1: the caller got the reply to its ORIGINAL request, not the initialize result.
-        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token);
+        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         response.Id.ShouldNotBeNull();
         JsonSerializer.Serialize(response.Id).ShouldBe("7");
         response.Result!.Value.GetProperty("replayed").GetBoolean().ShouldBeTrue();

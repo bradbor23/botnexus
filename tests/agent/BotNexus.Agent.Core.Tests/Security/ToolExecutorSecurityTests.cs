@@ -83,6 +83,8 @@ public sealed class ToolExecutorSecurityTests
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new AgentToolResult([new AgentToolContent(AgentToolContentType.Text, "done")]);
         });
+        // deadline-is-the-assertion: the tool sleeps 30s by design; this token cancels it, and that
+        // cancellation is the assertion.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         var act = () => ExecuteSingleToolCall(tool, cts.Token);

@@ -74,6 +74,8 @@ public sealed class CompactionTimeoutTests
             SummarizationModel = TestModel.Id
         };
 
+        // deadline-is-the-assertion: the compactor hangs by design; this is the caller cancellation whose
+        // propagation is the assertion.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
         // Caller cancellation should propagate as OperationCanceledException

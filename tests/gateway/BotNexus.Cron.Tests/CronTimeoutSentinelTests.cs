@@ -282,6 +282,8 @@ public sealed class CronTimeoutSentinelTests
     public async Task RunProcessAsync_UnlimitedTimeout_StillHonoursCancellationToken()
     {
         // The unlimited path must not become an uninterruptible process wait.
+        // deadline-is-the-assertion: the unlimited-timeout path is under test, so this token is the ONLY
+        // thing that can end it. Expiry is the pass.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
         await Should.ThrowAsync<OperationCanceledException>(

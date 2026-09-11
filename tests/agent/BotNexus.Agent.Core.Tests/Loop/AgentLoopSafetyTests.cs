@@ -25,6 +25,9 @@ public sealed class AgentLoopSafetyTests
 
         var config = CreateConfig("loop-safety");
         var context = new AgentContext(null, [], [new EchoTool()]);
+        // deadline-is-the-assertion: this token is the loop's OWN cancellation, not a watchdog on the test.
+        // Expiry is what makes the assertion below possible, so load can only delay the pass, never break
+        // it.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
 
         var act = () => AgentLoopRunner.RunAsync([new AgentUserMessage("go")], context, config, _ => Task.CompletedTask, cts.Token);
@@ -88,6 +91,8 @@ public sealed class AgentLoopSafetyTests
             simpleStreamFactory: (_, _, _) => TestStreamFactory.CreateToolCallResponse(("tc1", "slow", new Dictionary<string, object?>()))));
         var config = CreateConfig("cancel-tools");
         var context = new AgentContext(null, [], [new SlowTool()]);
+        // deadline-is-the-assertion: the token cancels the loop mid-tool, which is the behaviour under
+        // test. Expiry is the pass.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         var act = () => AgentLoopRunner.RunAsync([new AgentUserMessage("go")], context, config, _ => Task.CompletedTask, cts.Token);

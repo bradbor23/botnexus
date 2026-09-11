@@ -237,6 +237,8 @@ public sealed class AgentConverseToolTests
     [Fact]
     public async Task ExecuteAsync_WhenCallerAborts_ReturnsCallerAbortedReportInsteadOfBareCancellation()
     {
+        // deadline-is-the-assertion: the fake waits forever on the token, so this expiry IS the caller
+        // abort the test reports on.
         using var callerCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
         var service = new Mock<IAgentExchangeService>();
         service.Setup(s => s.ConverseAsync(It.IsAny<AgentExchangeRequest>(), It.IsAny<CancellationToken>()))
@@ -275,6 +277,8 @@ public sealed class AgentConverseToolTests
     [Fact]
     public async Task ExecuteAsync_WhenCallerAborts_UsesCauseDistinctFromTimeoutAndTargetUnavailable()
     {
+        // deadline-is-the-assertion: the fake waits forever on the token, so this expiry IS the caller
+        // abort the test reports on.
         using var callerCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
         var service = new Mock<IAgentExchangeService>();
         service.Setup(s => s.ConverseAsync(It.IsAny<AgentExchangeRequest>(), It.IsAny<CancellationToken>()))

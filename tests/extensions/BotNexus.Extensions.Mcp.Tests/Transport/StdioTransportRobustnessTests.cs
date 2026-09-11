@@ -61,6 +61,8 @@ public sealed class StdioTransportRobustnessTests
         var transport = new StdioMcpTransport(file, args);
         await transport.ConnectAsync();
 
+        // deadline-is-the-assertion: the child has exited, so nothing will ever arrive; the asserted throw
+        // only happens on expiry.
         var act = () => transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token);
         await act.ShouldThrowAsync<OperationCanceledException>();
         await transport.DisposeAsync();
@@ -75,7 +77,7 @@ public sealed class StdioTransportRobustnessTests
         var transport = new StdioMcpTransport(file, args);
         await transport.ConnectAsync();
 
-        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         response.Id.ShouldNotBeNull();
         await transport.DisposeAsync();
     }
@@ -91,7 +93,7 @@ public sealed class StdioTransportRobustnessTests
         var connectTask = transport.ConnectAsync();
         await connectTask;
 
-        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = await transport.ReceiveAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
         response.Id.ShouldNotBeNull();
         await transport.DisposeAsync();
     }

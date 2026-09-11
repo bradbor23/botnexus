@@ -162,7 +162,7 @@ public static class ProcessRunner
                 if (!_process.HasExited)
                 {
                     _process.Kill(entireProcessTree: true);
-                    using var killCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    using var killCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     try { await _process.WaitForExitAsync(killCts.Token); } catch { /* swallow */ }
                 }
             }

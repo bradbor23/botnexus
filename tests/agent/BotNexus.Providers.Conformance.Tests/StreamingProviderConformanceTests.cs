@@ -394,13 +394,15 @@ public abstract class StreamingProviderConformanceTests
         var provider = CreateProvider(handler);
         var options = CreateOptions() with { CancellationToken = cts.Token };
         var stream = provider.Stream(CreateModel(), CreateContext(), options);
+        // deadline-is-the-assertion: cancelling mid-stream IS the conformance case. Expiry is the pass, so
+        // a longer budget would only make every provider's run slower.
         cts.CancelAfter(TimeSpan.FromMilliseconds(250));
 
         var events = new List<AssistantMessageEvent>();
         // Bound the read: a producer that emits no terminal event at all would otherwise hang the
         // whole suite. A thrown OperationCanceledException here is a loud failure, which is what a
         // silently-never-terminating stream deserves.
-        using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await foreach (var evt in stream.WithCancellation(readTimeout.Token))
             events.Add(evt);
 

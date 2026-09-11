@@ -244,6 +244,8 @@ public class McpClientTests
         var client = new McpClient(transport, "slow");
         await client.InitializeAsync();
 
+        // deadline-is-the-assertion: slow_tool never returns; this token is the caller cancellation under
+        // test. Expiry is the pass.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
         var act = () => client.CallToolAsync("slow_tool", ct: cts.Token);

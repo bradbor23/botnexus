@@ -30,6 +30,9 @@ public class LiveGatewayFixture : IAsyncLifetime
 
         try
         {
+            // deadline-is-the-assertion: this is an availability PROBE, not a wait for a result. Expiry
+            // means 'no dev gateway here' and the suite skips, so widening it would only make the common
+            // absent case slow. Localhost health answers in milliseconds when it answers at all.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             var response = await Http.GetAsync("/health", cts.Token);
             IsAvailable = response.IsSuccessStatusCode;
@@ -47,6 +50,8 @@ public class LiveGatewayFixture : IAsyncLifetime
 
         try
         {
+            // deadline-is-the-assertion: availability probe for the SignalR hub: expiry means 'absent' and
+            // the suite skips, so a generous budget would just stall every run without a gateway.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await _signalR.ConnectAsync(cts.Token);
         }

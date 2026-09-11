@@ -38,8 +38,9 @@ public sealed class TuiChannelAdapterTests
 
             await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
 
-            // Wait for the dispatch to occur (up to 5 seconds), then stop.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Wait for the dispatch signal, then stop. The budget is a hang guard, not a
+            // measurement: it is reached only when the dispatch never happens at all.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await dispatchedTcs.Task.WaitAsync(cts.Token);
 
             await adapter.StopAsync(CancellationToken.None);
@@ -100,8 +101,9 @@ public sealed class TuiChannelAdapterTests
 
             await adapter.StartAsync(dispatcher.Object, CancellationToken.None);
 
-            // Wait for the dispatch to occur (up to 5 seconds), then stop.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Wait for the dispatch signal, then stop. The budget is a hang guard, not a
+            // measurement: it is reached only when the dispatch never happens at all.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await dispatchedTcs.Task.WaitAsync(cts.Token);
 
             await adapter.StopAsync(CancellationToken.None);

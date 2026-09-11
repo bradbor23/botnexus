@@ -155,6 +155,8 @@ public sealed class ShellToolTests
     {
         var pidFile = Path.Combine(Path.GetTempPath(), $"botnexus-shelltool-pid-{Guid.NewGuid():N}.txt");
         var commandPath = pidFile.Replace("\\", "/", StringComparison.Ordinal);
+        // deadline-is-the-assertion: the token cancels a deliberately long-running shell command; its
+        // expiry is what the test asserts on.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
 
         var result = await _tool.ExecuteAsync("test-call", new Dictionary<string, object?>

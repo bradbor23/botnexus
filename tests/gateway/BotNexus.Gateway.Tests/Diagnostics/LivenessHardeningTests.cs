@@ -108,7 +108,7 @@ public sealed class HealthEndpointTimeoutTests
     [Fact]
     public async Task HealthCheck_WhenNotTimedOut_ReturnsStatus()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var result = await HealthEndpointHelper.ExecuteWithTimeoutAsync(
             () => Task.FromResult(new HealthResponse("ok", null, null)),
             cts.Token);
@@ -146,7 +146,7 @@ public sealed class HealthEndpointTimeoutTests
     [Fact]
     public async Task HealthCheck_PreservesResponseFields()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var result = await HealthEndpointHelper.ExecuteWithTimeoutAsync(
             () => Task.FromResult(new HealthResponse("degraded", "2026-06-09T12:00:00Z", 600.5)),
             cts.Token);

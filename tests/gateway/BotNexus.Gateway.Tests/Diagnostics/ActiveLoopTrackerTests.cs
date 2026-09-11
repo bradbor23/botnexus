@@ -190,6 +190,9 @@ public class ActiveLoopTrackerTests
     public async Task GetSnapshot_CountAlwaysEqualsDetailListSize_UnderConcurrentStartsAndEnds()
     {
         var tracker = new ActiveLoopTracker();
+        // deadline-is-the-assertion: this bounds a concurrency churn loop rather than waiting for a result.
+        // Expiry is the normal end of the stress period, and load merely produces more churn - which is
+        // more coverage, not a failure.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         var churn = Task.Run(() =>

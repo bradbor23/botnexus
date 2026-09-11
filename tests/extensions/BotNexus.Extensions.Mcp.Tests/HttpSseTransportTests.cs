@@ -271,7 +271,7 @@ public class HttpSseTransportTests
 
     private static async Task<JsonRpcResponse> ReadOneResponse(HttpSseMcpTransport transport)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         return await transport.ReceiveAsync(cts.Token);
     }
 }

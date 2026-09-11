@@ -192,6 +192,8 @@ public sealed class FileWatcherToolTests : IDisposable
         await File.WriteAllTextAsync(path, "unchanged");
 
         using var cts = new CancellationTokenSource();
+        // deadline-is-the-assertion: nothing ever touches the file, so the watch only ends when this
+        // expires. Expiry is the pass.
         cts.CancelAfter(TimeSpan.FromMilliseconds(500));
 
         var result = await ExecuteAsync(

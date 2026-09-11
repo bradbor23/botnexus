@@ -110,6 +110,8 @@ public sealed class LocalCliCopilotSetupTests : IAsyncLifetime
         try
         {
             using var client = new TcpClient();
+            // deadline-is-the-assertion: connectivity probe: expiry means 'no route to github.com' and the
+            // caller returns false, so this is never spent on the passing path.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             await client.ConnectAsync("github.com", 443, cts.Token);
             return client.Connected;

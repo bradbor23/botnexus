@@ -179,6 +179,8 @@ public sealed class CompactionSummarizationFailedTests
         var session = CreateLargeSession(100);
         var compactor = CreateHungCompactor();
 
+        // deadline-is-the-assertion: the compactor hangs by design; this is the caller cancellation whose
+        // propagation is the assertion.
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
         // OperationCanceledException derives from Exception, so a naive catch (Exception)

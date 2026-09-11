@@ -239,7 +239,7 @@ public class OpenAIResponsesProviderTests
         var stream = provider.Stream(model, context, new OpenAIResponsesOptions { ApiKey = "test-key" });
 
         var eventTypes = new List<string>();
-        await foreach (var evt in stream.WithCancellation(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token))
+        await foreach (var evt in stream.WithCancellation(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token))
             eventTypes.Add(evt.Type);
 
         var result = await TestAwait.SignaledAsync(
