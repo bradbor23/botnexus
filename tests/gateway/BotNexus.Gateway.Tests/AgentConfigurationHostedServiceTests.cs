@@ -396,6 +396,36 @@ public sealed class AgentConfigurationHostedServiceTests
             NullLogger<AgentConfigurationHostedService>.Instance,
             delay ?? ((_, _) => Task.CompletedTask));
 
+    [Fact]
+    public async Task StartAsync_SubscribesToEachSourceBeforeLoadingIt()
+    {
+        // Startup used to load every source and only then attach watchers. A config reload
+        // landing in that window fired with no listener, so it was dropped -- and because the
+        // options monitor had already advanced, the source's change-suppression fingerprint
+        // then matched the new config while the registry still held the old one, so every
+        // later notification for that content was suppressed as unchanged. The registry stayed
+        // stale until restart (#140).
+        //
+        // The order is the fix, so assert the order: a notification that arrives while the
+        // source is loading has somewhere to go.
+        var order = new List<string>();
+        var source = new Mock<IAgentConfigurationSource>();
+        source.Setup(s => s.Watch(It.IsAny<Action<IReadOnlyList<AgentDescriptor>>>()))
+            .Callback(() => order.Add("watch"))
+            .Returns(Mock.Of<IDisposable>());
+        source.Setup(s => s.LoadAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("load"))
+            .ReturnsAsync([CreateDescriptor("agent-a")]);
+        var registry = new RecordingAgentRegistry();
+        var service = CreateService([source.Object], registry);
+
+        await service.StartAsync(CancellationToken.None);
+
+        order.ShouldBe(["watch", "load"],
+            "Subscribing after the load leaves a window in which a reload notification is lost forever.");
+        registry.GetAll().Select(d => d.AgentId.Value).ShouldBe(["agent-a"]);
+    }
+
     private sealed class ControllableDelay
     {
         private readonly Lock _gate = new();

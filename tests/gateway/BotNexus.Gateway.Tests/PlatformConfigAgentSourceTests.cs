@@ -1365,6 +1365,67 @@ public sealed class PlatformConfigAgentSourceTests : IDisposable
         applies.ShouldBe(1);
     }
 
+    // -------------------------------------------------------------------------
+    // Issue #140: a reload that lands between LoadAsync and Watch is lost forever
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Watch_SeedsFingerprintFromCurrentValue_SoAReloadDuringSubscriptionIsLostForever()
+    {
+        // AgentConfigurationHostedService.StartAsync loads every source in one loop and
+        // only then subscribes their watchers in a second loop. A config reload that
+        // lands in that window fires with no listener attached, so the consumer never
+        // sees it -- but IOptionsMonitor.CurrentValue has already advanced.
+        //
+        // Watch then seeds its suppression fingerprint from a FRESH CurrentValue read
+        // rather than from the descriptors the consumer actually applied. The seed is
+        // therefore the NEW config while the registry still holds the OLD one, and the
+        // next notification for that same content is suppressed as "unchanged".
+        // The registry stays stale until the process restarts.
+        var before = new PlatformConfig
+        {
+            Agents = new Dictionary<string, AgentDefinitionConfig>
+            {
+                ["seed"] = new() { Provider = "copilot", Model = "gpt-4.1", Enabled = true }
+            }
+        };
+        var after = new PlatformConfig
+        {
+            Agents = new Dictionary<string, AgentDefinitionConfig>
+            {
+                ["seed"] = new() { Provider = "copilot", Model = "gpt-4.1", Enabled = true },
+                ["bundled"] = new() { Provider = "copilot", Model = "gpt-4.1", Enabled = true }
+            }
+        };
+
+        var monitor = new TestOptionsMonitor<PlatformConfig>(before);
+        var source = new PlatformConfigAgentSource(monitor, _configDirectory, new ListLogger<PlatformConfigAgentSource>());
+
+        // 1. The host loads -- the consumer applies "before" (one agent).
+        var applied = await source.LoadAsync();
+        applied.Select(d => d.AgentId.Value).ShouldBe(["seed"], ignoreOrder: true);
+
+        // 2. The file lands while the host is still between its two loops: the monitor
+        //    advances CurrentValue with nobody subscribed, so the notification is lost.
+        monitor.RaiseChanged(after);
+
+        // 3. The host now subscribes. Watch seeds from CurrentValue == "after".
+        var observed = new List<IReadOnlyList<AgentDescriptor>>();
+        using var subscription = source.Watch(observed.Add);
+
+        // 4. The provider re-notifies for the same content -- the consumer's only
+        //    remaining chance to catch up. (PhysicalFileProvider routinely raises a
+        //    second token for a single write; that duplicate is exactly why this
+        //    source debounces at all.)
+        monitor.RaiseChanged(after);
+
+        observed.ShouldNotBeEmpty(
+            "The consumer applied 'before' but Watch seeded its fingerprint from 'after', " +
+            "so the catch-up notification is suppressed and the registry never learns about " +
+            "the bundled agent.");
+        observed[^1].Select(d => d.AgentId.Value).ShouldBe(["seed", "bundled"], ignoreOrder: true);
+    }
+
     private sealed class StubLocationResolver(IReadOnlyDictionary<string, string> paths) : ILocationResolver
     {
         private readonly IReadOnlyDictionary<string, string> _paths = paths;
