@@ -29,7 +29,7 @@ public sealed class ConversationGroupingTests : IDisposable
         var hub = new GatewayHubConnection();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var gatewayInfo = new GatewayInfoService(http, restClient);
 
         _ctx.Services.AddSingleton<IClientStateStore>(_store);

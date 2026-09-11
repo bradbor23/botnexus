@@ -14,7 +14,7 @@ public sealed class CanvasPanelTests : IDisposable
     {
         _store.SeedAgents([new AgentSummary("agent-1", "Alpha")]);
         _ctx.Services.AddSingleton<IClientStateStore>(_store);
-        _ctx.Services.AddScoped(_ => new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddScoped(_ => OfflineTestHttp.Create("http://localhost/"));
 
         // Setup JS interop for the canvas bridge
         _ctx.JSInterop.SetupVoid("canvasBridge.register", _ => true);

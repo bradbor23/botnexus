@@ -16,7 +16,7 @@ public sealed class DialogAccessibilityTests : IDisposable
         var store = new ClientStateStore();
         var restClient = Substitute.For<IGatewayRestClient>();
         restClient.ApiBaseUrl.Returns("http://localhost/api/");
-        var http = new HttpClient { BaseAddress = new Uri("http://localhost/") };
+        var http = OfflineTestHttp.Create("http://localhost/");
         var prefs = Substitute.For<IPortalPreferencesService>();
         prefs.Current.Returns(new PortalPreferences());
 

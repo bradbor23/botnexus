@@ -38,7 +38,7 @@ public sealed class VerticalSliceDataFlowTests : IDisposable
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(sp => new SlashCommandDispatcher(sp.GetRequiredService<IAgentInteractionService>()));
         _ctx.Services.AddSingleton(_prefs);
         _ctx.Services.AddSingleton(_restClient);
-        _ctx.Services.AddSingleton(new HttpClient { BaseAddress = new Uri("http://localhost/") });
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create("http://localhost/"));
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
     }
 
