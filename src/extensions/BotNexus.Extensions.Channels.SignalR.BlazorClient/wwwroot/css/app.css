@@ -9407,6 +9407,134 @@ h3.conversation-title.editable:hover {
 
 /* Same dismiss surface as the conversation switcher: one element, disposed with
    the menu, reachable in a component test. */
+/* ── Toolbar schedules dropdown ──────────────────────────────────────────────
+   A SPLIT control on the Cron Jobs entry: the label stays an anchor to /cron, and the chevron
+   beside it opens a panel listing every cron job. It is split rather than one button because
+   `nav-cron-jobs` is a preserved selector under #2973 that MainLayoutNavTestIdTests pins to a
+   single element carrying href="cron" - so that element cannot become a button.
+
+   Geometry mirrors .toolbar-overflow deliberately: same relative wrapper, same fixed transparent
+   backdrop for click-outside, same absolutely-positioned panel below the bar. The bar is not one
+   of the three overflow:hidden ancestors that clip popups in the chat header (see #2141/#2441), so
+   an absolute panel is enough here and needs no fixed-position JS anchoring. */
+.toolbar-dropdown {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+}
+
+/* The chevron reads as part of the label, so the pair must not show a seam: the label loses its
+   right padding and the toggle its left. */
+.toolbar-dropdown-label {
+    padding-right: 0.25rem;
+}
+
+.toolbar-dropdown-toggle {
+    padding-left: 0.15rem;
+    padding-right: 0.4rem;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    color: inherit;
+}
+
+.toolbar-dropdown-chevron {
+    font-size: var(--text-caption);
+    line-height: 1;
+    color: var(--text-muted);
+}
+
+.toolbar-dropdown-toggle:hover .toolbar-dropdown-chevron,
+.toolbar-dropdown-toggle.open .toolbar-dropdown-chevron {
+    color: var(--text-primary);
+}
+
+.toolbar-schedule-menu {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    min-width: 20rem;
+    max-width: 28rem;
+    /* Eight jobs fit; a long list scrolls rather than running off the viewport. */
+    max-height: min(60vh, 28rem);
+    overflow-y: auto;
+    padding: 0.25rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-raised);
+}
+
+.toolbar-schedule-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: var(--text-label);
+}
+
+.toolbar-schedule-row:hover {
+    background: var(--color-wash);
+}
+
+.toolbar-schedule-row.disabled .toolbar-schedule-name {
+    color: var(--text-muted);
+}
+
+/* The name is the shrinkable part; the cron expression is the identity of a schedule and is
+   allowed to keep its width. */
+.toolbar-schedule-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolbar-schedule-cron {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.toolbar-schedule-off {
+    flex: 0 0 auto;
+    font-size: var(--text-caption);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-warning-text);
+}
+
+.toolbar-schedule-empty {
+    padding: 0.5rem;
+    font-size: var(--text-label);
+    color: var(--text-muted);
+}
+
+.toolbar-schedule-all {
+    margin-top: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    color: var(--accent);
+    text-decoration: none;
+    font-size: var(--text-label);
+}
+
+.toolbar-schedule-all:hover {
+    background: var(--color-wash);
+}
+
 .toolbar-overflow-backdrop {
     position: fixed;
     inset: 0;
