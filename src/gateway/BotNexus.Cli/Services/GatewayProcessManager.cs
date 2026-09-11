@@ -548,37 +548,63 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// recycled onto a foreign process, or a legacy PID file with no identity, reports NotRunning
     /// rather than falsely claiming the gateway is alive (issue #2369).
     /// </summary>
-    public async Task<GatewayStatus> GetStatusAsync(string? homePath = null, CancellationToken cancellationToken = default)
+    public async Task<GatewayStatus> GetStatusAsync(
+        string? homePath = null,
+        string? gatewayBinaryPath = null,
+        CancellationToken cancellationToken = default)
     {
         var pidFilePath = ResolvePidFilePath(homePath);
-        var (process, record, staleReason) = await ResolveVerifiedProcessAsync(pidFilePath);
-
-        if (record is null)
-        {
-            return new GatewayStatus(
-                State: GatewayState.NotRunning,
-                Pid: null,
-                Uptime: null,
-                Message: "No PID file found");
-        }
+        // Read-only: see the cleanupStale remarks. `status` must not destroy what `stop` needs.
+        var (process, record, staleReason) = await ResolveVerifiedProcessAsync(pidFilePath, cleanupStale: false);
 
         if (process is null)
         {
+            // No usable PID file is NOT evidence of a dead gateway. scripts/gateway-restart.sh and
+            // the systemd unit both launch the binary directly and write no PID file at all, so
+            // this is the ORDINARY state of a healthy deployment, not an edge case. StopAsync and
+            // IsRunning have resolved it by binary-path identity since #2772; status could not,
+            // because it took no binary path to resolve it with -- so it reported a live gateway
+            // serving the portal as "not running" (#2841-family defect, one surface later).
+            var discovered = FindProcessByBinaryPath(gatewayBinaryPath);
+            if (discovered is not null)
+            {
+                var discoveredProbe = await ProbeGatewayAsync(ResolveHealthUrl(), CancellationToken.None);
+                return new GatewayStatus(
+                    State: GatewayState.Running,
+                    Pid: discovered.Id,
+                    // The handle exposes no start time, so uptime is genuinely unknown here rather
+                    // than zero. Reporting a fabricated 00:00:00 would be worse than saying so.
+                    Uptime: null,
+                    Message: record is null
+                        ? "Running (discovered by binary path; no PID file)"
+                        : $"Running (discovered by binary path; {staleReason})",
+                    ProbeResult: discoveredProbe);
+            }
+
+            if (record is null)
+            {
+                return new GatewayStatus(
+                    State: GatewayState.NotRunning,
+                    Pid: null,
+                    Uptime: null,
+                    Message: "No PID file found");
+            }
+
             return new GatewayStatus(
                 State: GatewayState.NotRunning,
                 Pid: null,
                 Uptime: null,
-                Message: staleReason ?? $"Process {record.Pid} is not the gateway (cleaned stale PID)");
+                Message: staleReason ?? $"Process {record.Pid} is not the gateway");
         }
 
         // Uptime comes from the verified identity record, which is by definition the real start time.
-        TimeSpan? uptime = record.StartTimeUtc is null
+        TimeSpan? uptime = record!.StartTimeUtc is null
             ? null
             : DateTime.UtcNow - record.StartTimeUtc.Value;
 
         // Probe the gateway HTTP endpoint to distinguish running+authenticated vs
         // running+no-auth (returns 401/403) vs running+unreachable (wrong port/not bound).
-        var probeResult = await ProbeGatewayAsync(DefaultHealthUrl, CancellationToken.None);
+        var probeResult = await ProbeGatewayAsync(ResolveHealthUrl(), CancellationToken.None);
 
         var message = probeResult switch
         {
@@ -594,11 +620,43 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
 
         return new GatewayStatus(
             State: GatewayState.Running,
-            Pid: record.Pid,
+            Pid: record!.Pid,
             Uptime: uptime,
             Message: message,
             ProbeResult: probeResult);
     }
+
+    /// <summary>
+    /// The health URL to probe: the address the gateway ACTUALLY binds, not the loopback default.
+    /// </summary>
+    /// <remarks>
+    /// <c>gateway.listenUrl</c> overrides the <c>--urls</c> argument, so a gateway configured onto a
+    /// LAN address does not answer on loopback. Probing the constant made a perfectly healthy
+    /// gateway report "HTTP endpoint is not reachable at the default port" -- the same trap
+    /// <c>scripts/gateway-restart.sh</c> documents, and the same resolver <c>start</c> already uses
+    /// to pick its readiness target.
+    /// </remarks>
+    private string ResolveHealthUrl()
+    {
+        try
+        {
+            return $"{GatewayProbeUrlResolver.ResolveFromConfig(GatewayDefaults.ListenPort).TrimEnd('/')}/health";
+        }
+        catch (Exception ex)
+        {
+            // Status must never fail because config could not be read; loopback is the documented
+            // fallback and the resolver itself already swallows its own config faults.
+            _logger.LogDebug(ex, "Could not resolve the configured listen URL; probing the loopback default");
+            return DefaultHealthUrl;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether an unusable PID file was removed, so the caller's message says what happened
+    /// rather than asserting a cleanup that a read-only caller deliberately did not perform.
+    /// </summary>
+    private static string StaleSuffix(bool cleanupStale)
+        => cleanupStale ? " (cleaned stale PID)" : " (stale PID file left in place)";
 
     /// <summary>
     /// Probes the gateway HTTP health endpoint and classifies the response.
@@ -656,9 +714,16 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// The live, positively-identified process, the parsed record (null when there was no PID file),
     /// and a human-readable reason when the PID file was considered stale.
     /// </returns>
-    private async Task<(Process? Process, GatewayPidRecord? Record, string? StaleReason)> ResolveVerifiedProcessAsync(string pidFilePath)
+    /// <param name="cleanupStale">
+    /// Whether an unusable PID file may be deleted. False for read-only callers: <c>status</c> is
+    /// the command an operator reaches for when something already looks wrong, and deleting the PID
+    /// file there removes the only record <c>stop</c> can use, turning a diagnostic into damage.
+    /// </param>
+    private async Task<(Process? Process, GatewayPidRecord? Record, string? StaleReason)> ResolveVerifiedProcessAsync(
+        string pidFilePath,
+        bool cleanupStale = true)
     {
-        var record = await ReadPidRecordAsync(pidFilePath);
+        var record = await ReadPidRecordAsync(pidFilePath, cleanupStale);
         if (record is null)
             return (null, null, null);
 
@@ -671,9 +736,10 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         }
         catch
         {
-            _logger.LogDebug("Gateway process {Pid} no longer exists (cleaning stale PID)", record.Pid);
-            await CleanupPidFileAsync(pidFilePath);
-            return (null, record, $"process {record.Pid} no longer exists (cleaned stale PID)");
+            _logger.LogDebug("Gateway process {Pid} no longer exists", record.Pid);
+            if (cleanupStale)
+                await CleanupPidFileAsync(pidFilePath);
+            return (null, record, $"process {record.Pid} no longer exists{StaleSuffix(cleanupStale)}");
         }
 
         var verification = GatewayPidFile.Verify(record, process);
@@ -687,16 +753,18 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
                 _logger.LogWarning(
                     "PID {Pid} was recycled onto a different process; refusing to signal it and cleaning the stale PID file",
                     record.Pid);
-                await CleanupPidFileAsync(pidFilePath);
-                return (null, record, $"PID {record.Pid} was recycled onto a different process (cleaned stale PID)");
+                if (cleanupStale)
+                    await CleanupPidFileAsync(pidFilePath);
+                return (null, record, $"PID {record.Pid} was recycled onto a different process{StaleSuffix(cleanupStale)}");
 
             default:
                 // Legacy bare-PID file, or the OS would not disclose the live process identity.
                 _logger.LogWarning(
                     "PID file for {Pid} carries no verifiable process identity; refusing to signal it and cleaning the unverifiable PID file",
                     record.Pid);
-                await CleanupPidFileAsync(pidFilePath);
-                return (null, record, $"PID {record.Pid} could not be verified as the gateway (cleaned unverifiable stale PID)");
+                if (cleanupStale)
+                    await CleanupPidFileAsync(pidFilePath);
+                return (null, record, $"PID {record.Pid} could not be verified as the gateway{StaleSuffix(cleanupStale)}");
         }
     }
 
@@ -704,7 +772,7 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// Reads and parses the PID file. Accepts both the identity-bearing JSON form and the legacy
     /// bare-PID form. Returns null when the file is missing or its contents are unusable.
     /// </summary>
-    private async Task<GatewayPidRecord?> ReadPidRecordAsync(string pidFilePath)
+    private async Task<GatewayPidRecord?> ReadPidRecordAsync(string pidFilePath, bool cleanupStale = true)
     {
         if (!File.Exists(pidFilePath))
             return null;
@@ -716,7 +784,8 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
                 return record;
 
             _logger.LogWarning("PID file contains invalid data: {Content}", content);
-            await CleanupPidFileAsync(pidFilePath);
+            if (cleanupStale)
+                await CleanupPidFileAsync(pidFilePath);
             return null;
         }
         catch (Exception ex)

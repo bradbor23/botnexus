@@ -316,8 +316,12 @@ public sealed class GatewayProcessManagerTests : IDisposable
         message.ShouldContain("No PID file");
     }
 
+    /// <summary>
+    /// Status reports a dead PID as not running, and now LEAVES the PID file alone: it is a
+    /// diagnostic, and destroying the only record `stop` can use is damage, not cleanup.
+    /// </summary>
     [Fact]
-    public async Task GetStatusAsync_WhenStalePidExists_CleansAndReturnsNotRunning()
+    public async Task GetStatusAsync_WhenStalePidExists_ReturnsNotRunning_AndLeavesThePidFileInPlace()
     {
         // Write a PID file with a definitely-dead PID
         await WritePidFileAsync(99999);
@@ -329,15 +333,14 @@ public sealed class GatewayProcessManagerTests : IDisposable
         status.Uptime.ShouldBeNull();
         status.Message.ShouldNotBeNull();
         var message = status.Message ?? throw new InvalidOperationException("Expected status message.");
-        message.ShouldContain("stale PID");
+        message.ShouldContain("stale PID file left in place");
 
-        // PID file should be cleaned up
-        var pidFilePath = GetPidFilePath();
-        File.Exists(pidFilePath).ShouldBeFalse();
+        File.Exists(GetPidFilePath()).ShouldBeTrue(
+            "status is read-only: deleting the PID file here is what left `stop` with nothing to find");
     }
 
     [Fact]
-    public async Task GetStatusAsync_WhenProcessHasExited_CleansUpPidFile()
+    public async Task GetStatusAsync_WhenProcessHasExited_ReportsNotRunning_WithoutDeletingThePidFile()
     {
         // Start a long-running dotnet process (which will pass the name check)
         var psi = new ProcessStartInfo
@@ -361,7 +364,8 @@ public sealed class GatewayProcessManagerTests : IDisposable
             var status = await _manager.GetStatusAsync(_testPidDirectory);
 
             status.State.ShouldBe(GatewayState.NotRunning);
-            File.Exists(GetPidFilePath()).ShouldBeFalse();
+            File.Exists(GetPidFilePath()).ShouldBeTrue(
+                "status must not mutate state; `stop` is what cleans a stale PID file");
         }
         finally
         {
@@ -410,9 +414,8 @@ public sealed class GatewayProcessManagerTests : IDisposable
         status.State.ShouldBe(GatewayState.NotRunning);
         status.Pid.ShouldBeNull();
 
-        // PID file should be cleaned up
-        var pidFilePath = GetPidFilePath();
-        File.Exists(pidFilePath).ShouldBeFalse();
+        // Status reports; it does not clean. `stop` owns removing a stale PID file.
+        File.Exists(GetPidFilePath()).ShouldBeTrue();
     }
 
     [Fact]
