@@ -106,6 +106,26 @@ public sealed class GatewayHubConnection : IAsyncDisposable
     /// handler-accumulation behaviour of the rebuild path's wiring can be asserted without a
     /// reachable gateway to negotiate against. Internal -- not part of the client surface.
     /// </summary>
+    /// <summary>
+    /// Test-only handler for the hub's negotiate and transport requests. <c>null</c> in production,
+    /// where SignalR uses its own.
+    /// </summary>
+    /// <remarks>
+    /// #145 took component fixtures off the network via <c>OfflineTestHttp</c>, but that covers
+    /// <see cref="HttpClient"/> only - SignalR builds its own, so a fixture holding a real
+    /// <see cref="GatewayHubConnection"/> still opened a socket to whatever its hub URL named.
+    /// <para>
+    /// That made two <c>PortalLoadServiceTests</c> depend on what happened to be listening on the
+    /// fixture's port. Both assert that a history 404 never reaches the top-level catch, by checking
+    /// <c>LoadError</c> mentions no "404" - and the only thing that CAN reach that catch is this
+    /// connect. With nothing on the port, connect fails "connection refused" and they pass; with a
+    /// stray server answering 404 they fail, having caught its 404 instead of the one under test.
+    /// Set this to an offline handler and the failure is immediate, deterministic, and unmistakably
+    /// not the 404 the test is about.
+    /// </para>
+    /// </remarks>
+    internal HttpMessageHandler? TestHttpHandler { get; set; }
+
     internal void RaiseOnDisconnectedForTest() => OnDisconnected?.Invoke();
 
     /// <summary>
@@ -151,7 +171,13 @@ public sealed class GatewayHubConnection : IAsyncDisposable
             await _connection.DisposeAsync();
 
         var builder = new HubConnectionBuilder()
-            .WithUrl(AppendClientKindQuery(hubUrl, clientKind));
+            .WithUrl(AppendClientKindQuery(hubUrl, clientKind), options =>
+            {
+                // Production leaves this null and SignalR uses its own handler. A fixture sets it so
+                // negotiate never reaches a socket - see TestHttpHandler.
+                if (TestHttpHandler is { } testHandler)
+                    options.HttpMessageHandlerFactory = _ => testHandler;
+            });
 
         // A supplied retry policy widens the reconnect budget for mobile; otherwise keep the
         // framework's default ~5x3s budget so the desktop path is unchanged.
