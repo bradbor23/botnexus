@@ -76,6 +76,7 @@ export default defineConfig({
           { text: 'Automation', link: '/user-guide/automation' },
           { text: 'Tools', link: '/user-guide/tools' },
           { text: 'Notifications', link: '/user-guide/notifications' },
+          { text: 'Cost & Credit Balance', link: '/user-guide/cost-tracking' },
           { text: 'Configuration', link: '/user-guide/configuration' },
           { text: 'Servers, Credentials and Agents', link: '/user-guide/secrets-and-locations' },
           { text: 'Plugins and the Marketplace', link: '/user-guide/plugins' },
