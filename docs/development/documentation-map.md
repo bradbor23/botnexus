@@ -92,6 +92,7 @@ Paths are relative to `docs/`. The inventory covers Markdown sources; assets, sc
 | `development/documentation-standards.md` | Developer guide |
 | `development/downloaded-payload-verification.md` | Developer guide |
 | `development/e2e-tests.md` | Developer guide |
+| `development/gateway-bugs-shadowing-and-session-callerid.md` | Developer guide |
 | `development/gateway-crash-diagnostics.md` | Developer guide |
 | `development/git-worktree-config-hardening.md` | Developer guide |
 | `development/github-write-tool-contracts.md` | Developer guide |
