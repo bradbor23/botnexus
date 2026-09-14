@@ -57,6 +57,12 @@
       "blurb": "Being told when a run fails or an agent blocks, in the portal and on your desktop."
     },
     {
+      "id": "cost-tracking",
+      "file": "cost-tracking.md",
+      "title": "Cost & credit balance",
+      "blurb": "The daily spend report, the estimated Anthropic balance, and the command to run after buying credits."
+    },
+    {
       "id": "channels",
       "file": "channels/signalr.md",
       "title": "Channels",
