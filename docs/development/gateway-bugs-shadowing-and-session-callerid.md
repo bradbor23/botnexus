@@ -1,9 +1,10 @@
 # Gateway bugs: config shadowing and undeletable API sessions
 
-**Audience:** gateway developers. **Goal:** explain two open gateway defects, why they happen, and how to fix and test them.
+**Audience:** gateway developers. **Goal:** explain two open gateway defects and one related hazard, why they happen, and how to fix and test them.
 
 1. [Config edits are silently dropped for portal-created agents](#bug-1-config-edits-are-silently-dropped-for-portal-created-agents)
 2. [Sessions created by `POST /api/chat` can never be deleted](#bug-2-sessions-created-by-post-api-chat-can-never-be-deleted)
+3. [An agent with `bash` can stop the gateway it runs in](#hazard-3-an-agent-with-bash-can-stop-the-gateway-it-runs-in)
 
 ## Bug 1: config edits are silently dropped for portal-created agents
 
@@ -102,3 +103,83 @@ deliberately, so those sessions are probably undeletable too. This needs confirm
 Archive the session's conversation with `DELETE /api/conversations/{id}`. This is a soft delete
 without a caller check. It hides the sessions from the portal but does not remove them. It is refused
 with `409` for an agent's default conversation.
+
+## Hazard 3: an agent with `bash` can stop the gateway it runs in
+
+### Symptom
+
+A user asks an agent to create another agent. The agent writes the new entry to `config.json`, then
+tries to "apply" it by restarting the gateway from its own `bash` tool. The chat stops without a
+reply. The session later shows the notification "The gateway was restarted while your last message
+was being processed", and the gateway log shows "previous gateway run terminated uncleanly". The new
+agent is created correctly, so the failure looks like a problem with the new agent when it is not.
+
+### Cause
+
+An in-process agent runs inside the gateway process. Its `bash` tool (`ShellTool`) runs commands as
+the gateway's operating-system user, so it can run `botnexus gateway restart` or `kill` the gateway's
+own process. Stopping the gateway ends the agent's run, and the reply is lost.
+
+There is no restart needed in this flow. `create_agent` and `update_agent` register the agent with the
+running gateway, and a direct `config.json` edit is picked up by the config reload watcher.
+
+### Removing `bash` from one agent
+
+`AgentDescriptor` has no tool deny-list, only the `toolIds` allowlist. An empty `toolIds` means all
+tools. A non-empty `toolIds` filters more than the named tool:
+
+- **Workspace tools** from `DefaultAgentToolFactory`: `read`, `write`, `edit`, `bash`, `ls`, `grep`,
+  `glob`, `tool_output_continue`. Only the listed ones are kept.
+- **Registry tools** from `_toolRegistry.ResolveTools`. Only the listed ones are kept.
+- **Tool providers** that call `ToolProviderContext.ToolAllowed` in
+  `src/gateway/BotNexus.Gateway/Isolation/ToolProviders/ToolProviders.cs`: `cron`, `ask_user`,
+  `spawn_subagent`, `list_subagents`, `manage_subagent`, `agent_converse`, `list_agents`,
+  `list_locations`, `create_agent`, `update_agent`, `canvas`, `todo`. These disappear unless listed.
+
+Providers that do not call `ToolAllowed` (for example `sessions`, `conversation`, `delay`,
+`get_datetime`) are not filtered by `toolIds`. Extension tool contributors (`IAgentToolContributor`,
+merged in `InProcessIsolationStrategy`) are filtered only when the contributor checks `toolIds`
+itself. `ExecToolContributor` does: it provides `exec` only when `toolIds` is empty, is `["*"]`, or
+names `exec`. `WebToolsContributor` does not check `toolIds`; it is gated by the agent's
+`botnexus-web` extension configuration.
+
+So to remove only `bash`, set `toolIds` to every workspace tool except `bash`, plus every
+`ToolAllowed`-gated tool the agent should keep:
+
+```json
+"toolIds": [
+  "read", "write", "edit", "ls", "grep", "glob", "tool_output_continue",
+  "cron", "ask_user", "spawn_subagent", "list_subagents", "manage_subagent",
+  "agent_converse", "list_agents", "list_locations", "create_agent", "update_agent",
+  "canvas", "todo"
+]
+```
+
+This list also removes `exec`, the other shell tool, because `ExecToolContributor` checks `toolIds`.
+Do not add `exec` back to an agent that must not be able to stop the gateway. A contributor that does
+not check `toolIds` is not removed by this list, so review any other enabled extension that runs
+commands.
+
+### Proposed fix
+
+- **Add a deny-list.** A descriptor field such as `deniedToolIds`, applied after every tool source,
+  would let an operator remove one tool without restating the rest. The session tool override
+  (`ApplySessionToolOverrideAsync`) already narrows the final list, so it is a natural place to apply it.
+- **Refuse gateway lifecycle commands from inside the gateway.** `botnexus gateway restart`, `stop`
+  and `start` could detect that they run as a child of the gateway process they would stop, and refuse
+  with a message telling the agent to ask the user.
+- **Tell agent-authoring skills not to restart.** The agent-creation skills should state that
+  `create_agent` and `update_agent` apply changes live and that the agent must never restart the
+  gateway.
+
+### Tests to add
+
+- An agent with `toolIds` set to the list above receives every listed tool and no `bash`.
+- With a deny-list, `deniedToolIds: ["bash"]` removes only `bash`, including when `toolIds` is empty.
+- Running `botnexus gateway restart` from a gateway child process exits non-zero without stopping the
+  gateway.
+
+### Workaround
+
+Remove `bash` from agents that create or manage other agents, using the allowlist above. To undo it,
+remove `toolIds`, which restores the full default toolset.
