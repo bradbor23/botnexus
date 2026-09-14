@@ -232,6 +232,7 @@ export default defineConfig({
               { text: "PR and Commit Conventions", link: "/development/pr-and-commit-conventions" },
               { text: "Hub Event Inventory Generator", link: "/development/hub-event-inventory-generator" },
               { text: "Portal Surface Parity", link: "/development/portal-surface-parity" },
+              { text: "Gateway bugs: config shadowing and API sessions", link: "/development/gateway-bugs-shadowing-and-session-callerid" },
               { text: "Seam-Test Reviewer Checklist", link: "/seam-test-reviewer-checklist" },
               { text: "Documentation map", link: "/development/documentation-map" },
             ],
