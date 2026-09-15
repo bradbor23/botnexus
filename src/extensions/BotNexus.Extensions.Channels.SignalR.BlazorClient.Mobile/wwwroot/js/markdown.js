@@ -25,8 +25,12 @@ window.BotNexus.escapeHtml = function (value) {
  * Fails CLOSED: if either `marked` or `DOMPurify` is unavailable the original
  * text is returned HTML-escaped (readable, but inert) and a console warning
  * names the missing dependency. Unsanitized HTML is never returned.
+ *
+ * `options.breaks` (default true) turns every newline into a <br>, which is what a
+ * chat message wants. Documentation hard-wraps its source, so the guide passes
+ * false and paragraphs reflow to the width of the window.
  */
-window.BotNexus.renderMarkdown = function (markdown) {
+window.BotNexus.renderMarkdown = function (markdown, options) {
     var markedAvailable = typeof marked !== 'undefined';
     var purifyAvailable = typeof DOMPurify !== 'undefined';
 
@@ -51,7 +55,11 @@ window.BotNexus.renderMarkdown = function (markdown) {
         return html.replace(/^<a /, '<a target="_blank" rel="noopener noreferrer" ');
     };
 
-    var parsed = marked.parse(markdown, { breaks: true, gfm: true, renderer: renderer });
+    var parsed = marked.parse(markdown, {
+        breaks: !(options && options.breaks === false),
+        gfm: true,
+        renderer: renderer
+    });
     return DOMPurify.sanitize(parsed, { ADD_ATTR: ["target", "rel"] });
 };
 
