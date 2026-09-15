@@ -212,8 +212,10 @@
             _bodies[page.Id] = markdown;
 
             // Same sanitising renderer the chat transcript uses. It fails closed: with marked or
-            // DOMPurify missing it returns escaped text rather than raw HTML.
-            _html = await JS.InvokeAsync<string>("BotNexus.renderMarkdown", markdown);
+            // DOMPurify missing it returns escaped text rather than raw HTML. Unlike chat, a
+            // source newline is not a line break: the docs are hard-wrapped, and keeping those
+            // breaks pins every paragraph to the source width however wide the window is.
+            _html = await JS.InvokeAsync<string>("BotNexus.renderMarkdown", markdown, new { breaks = false });
         }
         catch (Exception ex)
         {
