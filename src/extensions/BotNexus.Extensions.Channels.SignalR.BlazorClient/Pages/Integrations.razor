@@ -1,0 +1,271 @@
+@page "/integrations"
+@using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services
+@inject IntegrationsApiClient IntegrationsApi
+
+<PageTitle>BotNexus &mdash; Integrations</PageTitle>
+
+<div class="agents-page" data-testid="integrations-page">
+
+    <header class="agents-toolbar">
+        <h2 class="page-heading"><Icon Name="integrations" Size="24" /><span>Integrations</span></h2>
+    </header>
+
+    <section class="cron-page-card" data-testid="integrations-catalog">
+        <header class="cron-page-card-header">
+            <h3>MCP server catalog</h3>
+        </header>
+
+        <p class="plugin-form-hint" data-testid="integrations-hint">
+            Servers listed in the official MCP Registry. The registry checks who published a server,
+            not what it does. Browsing installs nothing.
+        </p>
+
+        <form class="plugin-install-form" @onsubmit="SearchAsync" @onsubmit:preventDefault>
+            <input type="search"
+                   class="plugin-install-source"
+                   placeholder="Search, e.g. github"
+                   aria-label="Search the MCP registry"
+                   data-testid="integrations-search"
+                   @bind="_search"
+                   @bind:event="oninput" />
+            <button type="submit" class="toolbar-btn" data-testid="integrations-search-submit" disabled="@_loading">
+                Search
+            </button>
+        </form>
+
+        @if (_page is { Stale: true })
+        {
+            <p class="agents-status warning" role="status" data-testid="integrations-stale">
+                The registry could not be reached. Showing results saved at
+                @_page.FetchedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC.
+            </p>
+        }
+
+        @if (_error is not null)
+        {
+            <p class="agents-status error" role="alert" data-testid="integrations-error">@_error</p>
+        }
+
+        @if (_loading && _entries.Count == 0)
+        {
+            <p class="plugin-form-hint" data-testid="integrations-loading">Loading the catalog&hellip;</p>
+        }
+        else if (!_loading && _error is null && _page is not null && _entries.Count == 0)
+        {
+            <p class="plugin-form-hint" data-testid="integrations-empty">No servers match.</p>
+        }
+
+        @if (_entries.Count > 0)
+        {
+            <div class="integrations-layout @(_selected is null ? "" : "has-detail")">
+                <div>
+                    <ul class="plugin-offerings" data-testid="integrations-results">
+                        @foreach (var entry in _entries)
+                        {
+                            var isSelected = ReferenceEquals(entry, _selected);
+                            <li class="plugin-offering integration-card @(isSelected ? "selected" : "")"
+                                data-testid="integration-card"
+                                data-server-name="@entry.Name">
+                                <button type="button"
+                                        class="integration-card-button"
+                                        aria-pressed="@(isSelected ? "true" : "false")"
+                                        @onclick="() => Select(entry)">
+                                    <span class="integration-card-title" data-testid="integration-title">@DisplayTitle(entry)</span>
+                                    <span class="integration-badge" data-testid="integration-kind">@KindLabel(entry)</span>
+                                    @if (entry.NeedsCredentials)
+                                    {
+                                        <span class="integration-badge warning" data-testid="integration-needs-credentials">Needs credentials</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.Description))
+                                    {
+                                        <span class="plugin-offering-description">@entry.Description</span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+
+                    @if (_page?.NextCursor is not null)
+                    {
+                        <button type="button"
+                                class="toolbar-btn integrations-more"
+                                data-testid="integrations-more"
+                                disabled="@_loading"
+                                @onclick="LoadMoreAsync">
+                            @(_loading ? "Loading." : "Load more")
+                        </button>
+                    }
+                </div>
+
+                @if (_selected is { } detail)
+                {
+                    <aside class="integration-detail" data-testid="integration-detail" aria-label="Server details">
+                        <h4>@DisplayTitle(detail)</h4>
+                        <p><code data-testid="integration-detail-name">@detail.Name</code>
+                            @if (!string.IsNullOrWhiteSpace(detail.Version))
+                            {
+                                <span> &middot; version @detail.Version</span>
+                            }
+                        </p>
+                        @if (!string.IsNullOrWhiteSpace(detail.Description))
+                        {
+                            <p>@detail.Description</p>
+                        }
+                        @if (SafeHttpUrl(detail.RepositoryUrl) is { } repository)
+                        {
+                            <p><a href="@repository" target="_blank" rel="noopener noreferrer" data-testid="integration-repository">Source repository</a></p>
+                        }
+
+                        @if (detail.Remotes.Count > 0)
+                        {
+                            <h5>Hosted endpoints</h5>
+                            <ul data-testid="integration-remotes">
+                                @foreach (var remote in detail.Remotes)
+                                {
+                                    <li>
+                                        <code>@remote.Url</code> <span class="integration-badge">@remote.Type</span>
+                                        @if (remote.Headers.Count > 0)
+                                        {
+                                            <ul>
+                                                @foreach (var header in remote.Headers)
+                                                {
+                                                    <li data-testid="integration-input">Header <code>@header.Name</code>@InputFlags(header)</li>
+                                                }
+                                            </ul>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        }
+
+                        @if (detail.Packages.Count > 0)
+                        {
+                            <h5>Local packages</h5>
+                            <ul data-testid="integration-packages">
+                                @foreach (var package in detail.Packages)
+                                {
+                                    <li>
+                                        <span class="integration-badge">@package.RegistryType</span>
+                                        <code>@package.Identifier</code>
+                                        @if (!string.IsNullOrWhiteSpace(package.Transport))
+                                        {
+                                            <span> over @package.Transport</span>
+                                        }
+                                        @if (package.Inputs.Count > 0)
+                                        {
+                                            <ul>
+                                                @foreach (var input in package.Inputs)
+                                                {
+                                                    <li data-testid="integration-input">Variable <code>@input.Name</code>@InputFlags(input)</li>
+                                                }
+                                            </ul>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        }
+
+                        <p class="plugin-form-hint" data-testid="integration-install-note">
+                            Installing servers from the catalog is not available yet.
+                        </p>
+                    </aside>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private IntegrationCatalogPageDto? _page;
+    private readonly List<IntegrationCatalogEntryDto> _entries = [];
+    private IntegrationCatalogEntryDto? _selected;
+    private string _search = string.Empty;
+    private string? _activeSearch;
+    private bool _loading;
+    private string? _error;
+
+    protected override Task OnInitializedAsync() => LoadAsync(append: false);
+
+    private Task SearchAsync()
+    {
+        _activeSearch = _search;
+        return LoadAsync(append: false);
+    }
+
+    private Task LoadMoreAsync() => LoadAsync(append: true);
+
+    private void Select(IntegrationCatalogEntryDto entry) =>
+        _selected = ReferenceEquals(entry, _selected) ? null : entry;
+
+    private async Task LoadAsync(bool append)
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            var lookup = await IntegrationsApi.SearchAsync(_activeSearch, append ? _page?.NextCursor : null);
+            if (lookup is { Outcome: IntegrationLookupOutcome.Ok, Value: { } page })
+            {
+                if (!append)
+                {
+                    _entries.Clear();
+                    _selected = null;
+                }
+
+                _page = page;
+                _entries.AddRange(page.Entries);
+                return;
+            }
+
+            _error = lookup.Outcome == IntegrationLookupOutcome.Unavailable
+                ? lookup.Error ?? "The MCP registry could not be reached."
+                : lookup.Error ?? "The catalog could not be loaded.";
+
+            // A failed new search must not leave the previous query's results looking like its answer.
+            // A failed "load more" keeps what is already on screen.
+            if (!append)
+            {
+                _entries.Clear();
+                _selected = null;
+                _page = null;
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"The gateway could not be reached: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string DisplayTitle(IntegrationCatalogEntryDto entry) =>
+        string.IsNullOrWhiteSpace(entry.Title) ? entry.Name : entry.Title;
+
+    private static string KindLabel(IntegrationCatalogEntryDto entry) =>
+        (entry.Remotes.Count > 0, entry.Packages.Count > 0) switch
+        {
+            (true, true) => "Hosted + local package",
+            (true, false) => "Hosted",
+            (false, true) => "Local package",
+            _ => "No transport listed",
+        };
+
+    private static string InputFlags(IntegrationInputDto input) =>
+        (input.IsSecret, input.IsRequired) switch
+        {
+            (true, true) => " (secret, required)",
+            (true, false) => " (secret)",
+            (false, true) => " (required)",
+            _ => string.Empty,
+        };
+
+    // Registry content is third-party text. Only http(s) becomes a link, so a "javascript:" repository
+    // URL renders as nothing rather than as something clickable.
+    private static string? SafeHttpUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+            ? uri.AbsoluteUri
+            : null;
+}

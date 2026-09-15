@@ -133,6 +133,7 @@ this exception — they go through the normal API-key check.
 | Webhooks (management + inbound delivery) | `api/webhooks` | [webhooks.md](webhooks.md) |
 | Tools | `api/tools` | [tools.md](tools.md) |
 | Plugins + marketplace sources¹ | `api/plugins`, `api/plugins/sources` | [plugins.md](plugins.md) |
+| Integrations (MCP registry catalog) | `api/integrations` | [integrations.md](integrations.md) |
 
 ¹ Registered by `PluginsEndpointContributor` in `src/extensions/BotNexus.Extensions.Plugins.Api/`, not by a controller under `src/gateway/BotNexus.Gateway.Api/Controllers/`. A gateway project may not reference an extension project, so the routes live with the feature. They are still endpoint-routed behind `GatewayAuthMiddleware` and authenticate like every other `/api` route.
 

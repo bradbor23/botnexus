@@ -43,6 +43,9 @@ public static class NavOrderDefaults
     /// <summary>Stable key for the Plugins nav item (#3346).</summary>
     public const string Plugins = "plugins";
 
+    /// <summary>Stable key for the Integrations nav item (MCP registry catalog).</summary>
+    public const string Integrations = "integrations";
+
     /// <summary>
     /// Default order number for each built-in nav key. Lower numbers render higher in the sidebar.
     /// Tools (20) intentionally precedes Chat (30).
@@ -58,5 +61,6 @@ public static class NavOrderDefaults
         [Agents] = 60,
         [Cron] = 70,
         [Plugins] = 80,
+        [Integrations] = 90,
     };
 }

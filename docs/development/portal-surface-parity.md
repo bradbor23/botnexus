@@ -61,7 +61,7 @@ mobile `Chat.razor` by 149. The monolith is accreting, not stable.
 Desktop serves 22 routes: `/`, `/home`, `/chat`, `/chat/{AgentId}`, `/chat/{AgentId}/{ConversationId}`,
 `/agent/{AgentId}`, `/agent/{AgentId}/conversation/{ConversationId}`, `/agents`, `/agents/new`,
 `/agents/{AgentId}`, `/activity`, `/activity/{Section}`, `/configuration`, `/configuration/{Section}`,
-`/cron`, `/platform`, `/plugins`, `/plugins/{PluginId}`, `/skills`, `/skills/{Section}`, `/tools`,
+`/cron`, `/integrations`, `/platform`, `/plugins`, `/plugins/{PluginId}`, `/skills`, `/skills/{Section}`, `/tools`,
 `/tools/{Id}`.
 
 Mobile serves 6: `/`, `/agent/{AgentId}`, `/agent/{AgentId}/conversation/{ConversationId}`,
@@ -202,7 +202,7 @@ with a filed issue.
 |---|---|---|---|
 | D-1 | Mobile has no collapsible sidebar with filter bars | Desktop `MainLayout.razor:549-561` renders three `ConversationActivityFilter` buttons; mobile has none | A phone viewport cannot carry a persistent sidebar plus filter chrome alongside the message list. Mobile uses the native picker instead. |
 | D-2 | Mobile has no multi-panel layout | Desktop `AgentPanel.razor:29-61` hosts five tab panes (Conversation, Workspace, Reports, Canvas, Todo); mobile hosts chat plus a canvas overlay | Tab panes assume a viewport wide enough to keep the chat visible beside them. |
-| D-3 | Mobile has no admin pages | Desktop routes `/agents`, `/activity`, `/cron`, `/plugins`, `/skills`, `/tools`, `/platform`; mobile has none | These are dense tabular management surfaces. Mobile keeps `/settings`, which is the one an operator needs on a phone. |
+| D-3 | Mobile has no admin pages | Desktop routes `/agents`, `/activity`, `/cron`, `/integrations`, `/plugins`, `/skills`, `/tools`, `/platform`; mobile has none | These are dense tabular management surfaces. Mobile keeps `/settings`, which is the one an operator needs on a phone. |
 | D-4 | Mobile has no session debug panel | `Components/SessionDebugPanel.razor` is desktop-only; 0 `SessionDebug` hits across mobile | A five-tab diagnostic inspector on a phone is unusable, and its audience is at a desk. |
 | D-5 | Mobile has no workspace file tree or viewer | `WorkspaceFileTree.razor`, `WorkspaceFileViewer.razor`, `WorkspacePanel.razor` desktop-only; 0 `Workspace` hits across mobile | File browsing needs a two-pane tree/preview layout. |
 

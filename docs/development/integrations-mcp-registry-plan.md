@@ -4,7 +4,7 @@ A plan for a top-level **Integrations** page in the portal. From it an operator 
 MCP servers listed in the official MCP Registry (`registry.modelcontextprotocol.io`),
 install one, give it credentials, and grant it to specific agents.
 
-Status: **Planned (2026-09-14). Nothing built.**
+Status: **Phase 1 built (read-only catalog, `feat/integrations-catalog`). Phases 2-5 planned.**
 
 ## Why a separate menu, not part of Plugins
 
@@ -90,7 +90,8 @@ Each phase is its own PR, verified before the next starts.
 
 1. Add `RegistryClient` (typed `HttpClient`, tolerant JSON parsing, paging via `cursor`).
 2. Add `IntegrationsController`: `GET /api/integrations/catalog?search=&cursor=` (cached),
-   `GET /api/integrations/catalog/{name}` (detail).
+   `GET /api/integrations/catalog/entry?name=<name>` (detail). A query parameter, not a path
+   segment, because registry names contain `/`. Reference: [docs/api/integrations.md](../api/integrations.md).
 3. Add `NavOrderKeys.Integrations` and a toolbar item in `MainLayout.razor`, plus an icon.
 4. Add `Pages/Integrations.razor` with a search box, result cards (title, description, remote/package
    badge, "needs credentials" badge), and a detail panel.
