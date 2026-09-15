@@ -18,14 +18,16 @@ public static class McpRegistryParser
     /// <exception cref="FormatException">The body is not a JSON object.</exception>
     public static McpCatalogPage ParsePage(string json)
     {
-        var root = ParseObject(json);
+        // Not named "root": ConfigPathFence reads a literal indexer on a root-named local as a
+        // PlatformConfig path, and this is a registry payload, not configuration.
+        var response = ParseObject(json);
 
-        var entries = Objects(root["servers"])
+        var entries = Objects(response["servers"])
             .Select(ParseEntry)
             .OfType<McpCatalogEntry>()
             .ToArray();
 
-        var cursor = root["metadata"] is JsonObject metadata ? Str(metadata, "nextCursor") : null;
+        var cursor = response["metadata"] is JsonObject metadata ? Str(metadata, "nextCursor") : null;
         return new McpCatalogPage(entries, string.IsNullOrEmpty(cursor) ? null : cursor);
     }
 
