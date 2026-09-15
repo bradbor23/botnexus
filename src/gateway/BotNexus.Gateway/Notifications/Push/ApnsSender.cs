@@ -55,6 +55,11 @@ public sealed class ApnsSender(
 
         foreach (var device in devices)
         {
+            // #168: what a device is sent is that device's own choice, decided per device - one phone
+            // asking for every finished reply must not wake another that did not.
+            if (!ApnsDeliveryPolicy.ShouldDeliver(device, notification))
+                continue;
+
             if (await SendOneAsync(device, notification, payload, ct).ConfigureAwait(false))
                 delivered++;
         }
@@ -76,19 +81,30 @@ public sealed class ApnsSender(
 
         for (var attempt = 0; attempt < 8; attempt++)
         {
+            // A dictionary rather than an anonymous type, because "thread-id" is not a valid C# name.
+            var aps = new Dictionary<string, object?>
+            {
+                ["alert"] = new { title = notification.Title, body },
+                ["sound"] = "default",
+                // Lets the app route a tap without a second round trip.
+                ["category"] = notification.Kind.ToString(),
+            };
+
+            // #168: groups one conversation's notifications together on the lock screen instead of
+            // interleaving them with every other conversation's.
+            if (!string.IsNullOrEmpty(notification.ConversationId))
+                aps["thread-id"] = notification.ConversationId;
+
             var bytes = JsonSerializer.SerializeToUtf8Bytes(new
             {
-                aps = new
-                {
-                    alert = new { title = notification.Title, body },
-                    sound = "default",
-                    // Lets the app route a tap without a second round trip.
-                    category = notification.Kind.ToString(),
-                },
+                aps,
                 id = notification.Id,
                 kind = notification.Kind.ToString(),
                 severity = notification.Severity.ToString(),
                 link = notification.Link,
+                // #168: so an app can open the conversation without first asking which agent owns it.
+                agentId = notification.AgentId,
+                conversationId = notification.ConversationId,
             });
 
             if (bytes.Length <= MaxPayloadBytes || string.IsNullOrEmpty(body))

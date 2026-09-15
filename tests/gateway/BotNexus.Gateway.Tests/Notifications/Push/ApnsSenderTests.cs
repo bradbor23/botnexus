@@ -231,6 +231,47 @@ public sealed class ApnsSenderTests : IDisposable
         Assert.NotNull(Assert.Single(await store.ListAsync()).LastSuccessAtUtc);
     }
 
+    // #168: a phone's level decides what it is sent. Off sends nothing at all.
+    [Fact]
+    public async Task Sends_nothing_to_a_device_that_turned_notifications_off()
+    {
+        var apns = new StubApns();
+        var store = await StoreWithDevice();
+        await store.SetLevelAsync(DeviceToken, ApnsNotificationLevel.Off);
+
+        Assert.Equal(0, await Sender(apns, store).SendAsync(Sample));
+        Assert.Empty(apns.Requests);
+    }
+
+    // A phone at the default must not be woken for a reply it did not ask to hear about.
+    [Fact]
+    public async Task Holds_back_a_finished_reply_from_a_device_at_the_default_level()
+    {
+        var apns = new StubApns();
+        var completed = Sample with { Kind = NotificationKind.AgentRunCompleted, Severity = NotificationSeverity.Info };
+
+        Assert.Equal(0, await Sender(apns, await StoreWithDevice()).SendAsync(completed));
+        Assert.Empty(apns.Requests);
+    }
+
+    // thread-id groups a conversation's notifications together on the lock screen, and the ids let
+    // an app open the conversation without first looking up which agent it belongs to.
+    [Fact]
+    public async Task Groups_by_conversation_and_names_the_agent_and_conversation()
+    {
+        var apns = new StubApns();
+        var about = Sample with { AgentId = "assistant", ConversationId = "c1" };
+
+        await Sender(apns, await StoreWithDevice()).SendAsync(about);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        var root = payload.RootElement;
+
+        Assert.Equal("c1", root.GetProperty("aps").GetProperty("thread-id").GetString());
+        Assert.Equal("assistant", root.GetProperty("agentId").GetString());
+        Assert.Equal("c1", root.GetProperty("conversationId").GetString());
+    }
+
     /// <summary>Stands in for APNs and records what it was sent.</summary>
     private sealed class StubApns : HttpMessageHandler
     {

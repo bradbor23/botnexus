@@ -1,5 +1,6 @@
 using BotNexus.Gateway.Abstractions.Notifications;
 using BotNexus.Gateway.Notifications;
+using BotNexus.Gateway.Notifications.Push;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -50,7 +51,7 @@ public sealed class NotificationsController(
                 Id = string.Empty,
                 Kind = NotificationKind.GatewayHealth,
                 Severity = NotificationSeverity.Info,
-                Title = "Test notification",
+                Title = ApnsDeliveryPolicy.TestNotificationTitle,
                 Body = "If you can see this, notifications are working. Dismiss it when you are done.",
                 CreatedAtUtc = default,
             },

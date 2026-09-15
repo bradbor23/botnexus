@@ -1,3 +1,4 @@
+using BotNexus.Domain.Primitives;
 using BotNexus.Gateway.Notifications.Push;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,9 @@ public sealed class ApnsDevicesController(
     /// <summary>APNs device tokens are 32 bytes, hex-encoded. Newer tokens may be longer.</summary>
     private const int MinTokenLength = 64;
     private const int MaxTokenLength = 200;
+
+    /// <summary>A conversation id is an opaque gateway identifier; anything longer is not one.</summary>
+    private const int MaxConversationIdLength = 256;
 
     private readonly IApnsDeviceStore _store = store;
     private readonly ApnsOptions _options = options;
@@ -98,6 +102,99 @@ public sealed class ApnsDevicesController(
         return NoContent();
     }
 
+    /// <summary>Every registered device and its notification level (#168).</summary>
+    /// <remarks>
+    /// Until this existed there was no way to see which phones a gateway pushes to at all: a
+    /// registration that never arrived looked exactly like one that did.
+    /// </remarks>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpGet("devices")]
+    [ProducesResponseType(typeof(IReadOnlyList<ApnsDeviceResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<ApnsDeviceResponse>>> Devices(CancellationToken ct = default)
+    {
+        var devices = await _store.ListAsync(ct);
+
+        return Ok(devices.Select(ApnsDeviceResponse.From).ToList());
+    }
+
+    /// <summary>One device's notification level and its conversation levels (#168).</summary>
+    /// <param name="deviceToken">The device token the app registered.</param>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpGet("devices/{deviceToken}/preferences")]
+    [ProducesResponseType(typeof(ApnsPreferencesResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApnsPreferencesResponse>> Preferences(string deviceToken, CancellationToken ct = default)
+    {
+        var device = await _store.GetAsync(deviceToken.Trim(), ct);
+
+        return device is null ? NotFound() : Ok(ApnsPreferencesResponse.From(device));
+    }
+
+    /// <summary>Sets a device's notification level (#168).</summary>
+    /// <param name="deviceToken">The device token the app registered.</param>
+    /// <param name="request"><c>needsMe</c>, <c>needsMeAndReplies</c> or <c>off</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpPut("devices/{deviceToken}/preferences")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetPreferences(
+        string deviceToken,
+        [FromBody] ApnsLevelRequest request,
+        CancellationToken ct = default)
+    {
+        if (!ApnsLevelNames.TryParseDevice(request?.Level, out var level))
+            return BadRequest(new { error = "level must be 'needsMe', 'needsMeAndReplies' or 'off'." });
+
+        return await _store.SetLevelAsync(deviceToken.Trim(), level, ct) ? NoContent() : NotFound();
+    }
+
+    /// <summary>Sets one conversation's level on a device (#168).</summary>
+    /// <param name="deviceToken">The device token the app registered.</param>
+    /// <param name="conversationId">The conversation to turn up or down.</param>
+    /// <param name="request"><c>mute</c>, <c>needsMe</c> or <c>allReplies</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpPut("devices/{deviceToken}/conversations/{conversationId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetConversationLevel(
+        string deviceToken,
+        string conversationId,
+        [FromBody] ApnsLevelRequest request,
+        CancellationToken ct = default)
+    {
+        if (!ApnsLevelNames.TryParseConversation(request?.Level, out var level))
+            return BadRequest(new { error = "level must be 'mute', 'needsMe' or 'allReplies'." });
+
+        if (string.IsNullOrWhiteSpace(conversationId) || conversationId.Length > MaxConversationIdLength)
+            return BadRequest(new { error = "conversationId is required." });
+
+        return await _store.SetConversationLevelAsync(deviceToken.Trim(), ConversationId.From(conversationId), level, ct)
+            ? NoContent()
+            : NotFound();
+    }
+
+    /// <summary>Clears one conversation's level on a device, so the device level applies again (#168).</summary>
+    /// <param name="deviceToken">The device token the app registered.</param>
+    /// <param name="conversationId">The conversation whose level to clear.</param>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpDelete("devices/{deviceToken}/conversations/{conversationId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ClearConversationLevel(
+        string deviceToken,
+        string conversationId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(conversationId) || conversationId.Length > MaxConversationIdLength)
+            return BadRequest(new { error = "conversationId is required." });
+
+        return await _store.SetConversationLevelAsync(deviceToken.Trim(), ConversationId.From(conversationId), level: null, ct)
+            ? NoContent()
+            : NotFound();
+    }
+
     private static bool IsHex(string value)
     {
         foreach (var c in value)
@@ -131,6 +228,78 @@ public sealed class ApnsRegisterRequest
 
     /// <summary>Optional label for diagnosis, such as the device name.</summary>
     [JsonPropertyName("deviceName")] public string? DeviceName { get; init; }
+}
+
+/// <summary>One registered device, as listed (#168).</summary>
+public sealed class ApnsDeviceResponse
+{
+    /// <summary>Hex-encoded APNs device token.</summary>
+    [JsonPropertyName("deviceToken")] public required string DeviceToken { get; init; }
+
+    /// <summary><c>sandbox</c> or <c>production</c>.</summary>
+    [JsonPropertyName("environment")] public required string Environment { get; init; }
+
+    /// <summary>The label the app registered with, if any.</summary>
+    [JsonPropertyName("deviceName")] public string? DeviceName { get; init; }
+
+    /// <summary><c>needsMe</c>, <c>needsMeAndReplies</c> or <c>off</c>.</summary>
+    [JsonPropertyName("level")] public required string Level { get; init; }
+
+    /// <summary>When it first registered.</summary>
+    [JsonPropertyName("createdAtUtc")] public DateTimeOffset CreatedAtUtc { get; init; }
+
+    /// <summary>When APNs last accepted a push for it, or null if never.</summary>
+    [JsonPropertyName("lastSuccessAtUtc")] public DateTimeOffset? LastSuccessAtUtc { get; init; }
+
+    internal static ApnsDeviceResponse From(ApnsDevice device) => new()
+    {
+        DeviceToken = device.DeviceToken,
+        Environment = device.Environment,
+        DeviceName = device.DeviceName,
+        Level = ApnsLevelNames.ToWire(device.Level),
+        CreatedAtUtc = device.CreatedAtUtc,
+        LastSuccessAtUtc = device.LastSuccessAtUtc,
+    };
+}
+
+/// <summary>A device's notification level and its conversation levels (#168).</summary>
+public sealed class ApnsPreferencesResponse
+{
+    /// <summary><c>needsMe</c>, <c>needsMeAndReplies</c> or <c>off</c>.</summary>
+    [JsonPropertyName("level")] public required string Level { get; init; }
+
+    /// <summary>Conversations turned up or down on this device.</summary>
+    [JsonPropertyName("conversations")] public required IReadOnlyList<ApnsConversationLevelResponse> Conversations { get; init; }
+
+    internal static ApnsPreferencesResponse From(ApnsDevice device) => new()
+    {
+        Level = ApnsLevelNames.ToWire(device.Level),
+        Conversations = device.ConversationLevels
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new ApnsConversationLevelResponse
+            {
+                ConversationId = pair.Key,
+                Level = ApnsLevelNames.ToWire(pair.Value),
+            })
+            .ToList(),
+    };
+}
+
+/// <summary>One conversation's level on a device (#168).</summary>
+public sealed class ApnsConversationLevelResponse
+{
+    /// <summary>The conversation.</summary>
+    [JsonPropertyName("conversationId")] public required string ConversationId { get; init; }
+
+    /// <summary><c>mute</c>, <c>needsMe</c> or <c>allReplies</c>.</summary>
+    [JsonPropertyName("level")] public required string Level { get; init; }
+}
+
+/// <summary>A level to set, by its wire name (#168).</summary>
+public sealed class ApnsLevelRequest
+{
+    /// <summary>The level's wire name.</summary>
+    [JsonPropertyName("level")] public string? Level { get; init; }
 }
 
 /// <summary>The device token to forget.</summary>

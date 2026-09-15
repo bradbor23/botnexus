@@ -176,4 +176,104 @@ public sealed class ApnsDevicesControllerTests : IDisposable
 
         Assert.Equal(204, StatusOf(result));
     }
+
+    // #168: notification levels.
+
+    private async Task<(ApnsDevicesController Controller, IApnsDeviceStore Store)> Registered()
+    {
+        var store = Store();
+        var controller = Controller(store: store);
+        await controller.Register(new ApnsRegisterRequest
+        {
+            DeviceToken = ValidToken,
+            Environment = "production",
+            DeviceName = "Brad's iPhone",
+        });
+
+        return (controller, store);
+    }
+
+    // Until now there was no way to see which phones a gateway pushes to at all.
+    [Fact]
+    public async Task Lists_registered_devices_with_their_levels()
+    {
+        var (controller, _) = await Registered();
+
+        var devices = Assert.IsAssignableFrom<IReadOnlyList<ApnsDeviceResponse>>(
+            Assert.IsType<OkObjectResult>((await controller.Devices()).Result).Value);
+
+        var device = Assert.Single(devices);
+        Assert.Equal(ValidToken, device.DeviceToken);
+        Assert.Equal("Brad's iPhone", device.DeviceName);
+        Assert.Equal("needsMe", device.Level);
+    }
+
+    [Fact]
+    public async Task Reads_a_device_s_preferences()
+    {
+        var (controller, _) = await Registered();
+        await controller.SetConversationLevel(ValidToken, "c1", new ApnsLevelRequest { Level = "mute" });
+
+        var preferences = Assert.IsType<ApnsPreferencesResponse>(
+            Assert.IsType<OkObjectResult>((await controller.Preferences(ValidToken)).Result).Value);
+
+        Assert.Equal("needsMe", preferences.Level);
+        var conversation = Assert.Single(preferences.Conversations);
+        Assert.Equal("c1", conversation.ConversationId);
+        Assert.Equal("mute", conversation.Level);
+    }
+
+    [Fact]
+    public async Task Preferences_for_an_unknown_device_are_not_found()
+    {
+        var result = await Controller().Preferences(ValidToken);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Changes_a_device_s_level()
+    {
+        var (controller, store) = await Registered();
+
+        var result = await controller.SetPreferences(ValidToken, new ApnsLevelRequest { Level = "needsMeAndReplies" });
+
+        Assert.Equal(204, StatusOf(result));
+        Assert.Equal(ApnsNotificationLevel.NeedsMeAndReplies, Assert.Single(await store.ListAsync()).Level);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("loud")]
+    public async Task Refuses_a_level_it_does_not_know(string? level)
+    {
+        var (controller, _) = await Registered();
+
+        Assert.Equal(400, StatusOf(await controller.SetPreferences(ValidToken, new ApnsLevelRequest { Level = level })));
+        Assert.Equal(400, StatusOf(await controller.SetConversationLevel(ValidToken, "c1", new ApnsLevelRequest { Level = level })));
+    }
+
+    [Fact]
+    public async Task Setting_a_level_for_an_unknown_device_is_not_found()
+    {
+        var controller = Controller();
+
+        Assert.Equal(404, StatusOf(await controller.SetPreferences(ValidToken, new ApnsLevelRequest { Level = "off" })));
+        Assert.Equal(404, StatusOf(await controller.SetConversationLevel(ValidToken, "c1", new ApnsLevelRequest { Level = "mute" })));
+    }
+
+    [Fact]
+    public async Task Sets_and_clears_a_conversation_s_level()
+    {
+        var (controller, store) = await Registered();
+
+        Assert.Equal(204, StatusOf(await controller.SetConversationLevel(
+            ValidToken, "c1", new ApnsLevelRequest { Level = "allReplies" })));
+        Assert.Equal(ApnsConversationLevel.AllReplies,
+            Assert.IsType<ApnsDevice>(await store.GetAsync(ValidToken)).ConversationLevels["c1"]);
+
+        Assert.Equal(204, StatusOf(await controller.ClearConversationLevel(ValidToken, "c1")));
+        Assert.Empty(Assert.IsType<ApnsDevice>(await store.GetAsync(ValidToken)).ConversationLevels);
+    }
 }
