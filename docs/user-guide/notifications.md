@@ -335,8 +335,11 @@ a gateway health notification, for instance, is not about any one page.
 - **Nothing is deleted automatically.** The store can prune read notifications older than a given
   age, but no scheduled task calls it yet. In practice the volume is low — these are failures, not
   events — but the file grows without bound until you delete rows yourself.
-- **There is no per-kind muting.** Alerts are all-or-nothing per browser; you cannot ask for agent
-  failures but not scheduled-job failures.
+- **Per-kind muting is iOS-only.** In the browser, alerts are all-or-nothing; you cannot ask for
+  agent failures but not scheduled-job failures. A registered iOS device has a notification level
+  — what needs you, what needs you plus finished replies, or nothing — and can mute or turn up a
+  single conversation. Scheduled-job outcomes and gateway health are never pushed to an iOS device;
+  they stay in the notification list. See [Notification levels](../development/notification-clients.md#notification-levels).
 - **`AgentRunCompleted` is defined but never raised.** It exists in the API surface for clients to
   handle, and is reserved for an opt-in "tell me when it finishes" setting that does not exist yet.
 - **Subscribing needs HTTPS.** Service workers are refused on an insecure origin, so web push has
@@ -345,10 +348,9 @@ a gateway health notification, for instance, is not about any one page.
 - **A push carries the notice, not the history.** The service worker draws the title, body and
   link; anything else needs the portal or the API. That is deliberate — the push service can see
   the size of what it relays, so there is no reason to send it more than the notice.
-- **There is no native app yet.** The gateway can now push to a native iOS app over APNs, and the
-  REST surface is the one any client would read — but no app has been written against either, and
-  the APNs path has never sent to a real device. Android and Windows would each need their own
-  sender.
+- **iOS is the only native app.** The BotNexus iOS app registers over APNs and reads the REST
+  surface, and a push from the gateway reached a real iPhone for the first time on 2026-09-15.
+  Android and Windows would each need their own sender.
 
 ## Troubleshooting
 

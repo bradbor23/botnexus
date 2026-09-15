@@ -288,6 +288,11 @@ every app you own.
 | `GET` | `/api/notifications/apns/status` | Whether the gateway can push to iOS at all |
 | `POST` | `/api/notifications/apns/register` | Register a device token, or refresh one |
 | `POST` | `/api/notifications/apns/unregister` | Forget a device. Idempotent |
+| `GET` | `/api/notifications/apns/devices` | Every registered device, with its level |
+| `GET` | `/api/notifications/apns/devices/{deviceToken}/preferences` | One device's level and conversation levels |
+| `PUT` | `/api/notifications/apns/devices/{deviceToken}/preferences` | Set the device's level |
+| `PUT` | `/api/notifications/apns/devices/{deviceToken}/conversations/{conversationId}` | Set one conversation's level on the device |
+| `DELETE` | `/api/notifications/apns/devices/{deviceToken}/conversations/{conversationId}` | Clear it, so the device level applies again |
 
 ```json
 {
@@ -312,6 +317,48 @@ A 400 means the token is not hex, is the wrong length, or the environment was mi
 unrecognised. Validated on the way in, because a token accepted now but malformed is refused by
 Apple on every future notification while the app goes on believing it is registered.
 
+### Notification levels
+
+Each registered device has a **level**, and each conversation can be turned up or down on that device.
+The gateway applies them before it pushes, per device, so one phone asking for more does not wake
+another that did not.
+
+| Device level | What the device is sent |
+| --- | --- |
+| `needsMe` (default) | What needs the person: `AgentWaitingForInput` and `AgentRunFailed` |
+| `needsMeAndReplies` | All of the above, and `AgentRunCompleted` |
+| `off` | Nothing |
+
+| Conversation level | What the device is sent about that conversation |
+| --- | --- |
+| `mute` | Nothing, even when an agent in it is waiting |
+| `needsMe` | A waiting agent or a failed run, never a finished reply |
+| `allReplies` | Those, and finished replies |
+
+`CronRunOutcome` and `GatewayHealth` are never pushed at any level: they are stored, counted and
+sent over SignalR like every notification, so they appear in a client's list, but a scheduled job
+failing on every run is not something to wake a phone for. The one exception is the notification
+`POST /api/notifications/test` raises, which is pushed at any level but `off` so delivery can
+still be checked.
+
+`off` wins over any conversation level. A notification about no conversation follows the device
+level. A new registration starts at `needsMe`, and re-registering the same token keeps whatever
+level was chosen.
+
+```http
+PUT /api/notifications/apns/devices/{deviceToken}/preferences
+{ "level": "needsMeAndReplies" }
+
+PUT /api/notifications/apns/devices/{deviceToken}/conversations/c1
+{ "level": "mute" }
+```
+
+An unknown level is a `400`; a token that is not registered is a `404`. Unregistering a device
+forgets its conversation levels too, so a reinstall does not inherit what the old install muted.
+
+Levels decide only what is **pushed**. Every notification is still stored, and still appears in
+`GET /api/notifications` and over SignalR.
+
 ### What arrives
 
 ```json
@@ -319,18 +366,24 @@ Apple on every future notification while the app goes on believing it is registe
   "aps": {
     "alert": { "title": "Agent 'assistant' run failed", "body": "The provider returned 529." },
     "sound": "default",
-    "category": "AgentRunFailed"
+    "category": "AgentRunFailed",
+    "thread-id": "c1"
   },
   "id": "56d9bc3f...",
   "kind": "AgentRunFailed",
   "severity": "Error",
-  "link": "conversation/c1"
+  "link": "agent/assistant/conversation/c1",
+  "agentId": "assistant",
+  "conversationId": "c1"
 }
 ```
 
-`category` carries the kind so an app can attach notification actions to it. `id`, `kind`,
-`severity` and `link` sit alongside `aps` as custom keys, matching the REST and SignalR shapes, so
-one parser handles all three.
+`category` carries the kind so an app can attach notification actions to it. `thread-id` is the
+conversation id, so iOS groups one conversation's notifications together; it is absent when the
+notification is about no conversation. `id`, `kind`, `severity`, `link`, `agentId` and
+`conversationId` sit alongside `aps` as custom keys, matching the REST and SignalR shapes, so one
+parser handles all three — and `conversationId` lets an app open the conversation without first
+looking up which agent owns it. `agentId` is `null` when the notification does not say.
 
 The push carries the notice, not the notification — there is no `body` beyond the alert, no
 timestamps and no read state. Fetch `GET /api/notifications` when the app opens.
@@ -383,7 +436,9 @@ Stated plainly so it is not discovered halfway through an implementation.
   tests — the request, the signed token, which refusals are permanent — but no push has been sent
   to a real device, because that needs an Apple Developer account and a registered bundle id.
   Expect to shake out the first real send.
-- **No per-kind subscription or muting.** A client receives everything and filters locally.
+- **No per-kind subscription or muting outside iOS.** An iOS device has a notification level and
+  per-conversation levels (see [Notification levels](#notification-levels)); every other client
+  receives everything and filters locally.
 - **No server-side pagination cursor.** `limit` caps at 500 and there is no offset; the store is
   not designed to be paged through.
 - **No delivery receipts.** The gateway does not know whether a client displayed anything.
