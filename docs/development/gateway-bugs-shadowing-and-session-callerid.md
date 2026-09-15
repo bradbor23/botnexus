@@ -114,11 +114,23 @@ reply. The session later shows the notification "The gateway was restarted while
 was being processed", and the gateway log shows "previous gateway run terminated uncleanly". The new
 agent is created correctly, so the failure looks like a problem with the new agent when it is not.
 
+A second form: the user asks an agent to restart the gateway, often "using the script in the
+`scripts` directory". The gateway log shows `Application is shutting down...` and, one to two minutes
+later, `Gateway starting`, so the gateway does come back. The portal chat stays on **Streaming...**
+with the last tool call still spinning, because the turn that issued the restart never finishes.
+Asking the agent "is it up?" starts a new turn, and the agent often restarts the gateway again.
+
 ### Cause
 
 An in-process agent runs inside the gateway process. Its `bash` tool (`ShellTool`) runs commands as
 the gateway's operating-system user, so it can run `botnexus gateway restart` or `kill` the gateway's
 own process. Stopping the gateway ends the agent's run, and the reply is lost.
+
+Using `scripts/gateway-restart.sh` does not avoid this. The script restarts the gateway correctly, but
+any restart that an agent starts still stops the process that the agent's turn is running in, so the
+turn ends whichever command is used. Agents also improvise when a command fails: one observed turn ran
+`pkill -f "BotNexus.Gateway"` (which matches every gateway process) followed by
+`botnexus gateway start`.
 
 There is no restart needed in this flow. `create_agent` and `update_agent` register the agent with the
 running gateway, and a direct `config.json` edit is picked up by the config reload watcher.
@@ -167,7 +179,13 @@ commands.
   (`ApplySessionToolOverrideAsync`) already narrows the final list, so it is a natural place to apply it.
 - **Refuse gateway lifecycle commands from inside the gateway.** `botnexus gateway restart`, `stop`
   and `start` could detect that they run as a child of the gateway process they would stop, and refuse
-  with a message telling the agent to ask the user.
+  with a message telling the agent to ask the user. The same check belongs in
+  `scripts/gateway-restart.sh`, which an agent can call directly. A pattern kill such as
+  `pkill -f "BotNexus.Gateway"` cannot be refused this way, so the deny-list above is still needed.
+- **Tell the user when a restart ends a turn.** After an agent-started restart, the startup log reported
+  `Interrupted-turn scan complete: 0 session(s) found with crash sentinels`, and the portal stayed on
+  Streaming with no notice. Find why the interrupted turn left no crash sentinel, so the chat shows
+  that the gateway restarted instead of appearing to hang.
 - **Tell agent-authoring skills not to restart.** The agent-creation skills should state that
   `create_agent` and `update_agent` apply changes live and that the agent must never restart the
   gateway.
@@ -183,3 +201,21 @@ commands.
 
 Remove `bash` from agents that create or manage other agents, using the allowlist above. To undo it,
 remove `toolIds`, which restores the full default toolset.
+
+Removing `bash` is not practical for agents that use it for real work, such as API calls with `curl`,
+`ssh` to other hosts, or running scripts. For those agents, and for every agent at once:
+
+1. **Stop a runaway turn.** `POST /api/agents/{agentId}/sessions/{sessionId}/stop` calls the
+   supervisor's `StopAsync` for that one agent instance and returns `204`. It changes no configuration
+   and keeps the session history; the next message rebuilds the agent.
+2. **Add a world-level rule.** `WorkspaceContextBuilder` inserts `~/.botnexus/WORLD.md` ahead of every
+   agent's own prompt files whenever the file exists, with no configuration. A short rule there reaches
+   every current and future agent: never restart, stop, start, kill or rebuild the gateway, even when
+   asked; changes apply live; if a restart is really needed, give the user the restart command and end
+   the turn. This is an instruction, not an enforcement, so keep removing `bash` where it is not needed.
+3. **Restart from a terminal, never through an agent.** Run `scripts/gateway-restart.sh` on the gateway
+   host from your own shell.
+4. **Measure real shell use before removing `bash`.** `GET /api/sessions` lists only active sessions,
+   so it undercounts. Count `bash` and `exec` rows in `session_history` in `sessions.sqlite`, joining
+   `session_history.session_id` to `sessions.id`, then `sessions.conversation_id` to
+   `conversations.agent_id`. Cron sessions carry `caller_id` `cron:<agentId>` instead.
