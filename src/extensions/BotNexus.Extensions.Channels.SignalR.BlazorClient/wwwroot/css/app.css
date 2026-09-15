@@ -8166,10 +8166,10 @@ h3.conversation-title.editable:hover {
     padding: 1.25rem 1.5rem 3rem;
 }
 
-/* ~68 characters is the readable measure for running prose; the chat bubble has
-   its own width and never needed one. */
+/* The page fills the content pane so it adapts to the window, rather than
+   holding a fixed prose measure that leaves a wide screen mostly empty. */
 .guide-body {
-    max-width: 68ch;
+    max-width: 100%;
 }
 
 /* Wide content in docs — option tables, sample payloads — scrolls in its own
