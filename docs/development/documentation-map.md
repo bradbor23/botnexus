@@ -98,6 +98,7 @@ Paths are relative to `docs/`. The inventory covers Markdown sources; assets, sc
 | `development/github-write-tool-contracts.md` | Developer guide |
 | `development/hub-event-inventory-generator.md` | Developer guide |
 | `development/inbound-delivery-modes.md` | Architecture guide |
+| `development/integrations-mcp-registry-plan.md` | Architecture guide |
 | `development/issue-conventions.md` | Developer guide |
 | `development/llm-request-lifecycle.md` | Architecture guide |
 | `development/maintenance-pr-footprints.md` | Developer guide |
