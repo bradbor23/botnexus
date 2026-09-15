@@ -1378,6 +1378,7 @@ public sealed class MainLayoutTests : IDisposable
     [InlineData("configuration")]
     [InlineData("skills")]
     [InlineData("plugins")]
+    [InlineData("integrations")]
     [InlineData("cron")]
     [InlineData("guide")]
     public void The_conversation_sidebar_is_not_shown_where_it_has_nothing_to_do_with_the_page(string route)

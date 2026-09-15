@@ -317,6 +317,7 @@
         public const string Agents = "agents";
         public const string Cron = "cron";
         public const string Plugins = "plugins";
+        public const string Integrations = "integrations";
         public const string Memory = "memory";
         public const string Guide = "guide";
 
@@ -324,7 +325,7 @@
         // for existing users - the resolver below walks this list and re-inserts anything missing
         // from a saved order next to its neighbours, so a new entry appears without a migration.
         public static readonly IReadOnlyList<string> DefaultOrder =
-            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, Memory, Cron, Plugins, Guide];
+            [Home, Activity, Tools, Chat, Configuration, Skills, Agents, Memory, Cron, Plugins, Integrations, Guide];
     }
 
     /// <summary>
@@ -478,6 +479,7 @@
                 NavOrderKeys.Cron => new ToolbarNavItem(entry.Key, NavOrderKeys.Cron, "cron-jobs", "Cron Jobs", "nav-cron-jobs"),
                 NavOrderKeys.Memory => new ToolbarNavItem(entry.Key, NavOrderKeys.Memory, "thinking", "Memory"),
                 NavOrderKeys.Plugins => new ToolbarNavItem(entry.Key, NavOrderKeys.Plugins, "plugins", "Plugins"),
+                NavOrderKeys.Integrations => new ToolbarNavItem(entry.Key, NavOrderKeys.Integrations, "integrations", "Integrations"),
                 NavOrderKeys.Guide => new ToolbarNavItem(entry.Key, NavOrderKeys.Guide, "guide", "Guide"),
                 _ => null,
             };

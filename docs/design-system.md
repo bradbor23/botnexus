@@ -498,7 +498,7 @@ so it is also the accessible preset.
 
 ## Icon library
 
-**45 icons.** Inline SVG, generated from `assets/icons/svg` into
+**46 icons.** Inline SVG, generated from `assets/icons/svg` into
 `IconLibrary.g.cs` by `scripts/generate-icons.py`.
 
 ### Drawing conventions

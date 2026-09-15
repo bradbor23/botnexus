@@ -8710,6 +8710,7 @@ h3.conversation-title.editable:hover {
 .bn-icon-folder { color: #F59E0B; }
 .bn-icon-guide { color: #3B82F6; }
 .bn-icon-help { color: #3B82F6; }
+.bn-icon-integrations { color: #14B8A6; }
 .bn-icon-light-mode { color: #F59E0B; }
 .bn-icon-notifications { color: #22C55E; }
 .bn-icon-pause { color: #F59E0B; }
@@ -10265,4 +10266,96 @@ h3.conversation-title.editable:hover {
     margin: 0.5rem 0 0;
     font-size: 0.8rem;
     color: var(--warning, #b8860b);
+}
+
+/* ── Integrations catalog ───────────────────────────────────────────────────
+   MCP servers from the registry. Cards reuse the plugin offering rows; the
+   detail panel sits beside the list on wide screens and below it otherwise. */
+
+.integrations-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    margin-top: 0.65rem;
+}
+
+@media (min-width: 900px) {
+    .integrations-layout.has-detail {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+}
+
+.integration-card {
+    padding: 0;
+}
+
+.integration-card-button {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.integration-card-button:focus-visible {
+    outline: 2px solid var(--accent, #3B82F6);
+    outline-offset: 1px;
+}
+
+.integration-card.selected {
+    box-shadow: inset 0 0 0 1px var(--accent, #3B82F6);
+}
+
+.integration-card-title {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.integration-card .plugin-offering-description {
+    flex-basis: 100%;
+}
+
+.integration-badge {
+    font-size: 0.78em;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 999px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.integration-badge.warning {
+    border-color: var(--warning, #F59E0B);
+    color: var(--warning, #F59E0B);
+}
+
+.integrations-more {
+    margin-top: 0.5rem;
+}
+
+.integration-detail {
+    align-self: start;
+    min-width: 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    overflow-wrap: anywhere;
+}
+
+.integration-detail h4 {
+    margin: 0 0 0.35rem;
+}
+
+.integration-detail h5 {
+    margin: 0.75rem 0 0.25rem;
+}
+
+.integration-detail ul {
+    margin: 0.25rem 0 0.5rem;
+    padding-left: 1.1rem;
 }

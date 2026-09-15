@@ -114,6 +114,10 @@ public static class IconLibrary
                 """
                 <path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9.2V20h13V9.2"/><path d="M9.5 20v-6h5v6"/>
                 """),
+            ["integrations"] = new("url(#bn-integrations-g)",
+                """
+                <defs><linearGradient id="bn-integrations-g" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#14B8A6"/><stop offset="1" stop-color="#3B82F6"/></linearGradient></defs><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>
+                """),
             ["light-mode"] = new("currentColor",
                 """
                 <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
@@ -224,6 +228,7 @@ public static class IconLibrary
         "guide",
         "help",
         "home",
+        "integrations",
         "light-mode",
         "move",
         "notifications",

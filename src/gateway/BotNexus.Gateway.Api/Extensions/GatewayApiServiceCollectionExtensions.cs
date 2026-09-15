@@ -59,6 +59,16 @@ public static class GatewayApiServiceCollectionExtensions
         // also has a constructor fallback so the endpoint works even without this registration.
         services.TryAddSingleton<IConversationHistoryAssembler, ConversationHistoryAssembler>();
 
+        // Integrations catalog (MCP registry). The cache is a singleton for the same reason as the
+        // workspace tree cache below; the client is stateless and resolves its HttpClient per call.
+        services.AddHttpClient(BotNexus.Gateway.Api.Integrations.McpRegistryClient.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(15);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("BotNexus-Gateway");
+        });
+        services.TryAddSingleton<BotNexus.Gateway.Api.Integrations.IMcpRegistryClient, BotNexus.Gateway.Api.Integrations.McpRegistryClient>();
+        services.TryAddSingleton<BotNexus.Gateway.Api.Integrations.McpRegistryCatalogCache>();
+
         // The workspace tree cache must be a singleton or it caches nothing: the portal polls
         // GET /api/agents/{id}/workspace every ~2 minutes and each call re-walked 1000-2600 entries
         // (issue #3357). It revalidates against the filesystem on every hit, so a singleton lifetime
