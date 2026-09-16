@@ -91,6 +91,15 @@ public sealed class ApnsSenderTests : IDisposable
             question is null ? null : new StubQuestionLookup(question));
     }
 
+    /// <summary>A device that asked to hear about finished replies, which the default holds back.</summary>
+    private async Task<IApnsDeviceStore> StoreWantingReplies()
+    {
+        var store = await StoreWithDevice();
+        await store.SetLevelAsync(DeviceToken, ApnsNotificationLevel.NeedsMeAndReplies);
+
+        return store;
+    }
+
     private async Task<IApnsDeviceStore> StoreWithDevice(string environment = ApnsEnvironment.Production)
     {
         var store = Store();
@@ -491,6 +500,86 @@ public sealed class ApnsSenderTests : IDisposable
         Assert.Equal(
             NotificationKind.AgentRunFailed.ToString(),
             payload.RootElement.GetProperty("aps").GetProperty("category").GetString());
+    }
+
+    // Everything arriving at the same urgency is why a phone in Focus either shows all of it or
+    // none of it. An agent that cannot continue, and a run that broke, are worth interrupting for.
+    [Theory]
+    [InlineData(NotificationKind.AgentWaitingForInput)]
+    [InlineData(NotificationKind.AgentRunFailed)]
+    public async Task What_stops_the_work_interrupts(NotificationKind kind)
+    {
+        var apns = new StubApns();
+
+        await Sender(apns, await StoreWithDevice()).SendAsync(Sample with { Kind = kind });
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            "time-sensitive",
+            payload.RootElement.GetProperty("aps").GetProperty("interruption-level").GetString());
+    }
+
+    // A finished reply is something someone asked to hear about, not something to break a meeting
+    // for. It arrives quietly and waits to be read.
+    [Fact]
+    public async Task A_finished_reply_arrives_quietly()
+    {
+        var apns = new StubApns();
+        var completed = Sample with
+        {
+            Kind = NotificationKind.AgentRunCompleted,
+            Severity = NotificationSeverity.Info,
+        };
+
+        // A reply reaches only a device that asked for replies, so the payload exists to inspect.
+        await Sender(apns, await StoreWantingReplies()).SendAsync(completed);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            "passive",
+            payload.RootElement.GetProperty("aps").GetProperty("interruption-level").GetString());
+    }
+
+    // Someone pressed a button to find out whether notifications work; it has to show up like an
+    // ordinary one, or the answer it gives is about the wrong thing.
+    [Fact]
+    public async Task A_test_notification_behaves_like_an_ordinary_one()
+    {
+        var apns = new StubApns();
+        var test = Sample with
+        {
+            Kind = NotificationKind.GatewayHealth,
+            Severity = NotificationSeverity.Info,
+            Title = ApnsDeliveryPolicy.TestNotificationTitle,
+        };
+
+        await Sender(apns, await StoreWithDevice()).SendAsync(test);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            "active",
+            payload.RootElement.GetProperty("aps").GetProperty("interruption-level").GetString());
+    }
+
+    // iOS orders a notification summary by relevance. Without a score everything ties, and the
+    // question someone needs to answer sits below a reply they have already read.
+    [Fact]
+    public async Task A_question_outranks_a_reply_in_a_summary()
+    {
+        var apns = new StubApns();
+
+        var store = await StoreWantingReplies();
+
+        await Sender(apns, store).SendAsync(Sample with { Kind = NotificationKind.AgentWaitingForInput });
+        await Sender(apns, store).SendAsync(Sample with { Kind = NotificationKind.AgentRunCompleted });
+
+        using var question = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        using var reply = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[1].Body));
+
+        var questionScore = question.RootElement.GetProperty("aps").GetProperty("relevance-score").GetDouble();
+        var replyScore = reply.RootElement.GetProperty("aps").GetProperty("relevance-score").GetDouble();
+
+        Assert.True(questionScore > replyScore, $"a question scored {questionScore}, a reply {replyScore}");
     }
 
     /// <summary>Stands in for the pending-question lookup, which is a database read in the real thing.</summary>

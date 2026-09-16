@@ -143,6 +143,45 @@ public sealed class ApnsSender(
     /// </remarks>
     internal const int MaxChoiceButtons = 3;
 
+    /// <summary>How hard a notification is allowed to knock (#168).</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>time-sensitive</c> is for the two kinds where something has stopped: an agent that cannot
+    /// continue until a person answers, and a run that failed. Those are worth reaching someone in
+    /// Focus for, and they are the only ones - a level that interrupts for everything is one people
+    /// turn off for everything.
+    /// </para>
+    /// <para>
+    /// <c>passive</c> is for a finished reply: asked for, welcome, and not a reason to light a
+    /// screen. It arrives in the list and waits. Everything else stays at the ordinary level.
+    /// </para>
+    /// <para>
+    /// A phone honours <c>time-sensitive</c> only if the app carries Apple's Time Sensitive
+    /// Notifications entitlement; without it iOS accepts the key and treats it as ordinary, so
+    /// sending it costs nothing and gains everything the moment the entitlement is granted.
+    /// </para>
+    /// </remarks>
+    internal static string InterruptionLevelFor(Notification notification) => notification.Kind switch
+    {
+        NotificationKind.AgentWaitingForInput or NotificationKind.AgentRunFailed => "time-sensitive",
+        NotificationKind.AgentRunCompleted => "passive",
+        _ => "active",
+    };
+
+    /// <summary>Where a notification sorts when iOS groups several into one summary (#168).</summary>
+    /// <remarks>
+    /// A score between 0 and 1, and only the ordering matters. A question outranks a failure because
+    /// it is waiting on the person reading it; a finished reply sits at the bottom because nothing
+    /// is blocked on it.
+    /// </remarks>
+    internal static double RelevanceFor(Notification notification) => notification.Kind switch
+    {
+        NotificationKind.AgentWaitingForInput => 1.0,
+        NotificationKind.AgentRunFailed => 0.8,
+        NotificationKind.AgentRunCompleted => 0.2,
+        _ => 0.5,
+    };
+
     /// <summary>The category naming the buttons a question is shown with.</summary>
     internal static string CategoryFor(PendingQuestion question)
     {
@@ -200,6 +239,12 @@ public sealed class ApnsSender(
                 ["category"] = question is null
                     ? notification.Kind.ToString()
                     : CategoryFor(question),
+                // #168: how hard this is allowed to knock. Without it everything arrives at the
+                // same urgency, so a phone in Focus either shows all of it or none of it.
+                ["interruption-level"] = InterruptionLevelFor(notification),
+                // And how it sorts in a summary, so the question someone has to answer is not
+                // filed below a reply they have already read.
+                ["relevance-score"] = RelevanceFor(notification),
             };
 
             // #168: groups one conversation's notifications together on the lock screen instead of
