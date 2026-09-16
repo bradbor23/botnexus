@@ -413,6 +413,24 @@ required rather than inferred: an answer that named no question could resolve on
 This is the same submission the portal's live hub builds, resolved through the same seam, with the
 same fallback to the durable checkpoint when a restart destroyed the in-memory waiter.
 
+**How hard a notification knocks.** Every push carries `aps.interruption-level` and
+`aps.relevance-score`:
+
+| Kind | Level | Score | Why |
+| --- | --- | --- | --- |
+| `AgentWaitingForInput` | `time-sensitive` | 1.0 | An agent cannot continue until someone answers |
+| `AgentRunFailed` | `time-sensitive` | 0.8 | Something broke and nobody knows yet |
+| `AgentRunCompleted` | `passive` | 0.2 | Asked for, welcome, and no reason to light a screen |
+| Anything else | `active` | 0.5 | Ordinary — including the test notification, which must behave like one |
+
+Only the two kinds where work has *stopped* are allowed to interrupt: a level that breaks through
+Focus for everything is one people switch off for everything. The score orders a summary, so the
+question waiting on someone is not filed below a reply they have already read.
+
+A phone honours `time-sensitive` only when the app carries Apple's Time Sensitive Notifications
+entitlement. Without it iOS accepts the key and treats the notification as ordinary — so sending it
+costs nothing today and starts working the moment the entitlement is granted.
+
 **`aps.category` names the buttons, and is a contract.** iOS attaches actions by matching the
 category against one the app registered *before* the notification arrived, so a question's category
 describes its shape rather than its kind:
