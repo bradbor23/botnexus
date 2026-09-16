@@ -1,3 +1,4 @@
+using BotNexus.Domain.Text;
 using BotNexus.Gateway.Abstractions.Notifications;
 using System.Diagnostics;
 using BotNexus.Agent.Core.Types;
@@ -573,6 +574,10 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
                 }, cancellationToken);
 
                 var sessionSaved = false;
+                // #168: a streaming run that already reported a failure must not also report a
+                // finished reply. Declared out here because the failure is seen inside the
+                // streaming branch and read after both branches converge.
+                var runFailed = false;
                 var agentDescriptor = _registry?.Get(typedAgentId);
                 var resolvedChannel = ResolveChannelAdapter(message.ChannelType);
                 var shouldStream = resolvedChannel is not null && message.StreamResponse switch
@@ -755,6 +760,7 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
                                     // an operator needs one report of the failure, not a stream of
                                     // them.
                                     runFailureNotified = true;
+                                    runFailed = true;
                                     await _notificationPublisher.TryPublishAsync(
                                         new Notification
                                         {
@@ -980,6 +986,12 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
                 // Auto-generate conversation title after the first user+assistant exchange
                 // if the title is still the default value (#739). Best-effort fire-and-forget.
                 TryTriggerAutoTitle(session, typedAgentId);
+
+                // #168: tell a phone the reply landed. Both branches reach here on success, and the
+                // assistant's words are already in hand from the fan-out above.
+                await TryRaiseRunCompletedAsync(
+                    message, session, typedAgentId, lastAssistantContent, runFailed, cancellationToken)
+                    .ConfigureAwait(false);
 
                 await _activity.PublishAsync(new GatewayActivity
                 {
@@ -1560,6 +1572,94 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
     /// </summary>
     private static bool ShouldInitializeSystemPrompt(GatewaySession session)
         => session.History.Count == 0;
+
+    /// <summary>Reports a finished reply to the clients that are not watching it arrive (#168).</summary>
+    /// <remarks>
+    /// The run-completed kind existed for years without ever being raised, and the reasoning was
+    /// sound: in a conversation someone is watching, every message is a run, and a notification
+    /// would announce a reply already on screen. A phone is the case that reasoning did not cover -
+    /// nobody is watching, and the reply is the thing being waited for.
+    /// <para>
+    /// So it is raised, minus the cases where it would be noise. A chat whose replies already reach
+    /// Telegram is told there. Two agents talking to each other are not a person's inbox. A silence
+    /// (NO_REPLY) and a heartbeat acknowledgement are not replies. A run that failed has reported
+    /// itself already. Levels then decide per device whether this ever reaches a lock screen -
+    /// the default holds it back, and only a device asking for replies is sent it.
+    /// </para>
+    /// <para>
+    /// Best-effort throughout: the reply has been delivered by the time this runs, so nothing here
+    /// may turn a completed turn into a failed one.
+    /// </para>
+    /// </remarks>
+    private async Task TryRaiseRunCompletedAsync(
+        InboundMessage message,
+        GatewaySession session,
+        AgentId agentId,
+        string? reply,
+        bool runFailed,
+        CancellationToken ct)
+    {
+        if (runFailed || string.IsNullOrWhiteSpace(reply) || IsNoReply(reply) || IsHeartbeatAck(reply))
+            return;
+
+        if (!session.ConversationId.IsInitialized())
+            return;
+
+        // The reply reached Telegram on the way in, so Telegram has already said so.
+        if (IsTelegram(message.ChannelType))
+            return;
+
+        try
+        {
+            var conversation = _conversationStore is null
+                ? null
+                : await _conversationStore.GetAsync(session.ConversationId, ct).ConfigureAwait(false);
+
+            if (conversation is null || conversation.Kind != ConversationKind.HumanAgent)
+                return;
+
+            // A conversation bound outward to Telegram is answered there whichever side began it.
+            if (conversation.ChannelBindings.Any(binding => IsTelegram(binding.ChannelType)))
+                return;
+
+            await _notificationPublisher.TryPublishAsync(
+                new Notification
+                {
+                    Id = string.Empty,
+                    Kind = NotificationKind.AgentRunCompleted,
+                    Severity = NotificationSeverity.Info,
+                    Title = $"Agent '{agentId}' replied",
+                    Body = Summarize(reply),
+                    AgentId = agentId.ToString(),
+                    ConversationId = session.ConversationId.ToString(),
+                    Link = $"agent/{agentId}/conversation/{session.ConversationId}",
+                    CreatedAtUtc = default,
+                },
+                _logger,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not report the finished reply for session '{SessionId}'. The reply was delivered.",
+                session.SessionId);
+        }
+    }
+
+    private static bool IsTelegram(ChannelKey channel) =>
+        channel.Equals(ChannelKey.From("telegram"));
+
+    /// <summary>How much of a reply a notification body carries.</summary>
+    private const int NotificationBodyBudget = 200;
+
+    /// <summary>The opening of a reply, short enough for a lock screen.</summary>
+    /// <remarks>
+    /// Cut through the shared policy rather than a range slice (#2883): a reply ending in an emoji
+    /// would otherwise be severed between its two halves and arrive as a replacement character.
+    /// </remarks>
+    private static string Summarize(string reply) =>
+        reply.Trim().SafeTruncate(NotificationBodyBudget, "…") ?? string.Empty;
 
     private static bool IsHeartbeatAck(string? response)
     {

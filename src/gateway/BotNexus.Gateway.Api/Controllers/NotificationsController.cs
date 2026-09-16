@@ -18,12 +18,19 @@ namespace BotNexus.Gateway.Api.Controllers;
 [Route("api/notifications")]
 public sealed class NotificationsController(
     INotificationStore store,
-    INotificationPublisher publisher) : ControllerBase
+    INotificationPublisher publisher,
+    IWaitingConversationCount? waiting = null) : ControllerBase
 {
     private const int MaxLimit = 500;
 
     private readonly INotificationStore _store = store;
     private readonly INotificationPublisher _publisher = publisher;
+
+    /// <summary>
+    /// Counts the questions waiting on a person, for a client that shows a badge. Absent on a
+    /// gateway wired without one, and the route then says so rather than answering zero.
+    /// </summary>
+    private readonly IWaitingConversationCount? _waiting = waiting;
 
     /// <summary>
     /// Raises a notification, so the whole delivery chain can be exercised on demand.
@@ -88,6 +95,27 @@ public sealed class NotificationsController(
     [ProducesResponseType(typeof(UnreadCountResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<UnreadCountResponse>> UnreadCount(CancellationToken ct = default) =>
         Ok(new UnreadCountResponse(await _store.UnreadCountAsync(ct)));
+
+    /// <summary>How many conversations are waiting on a person's answer.</summary>
+    /// <remarks>
+    /// The number an app icon badge shows, and deliberately not the unread count: a notification
+    /// nobody has read is not the same as a question nobody has answered. Separate from the list for
+    /// the same reason the unread count is - a client asking for one number should not be sent a
+    /// hundred rows to find it.
+    /// </remarks>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpGet("waiting-count")]
+    [ProducesResponseType(typeof(WaitingCountResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WaitingCountResponse>> WaitingCount(CancellationToken ct = default)
+    {
+        // A gateway that cannot count must not answer zero: zero is the value that clears a badge,
+        // and clearing one that was right is worse than admitting the route is unavailable.
+        if (_waiting is null)
+            return NotFound();
+
+        return Ok(new WaitingCountResponse(await _waiting.CountAsync(ct)));
+    }
 
     /// <summary>Marks one notification read.</summary>
     /// <param name="id">Notification identifier.</param>
@@ -178,6 +206,10 @@ public sealed record NotificationResponse(
 /// <summary>Unread badge count.</summary>
 /// <param name="Count">Number of unread notifications.</param>
 public sealed record UnreadCountResponse(int Count);
+
+/// <summary>How many conversations are waiting on a person's answer.</summary>
+/// <param name="Count">The number of conversations with an unanswered question.</param>
+public sealed record WaitingCountResponse(int Count);
 
 /// <summary>Outcome of marking everything read.</summary>
 /// <param name="Changed">How many notifications changed from unread to read.</param>
