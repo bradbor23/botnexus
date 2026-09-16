@@ -92,6 +92,13 @@ public static class WebPushServiceCollectionExtensions
         services.TryAddSingleton<IWaitingConversationCount>(sp =>
             new WaitingConversationCount(sp.GetRequiredService<IConversationStore>()));
 
+        // The answers a question offers live on the conversation row that already holds the prompt,
+        // so a notification can carry buttons without the notification contract growing fields.
+        services.TryAddSingleton<IPendingQuestionLookup>(sp =>
+            new PendingQuestionLookup(
+                sp.GetRequiredService<IConversationStore>(),
+                sp.GetService<ILogger<PendingQuestionLookup>>()));
+
         services.AddHostedService<ApnsBridge>();
 
         return services;

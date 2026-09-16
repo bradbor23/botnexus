@@ -1,3 +1,4 @@
+using BotNexus.Domain.Primitives;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -76,7 +77,8 @@ public sealed class ApnsSenderTests : IDisposable
         StubApns apns,
         IApnsDeviceStore store,
         ApnsOptions? options = null,
-        int? waiting = null)
+        int? waiting = null,
+        PendingQuestion? question = null)
     {
         var resolved = options ?? Configured();
 
@@ -85,7 +87,8 @@ public sealed class ApnsSenderTests : IDisposable
             store,
             resolved,
             new ApnsTokenProvider(resolved, _time),
-            waiting is { } count ? new StubWaitingCount(count) : null);
+            waiting is { } count ? new StubWaitingCount(count) : null,
+            question is null ? null : new StubQuestionLookup(question));
     }
 
     private async Task<IApnsDeviceStore> StoreWithDevice(string environment = ApnsEnvironment.Production)
@@ -324,6 +327,183 @@ public sealed class ApnsSenderTests : IDisposable
     private sealed class StubWaitingCount(int count) : IWaitingConversationCount
     {
         public Task<int> CountAsync(CancellationToken ct = default) => Task.FromResult(count);
+    }
+
+    // Telegram puts the answers under the question as buttons. A phone can do the same, but only if
+    // the push carries them.
+    [Fact]
+    public async Task A_waiting_question_carries_its_answers()
+    {
+        var apns = new StubApns();
+        var waiting = Sample with
+        {
+            Kind = NotificationKind.AgentWaitingForInput,
+            Severity = NotificationSeverity.Warning,
+            ConversationId = "c1",
+        };
+
+        await Sender(
+            apns,
+            await StoreWithDevice(),
+            question: new PendingQuestion(
+                "req-1",
+                [new PendingQuestionChoice("now", "Deploy now"), new PendingQuestionChoice("wait", "Wait")],
+                AllowFreeForm: true,
+                AllowMultiple: false))
+            .SendAsync(waiting);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        var root = payload.RootElement;
+
+        Assert.Equal("req-1", root.GetProperty("requestId").GetString());
+        Assert.True(root.GetProperty("allowFreeForm").GetBoolean());
+        Assert.False(root.GetProperty("allowMultiple").GetBoolean());
+
+        var choices = root.GetProperty("choices");
+        Assert.Equal(2, choices.GetArrayLength());
+        Assert.Equal("now", choices[0].GetProperty("value").GetString());
+        Assert.Equal("Deploy now", choices[0].GetProperty("label").GetString());
+    }
+
+    // A reply or a failure has nothing to answer, and must not cost a database read to discover it.
+    [Fact]
+    public async Task A_notification_that_is_not_a_question_asks_for_nothing()
+    {
+        var apns = new StubApns();
+        var lookup = new StubQuestionLookup(new PendingQuestion("req-1", [], true, false));
+
+        await new ApnsSender(
+            new HttpClient(apns),
+            await StoreWithDevice(),
+            Configured(),
+            new ApnsTokenProvider(Configured(), _time),
+            waiting: null,
+            questions: lookup)
+            .SendAsync(Sample);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.False(payload.RootElement.TryGetProperty("requestId", out _));
+        Assert.Equal(0, lookup.Calls);
+    }
+
+    // An open-ended question has no buttons; the phone offers a text field instead, and needs to be
+    // told that is allowed.
+    [Fact]
+    public async Task A_question_with_no_choices_still_says_it_can_be_typed()
+    {
+        var apns = new StubApns();
+        var waiting = Sample with
+        {
+            Kind = NotificationKind.AgentWaitingForInput,
+            ConversationId = "c1",
+        };
+
+        await Sender(
+            apns,
+            await StoreWithDevice(),
+            question: new PendingQuestion("req-1", [], AllowFreeForm: true, AllowMultiple: false))
+            .SendAsync(waiting);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        var root = payload.RootElement;
+
+        Assert.Equal("req-1", root.GetProperty("requestId").GetString());
+        Assert.Equal(0, root.GetProperty("choices").GetArrayLength());
+        Assert.True(root.GetProperty("allowFreeForm").GetBoolean());
+    }
+
+    // The question was answered in the portal a moment ago: the push still goes, without buttons
+    // that would resolve nothing.
+    [Fact]
+    public async Task A_question_that_is_no_longer_pending_sends_the_notification_anyway()
+    {
+        var apns = new StubApns();
+        var waiting = Sample with
+        {
+            Kind = NotificationKind.AgentWaitingForInput,
+            ConversationId = "c1",
+        };
+
+        var delivered = await Sender(apns, await StoreWithDevice()).SendAsync(waiting);
+
+        Assert.Equal(1, delivered);
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.False(payload.RootElement.TryGetProperty("requestId", out _));
+    }
+
+    // iOS attaches buttons by matching the push's category against one the app registered before the
+    // notification arrived. Sending the kind here would mean a question that carries its answers and
+    // shows none of them.
+    [Fact]
+    public async Task A_question_names_the_category_its_answers_need()
+    {
+        var apns = new StubApns();
+        var waiting = Sample with { Kind = NotificationKind.AgentWaitingForInput, ConversationId = "c1" };
+
+        await Sender(
+            apns,
+            await StoreWithDevice(),
+            question: new PendingQuestion(
+                "req-1",
+                [new PendingQuestionChoice("now", "Deploy now"), new PendingQuestionChoice("wait", "Wait")],
+                AllowFreeForm: true,
+                AllowMultiple: false))
+            .SendAsync(waiting);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            "botnexus.question.2.reply",
+            payload.RootElement.GetProperty("aps").GetProperty("category").GetString());
+    }
+
+    // Too many answers to draw: the notification offers none and opening the conversation shows them
+    // all, which is what Telegram does at its own limit.
+    [Fact]
+    public async Task A_question_with_too_many_answers_offers_none()
+    {
+        var apns = new StubApns();
+        var waiting = Sample with { Kind = NotificationKind.AgentWaitingForInput, ConversationId = "c1" };
+        var many = Enumerable.Range(1, 9)
+            .Select(index => new PendingQuestionChoice($"v{index}", $"Choice {index}"))
+            .ToArray();
+
+        await Sender(
+            apns,
+            await StoreWithDevice(),
+            question: new PendingQuestion("req-1", many, AllowFreeForm: false, AllowMultiple: false))
+            .SendAsync(waiting);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            "botnexus.question.0",
+            payload.RootElement.GetProperty("aps").GetProperty("category").GetString());
+    }
+
+    // A reply or a failure has nothing to answer, and keeps naming its kind so a client can route it.
+    [Fact]
+    public async Task Anything_that_is_not_a_question_still_names_its_kind()
+    {
+        var apns = new StubApns();
+
+        await Sender(apns, await StoreWithDevice()).SendAsync(Sample);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(
+            NotificationKind.AgentRunFailed.ToString(),
+            payload.RootElement.GetProperty("aps").GetProperty("category").GetString());
+    }
+
+    /// <summary>Stands in for the pending-question lookup, which is a database read in the real thing.</summary>
+    private sealed class StubQuestionLookup(PendingQuestion question) : IPendingQuestionLookup
+    {
+        public int Calls { get; private set; }
+
+        public Task<PendingQuestion?> FindAsync(ConversationId conversationId, CancellationToken ct = default)
+        {
+            Calls++;
+
+            return Task.FromResult<PendingQuestion?>(question);
+        }
     }
 
     /// <summary>Stands in for APNs and records what it was sent.</summary>

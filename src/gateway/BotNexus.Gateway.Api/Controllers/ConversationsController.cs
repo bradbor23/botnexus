@@ -34,6 +34,18 @@ public sealed class ConversationsController : ControllerBase
     private readonly IReadOnlyList<IConversationChangeNotifier> _conversationChangeNotifiers;
     private readonly ILogger<ConversationsController> _logger;
     private readonly IAskUserResponseRegistry? _askUserResponseRegistry;
+
+    /// <summary>
+    /// The channel-agnostic seam an answer resolves through (#2322). Absent on a gateway wired
+    /// without it, and answering then reports that it cannot rather than reporting success.
+    /// </summary>
+    private readonly IAskUserPromptResolver? _askUserPromptResolver;
+
+    /// <summary>
+    /// Resolves a question whose in-memory waiter died with a restart (#2047), exactly as the live
+    /// hub does after the resolver reports nothing pending.
+    /// </summary>
+    private readonly IAskUserCheckpointService? _askUserCheckpointService;
     private readonly IConversationResetService? _resetService;
     private readonly IConversationAuditLog? _auditLog;
     private readonly IConversationHistoryAssembler _historyAssembler;
@@ -57,6 +69,13 @@ public sealed class ConversationsController : ControllerBase
     /// test harnesses constructing the controller directly), a default instance over the same stores is used.</param>
     /// <param name="modelRegistry">Optional model registry used to validate per-conversation model / thinking / context overrides against real model capabilities. When omitted, override values are stored without capability validation.</param>
     /// <param name="agentRegistry">Optional agent registry used to resolve the owning agent's provider and default model when validating overrides.</param>
+    /// <param name="askUserPromptResolver">
+    /// The seam an <c>ask_user</c> answer resolves through (#2322), shared with every channel.
+    /// Omitted on a gateway wired without it, and answering then reports that it cannot.
+    /// </param>
+    /// <param name="askUserCheckpointService">
+    /// Resolves a question whose in-memory waiter died with a restart (#2047).
+    /// </param>
     public ConversationsController(
         IConversationStore conversations,
         ISessionStore sessions,
@@ -67,13 +86,17 @@ public sealed class ConversationsController : ControllerBase
         IConversationAuditLog? auditLog = null,
         IConversationHistoryAssembler? historyAssembler = null,
         ModelRegistry? modelRegistry = null,
-        IAgentRegistry? agentRegistry = null)
+        IAgentRegistry? agentRegistry = null,
+        IAskUserPromptResolver? askUserPromptResolver = null,
+        IAskUserCheckpointService? askUserCheckpointService = null)
     {
         _conversations = conversations;
         _sessions = sessions;
         _conversationChangeNotifiers = conversationChangeNotifiers?.ToArray() ?? [];
         _logger = logger ?? NullLogger<ConversationsController>.Instance;
         _askUserResponseRegistry = askUserResponseRegistry;
+        _askUserPromptResolver = askUserPromptResolver;
+        _askUserCheckpointService = askUserCheckpointService;
         _resetService = resetService;
         _auditLog = auditLog;
         // When DI omits the assembler (legacy test harnesses that construct the controller
@@ -932,6 +955,90 @@ public sealed class ConversationsController : ControllerBase
         if (string.IsNullOrEmpty(conversation.PendingAskUserJson))
             return NoContent();
         return Content(conversation.PendingAskUserJson, "application/json");
+    }
+
+    /// <summary>
+    /// Answers the <c>ask_user</c> prompt a conversation is waiting on (#168).
+    /// </summary>
+    /// <remarks>
+    /// Answering used to require the live SignalR hub, which meant the app had to be open and
+    /// connected - precisely what someone looking at a lock screen is not. This is the same
+    /// submission the hub builds, resolved through the same channel-agnostic seam (#2322), with the
+    /// same fallback to the durable checkpoint when a restart destroyed the in-memory waiter (#2047).
+    /// <para>
+    /// The request id is required rather than inferred. A notification can outlive the question it
+    /// was raised for, and answering "whatever is pending now" would let a stale tap resolve a
+    /// question the person never read.
+    /// </para>
+    /// </remarks>
+    /// <param name="conversationId">The conversation holding the question.</param>
+    /// <param name="request">The answer: chosen values, typed text, or a cancellation.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [HttpPost("{conversationId}/ask-user")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Answer(
+        string conversationId,
+        [FromBody] AskUserAnswerRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return BadRequest(new { error = "requestId is required: it names the question being answered." });
+
+        if (_askUserPromptResolver is null)
+            return NotFound();
+
+        var typedConversationId = ConversationId.From(conversationId);
+        var conversation = await _conversations.GetAsync(typedConversationId, cancellationToken).ConfigureAwait(false);
+        if (conversation is null)
+            return NotFound();
+
+        var submission = new AskUserSubmission
+        {
+            ConversationId = typedConversationId,
+            RequestId = request.RequestId.Trim(),
+            FreeFormText = string.IsNullOrWhiteSpace(request.FreeFormText) ? null : request.FreeFormText.Trim(),
+            SelectedValues = request.SelectedValues is { Count: > 0 }
+                ? [.. request.SelectedValues.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim())]
+                : null,
+            Cancelled = request.Cancelled,
+            // Attribution only, and the one log line explaining a resolved prompt should not claim
+            // this came from a channel binding it never had.
+            OriginChannel = ChannelKey.From("rest")
+        };
+
+        var result = await _askUserPromptResolver.ResolveAsync(submission, cancellationToken).ConfigureAwait(false);
+
+        if (result.Succeeded)
+            return NoContent();
+
+        if (result.Status == AskUserResolutionStatus.InvalidSubmission)
+            return BadRequest(new { error = result.FailureReason ?? "The answer was rejected." });
+
+        // Nothing pending in memory may still mean a prompt persisted through a restart.
+        if (_askUserCheckpointService is not null)
+        {
+            var outcome = await _askUserCheckpointService.ResolveAsync(
+                typedConversationId,
+                submission.RequestId!,
+                new AskUserResponse
+                {
+                    RequestId = submission.RequestId!,
+                    FreeFormText = submission.FreeFormText,
+                    SelectedValues = submission.SelectedValues?.ToArray(),
+                    WasCancelled = submission.Cancelled
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (outcome == AskUserResolveOutcome.ResumedFromCheckpoint)
+                return NoContent();
+        }
+
+        // Answered elsewhere, expired, or a different question is pending now.
+        return NotFound(new { error = result.FailureReason ?? "No question is waiting for that answer." });
     }
 
     /// <summary>

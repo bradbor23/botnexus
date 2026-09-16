@@ -32,7 +32,10 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
         _notificationPublisher = notificationPublisher ?? NullNotificationPublisher.Instance;
 
     /// <inheritdoc />
-    public (string RequestId, Task<AskUserResponse> Task) Register(ConversationId conversationId, TimeSpan? timeout)
+    public (string RequestId, Task<AskUserResponse> Task) Register(
+        ConversationId conversationId,
+        TimeSpan? timeout,
+        string? prompt = null)
     {
         var conversationKey = NormalizeConversationId(conversationId);
         if (_requestIdByConversation.ContainsKey(conversationKey))
@@ -78,7 +81,12 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
                 Kind = NotificationKind.AgentWaitingForInput,
                 Severity = NotificationSeverity.Warning,
                 Title = "An agent is waiting for your answer",
-                Body = "A conversation is paused until the question is answered.",
+                // The question itself, when the caller had it. Telegram has always shown this; a
+                // phone told only that something is paused makes someone open the app to find out
+                // what was asked (#168).
+                Body = string.IsNullOrWhiteSpace(prompt)
+                    ? "A conversation is paused until the question is answered."
+                    : prompt.Trim(),
                 ConversationId = conversationId.ToString(),
                 Link = $"conversation/{conversationId}",
                 CreatedAtUtc = default,
