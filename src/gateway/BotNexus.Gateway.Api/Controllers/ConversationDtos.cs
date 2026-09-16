@@ -195,3 +195,24 @@ public sealed class ConversationHistoryEntry
     /// </summary>
     public string? MessageKind { get; init; }
 }
+
+/// <summary>An answer to the <c>ask_user</c> question a conversation is waiting on (#168).</summary>
+/// <remarks>
+/// The shape a phone posts from a notification: a chosen value or two, text someone typed, or a
+/// cancellation. The request id is required — a notification can outlive the question it was raised
+/// for, and an answer that named no question could resolve one nobody had read.
+/// </remarks>
+public sealed record AskUserAnswerRequest
+{
+    /// <summary>The question being answered.</summary>
+    public string? RequestId { get; init; }
+
+    /// <summary>An answer typed rather than chosen.</summary>
+    public string? FreeFormText { get; init; }
+
+    /// <summary>The values of the chosen answers.</summary>
+    public IReadOnlyList<string>? SelectedValues { get; init; }
+
+    /// <summary>Whether the person declined to answer.</summary>
+    public bool Cancelled { get; init; }
+}

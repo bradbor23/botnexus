@@ -32,6 +32,35 @@ public sealed class AskUserNotificationTests
         Assert.Contains("c_test", raised.Link);
     }
 
+    // Telegram shows the question itself; a phone that says only "a conversation is paused" makes
+    // someone open the app to find out what was even asked.
+    [Fact]
+    public void The_question_itself_is_what_the_notification_says()
+    {
+        var publisher = new RecordingPublisher();
+        var registry = new AskUserResponseRegistry(publisher);
+
+        registry.Register(
+            Conversation(),
+            timeout: null,
+            prompt: "Deploy the gateway now, or wait for the overnight window?");
+
+        var raised = Assert.Single(publisher.Published);
+        Assert.Equal("Deploy the gateway now, or wait for the overnight window?", raised.Body);
+    }
+
+    // A question with no text is still a question, and the old wording is better than a blank body.
+    [Fact]
+    public void A_question_with_no_text_still_says_something_useful()
+    {
+        var publisher = new RecordingPublisher();
+        var registry = new AskUserResponseRegistry(publisher);
+
+        registry.Register(Conversation(), timeout: null, prompt: "   ");
+
+        Assert.False(string.IsNullOrWhiteSpace(Assert.Single(publisher.Published).Body));
+    }
+
     // Registration must not depend on the notification succeeding: asking a question cannot be
     // allowed to fail because the thing that reports the question failed.
     [Fact]

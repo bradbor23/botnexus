@@ -119,6 +119,10 @@ to `500`).
 | `body` | string? | Optional detail |
 | `agentId` | string? | Present when the notification concerns one |
 | `conversationId` | string? | Present when the notification concerns one |
+| `requestId` | string? | The question this notification is about, when it is one |
+| `choices` | array? | The answers to offer, each `{ value, label }`; empty for an open question |
+| `allowFreeForm` | bool? | Whether an answer may be typed rather than chosen |
+| `allowMultiple` | bool? | Whether more than one answer may be chosen |
 | `link` | string? | **Site-relative, no leading slash.** Null when there is nowhere to go |
 | `createdAtUtc` | timestamp | |
 | `readAtUtc` | timestamp? | Null while unread |
@@ -371,6 +375,60 @@ from the conversations that hold a pending `ask_user` prompt and are active, use
 a person and an agent. Zero is sent as well, since that is what takes the badge off the icon once
 the last question has been answered. A gateway that cannot count sends no badge at all rather than a
 guessed zero, which would clear a count the phone was rightly showing.
+
+### The question, and answering it
+
+A waiting notification carries the question itself as its body — not "a conversation is paused" —
+and, when the conversation still holds a pending prompt, the answers it offers:
+
+```json
+{
+  "aps": { "alert": { "title": "An agent is waiting for your answer", "body": "Deploy now, or wait for the overnight window?" } },
+  "kind": "AgentWaitingForInput",
+  "conversationId": "c47f...",
+  "requestId": "req-1",
+  "choices": [{ "value": "now", "label": "Deploy now" }, { "value": "wait", "label": "Wait" }],
+  "allowFreeForm": true,
+  "allowMultiple": false
+}
+```
+
+The answers are read from the pending prompt on the conversation at send time, so they cost a read
+only for a question. A key the gateway has nothing to say about is **absent rather than null**: a
+client can ask whether `requestId` exists instead of telling a null apart from a value.
+
+Answer it with:
+
+```http
+POST /api/conversations/{conversationId}/ask-user
+{ "requestId": "req-1", "selectedValues": ["now"] }
+```
+
+`freeFormText` carries a typed answer instead, and `cancelled` declines. `204` resolves the
+question and the agent continues; `400` means the answer was empty or named no question; `404`
+means nothing is waiting for it — answered elsewhere, expired, or a different question is pending
+now. A notification can outlive the question it was raised for, which is why `requestId` is
+required rather than inferred: an answer that named no question could resolve one nobody had read.
+
+This is the same submission the portal's live hub builds, resolved through the same seam, with the
+same fallback to the durable checkpoint when a restart destroyed the in-memory waiter.
+
+**`aps.category` names the buttons, and is a contract.** iOS attaches actions by matching the
+category against one the app registered *before* the notification arrived, so a question's category
+describes its shape rather than its kind:
+
+| Category | Shown |
+| --- | --- |
+| `botnexus.question.0` | No buttons — open the conversation |
+| `botnexus.question.2` | Two answers as buttons |
+| `botnexus.question.3.reply` | Three answers, plus a field to type one |
+
+At most **three** answers are drawn; beyond that the category is `botnexus.question.0`, because three
+of nine buttons hides the one someone wanted while the conversation shows them all — the same
+degradation Telegram makes at its own limit of thirty. A client registering these categories must use
+the same ceiling: naming a category the app never registered loses the buttons silently, with nothing
+visible on the phone to say why. Everything that is not a question keeps its kind as the category
+(`AgentRunCompleted`, `AgentRunFailed`, …), which is what a client routes a tap by.
 
 `off` wins over any conversation level. A notification about no conversation follows the device
 level. A new registration starts at `needsMe`, and re-registering the same token keeps whatever

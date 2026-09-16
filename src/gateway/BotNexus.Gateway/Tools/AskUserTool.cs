@@ -114,7 +114,7 @@ public sealed class AskUserTool(
             : null;
         var allowMultiple = ReadBool(arguments, "allow_multiple") ?? inputType == AskUserInputType.MultipleChoice;
         var allowFreeForm = inputType is AskUserInputType.FreeForm or AskUserInputType.ChoiceOrFreeForm;
-        var registration = responseRegistry.Register(conversationId.Value, timeout);
+        var registration = responseRegistry.Register(conversationId.Value, timeout, prompt);
 
         var request = new AskUserRequest
         {

@@ -16,7 +16,14 @@ public interface IAskUserResponseRegistry
     /// <param name="conversationId">Conversation that owns the pending request.</param>
     /// <param name="timeout">Optional timeout after which the wait completes as timed out.</param>
     /// <returns>Generated request id and completion task.</returns>
-    (string RequestId, Task<AskUserResponse> Task) Register(ConversationId conversationId, TimeSpan? timeout);
+    /// <param name="prompt">
+    /// The question being asked, when the caller has it. It becomes what the notification says, so a
+    /// phone shows the question rather than the fact that one exists (#168).
+    /// </param>
+    (string RequestId, Task<AskUserResponse> Task) Register(
+        ConversationId conversationId,
+        TimeSpan? timeout,
+        string? prompt = null);
 
     /// <summary>
     /// Rebuilds the conversation-to-request-id mapping for a durable pending prompt whose live

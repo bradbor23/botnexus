@@ -1,3 +1,4 @@
+using BotNexus.Domain.Primitives;
 using BotNexus.Gateway.Abstractions.Notifications;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,10 +23,22 @@ public sealed class ApnsSender(
     ApnsOptions options,
     ApnsTokenProvider tokens,
     IWaitingConversationCount? waiting = null,
+    IPendingQuestionLookup? questions = null,
     ILogger<ApnsSender>? logger = null)
 {
     /// <summary>APNs rejects an alert payload larger than this.</summary>
     private const int MaxPayloadBytes = 4096;
+
+    /// <summary>
+    /// Absent keys rather than null ones. A notification with no question would otherwise carry four
+    /// nulls, and a payload has 4 KB to say everything in - but the deciding reason is that a client
+    /// asking "is there a question here" should get an answer from whether the key exists, not from
+    /// having to tell a null apart from a value.
+    /// </summary>
+    private static readonly JsonSerializerOptions PayloadOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 
     /// <summary>How long APNs should hold a push for a device that is offline.</summary>
     private static readonly TimeSpan Expiration = TimeSpan.FromHours(24);
@@ -41,6 +54,12 @@ public sealed class ApnsSender(
     /// clear a count the phone was rightly showing.
     /// </summary>
     private readonly IWaitingConversationCount? _waiting = waiting;
+
+    /// <summary>
+    /// Finds the question a conversation is waiting on, so a notification can carry its answers.
+    /// Absent on a gateway wired without it, and a question then arrives as words alone.
+    /// </summary>
+    private readonly IPendingQuestionLookup? _questions = questions;
     private readonly ILogger<ApnsSender> _logger = logger ?? NullLogger<ApnsSender>.Instance;
 
     /// <summary>Pushes one notification to every registered device. Returns how many were accepted.</summary>
@@ -64,7 +83,12 @@ public sealed class ApnsSender(
             ? null
             : await CountWaitingAsync(ct).ConfigureAwait(false);
 
-        var payload = BuildPayload(notification, badge);
+        // Only a question has answers, and only a question pays for the read that finds them.
+        var question = notification.Kind == NotificationKind.AgentWaitingForInput
+            ? await FindQuestionAsync(notification, ct).ConfigureAwait(false)
+            : null;
+
+        var payload = BuildPayload(notification, badge, question);
         var delivered = 0;
 
         foreach (var device in devices)
@@ -108,7 +132,56 @@ public sealed class ApnsSender(
         }
     }
 
-    internal static byte[] BuildPayload(Notification notification, int? badge = null)
+    /// <summary>
+    /// How many answers a phone can show as buttons. Beyond this it shows none: three of nine
+    /// buttons hides the one someone wanted, and opening the conversation shows them all.
+    /// </summary>
+    /// <remarks>
+    /// The client registers categories for exactly these shapes, so this number is part of the
+    /// contract rather than a local preference - changing it here alone would name a category the
+    /// app never registered, and the buttons would silently stop appearing.
+    /// </remarks>
+    internal const int MaxChoiceButtons = 3;
+
+    /// <summary>The category naming the buttons a question is shown with.</summary>
+    internal static string CategoryFor(PendingQuestion question)
+    {
+        var buttons = question.Choices.Count is > 0 and <= MaxChoiceButtons ? question.Choices.Count : 0;
+
+        return $"botnexus.question.{buttons}{(question.AllowFreeForm ? ".reply" : string.Empty)}";
+    }
+
+    /// <summary>The question this notification is about, or nothing when it cannot be read.</summary>
+    /// <remarks>
+    /// Losing the answers costs the notification its buttons. Losing the notification would cost the
+    /// person the thing they are waiting for, so every failure here is swallowed.
+    /// </remarks>
+    private async Task<PendingQuestion?> FindQuestionAsync(Notification notification, CancellationToken ct)
+    {
+        if (_questions is null || string.IsNullOrEmpty(notification.ConversationId))
+            return null;
+
+        try
+        {
+            return await _questions
+                .FindAsync(ConversationId.From(notification.ConversationId), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not read the pending question for conversation '{ConversationId}'; sending the notification without its answers.",
+                notification.ConversationId);
+
+            return null;
+        }
+    }
+
+    internal static byte[] BuildPayload(
+        Notification notification,
+        int? badge = null,
+        PendingQuestion? question = null)
     {
         var body = notification.Body;
 
@@ -119,8 +192,14 @@ public sealed class ApnsSender(
             {
                 ["alert"] = new { title = notification.Title, body },
                 ["sound"] = "default",
-                // Lets the app route a tap without a second round trip.
-                ["category"] = notification.Kind.ToString(),
+                // For anything but a question this routes a tap. For a question it does more: iOS
+                // attaches buttons by matching this against a category the app registered BEFORE
+                // the notification arrived, so it names the question's shape rather than its kind.
+                // The naming is a contract with the client, written down in
+                // docs/development/notification-clients.md.
+                ["category"] = question is null
+                    ? notification.Kind.ToString()
+                    : CategoryFor(question),
             };
 
             // #168: groups one conversation's notifications together on the lock screen instead of
@@ -143,7 +222,16 @@ public sealed class ApnsSender(
                 // #168: so an app can open the conversation without first asking which agent owns it.
                 agentId = notification.AgentId,
                 conversationId = notification.ConversationId,
-            });
+                // #168: what the question offers, so a phone can answer it the way Telegram does
+                // rather than only announcing that a question exists.
+                requestId = question?.RequestId,
+                choices = question is null
+                    ? null
+                    : question.Choices.Select(choice => new { value = choice.Value, label = choice.Label }).ToArray(),
+                allowFreeForm = question?.AllowFreeForm,
+                allowMultiple = question?.AllowMultiple,
+            },
+            PayloadOptions);
 
             if (bytes.Length <= MaxPayloadBytes || string.IsNullOrEmpty(body))
                 return bytes;
@@ -154,11 +242,13 @@ public sealed class ApnsSender(
             body = keep == 0 ? null : body[..keep];
         }
 
-        return JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            aps = new { alert = new { title = notification.Title } },
-            id = notification.Id,
-        });
+        return JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                aps = new { alert = new { title = notification.Title } },
+                id = notification.Id,
+            },
+            PayloadOptions);
     }
 
     private async Task<bool> SendOneAsync(
