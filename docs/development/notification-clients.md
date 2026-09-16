@@ -84,6 +84,7 @@ camelCase.
 | --- | --- | --- | --- |
 | `GET` | `/api/notifications` | 200 | List, newest first |
 | `GET` | `/api/notifications/unread-count` | 200 | Just the number |
+| `GET` | `/api/notifications/waiting-count` | 200 | Conversations waiting on an answer (404 if the gateway cannot count) |
 | `POST` | `/api/notifications/{id}/read` | 204 | Mark one read (404 if unknown) |
 | `POST` | `/api/notifications/read-all` | 200 | Mark everything read |
 | `DELETE` | `/api/notifications/{id}` | 204 | Delete permanently (404 if unknown) |
@@ -193,6 +194,12 @@ So: use the push for immediacy, and a read for truth.
 ## Polling
 
 Entirely legitimate, and the right choice for a script or a status bar.
+
+`GET /api/notifications/waiting-count` answers `{"count":2}`: how many conversations hold a question
+waiting for a person's answer, counted over active, user-facing, person-to-agent conversations. It is
+not the unread count — a notification you have not read is not the same as a question still waiting —
+and it is what an app icon badge should show. A gateway with no way to count answers `404`, which a
+client reads the same way it reads any route an older gateway does not have.
 
 Poll `GET /api/notifications/unread-count` rather than the list — it exists precisely so a badge
 does not have to fetch a hundred rows to learn one number. Fetch the list only when the count
@@ -340,6 +347,30 @@ sent over SignalR like every notification, so they appear in a client's list, bu
 failing on every run is not something to wake a phone for. The one exception is the notification
 `POST /api/notifications/test` raises, which is pushed at any level but `off` so delivery can
 still be checked.
+
+### A finished reply
+
+`AgentRunCompleted` is raised when an agent finishes replying in a conversation between a person and
+an agent, at the point both the streaming and blocking paths converge on success. It is deliberately
+not raised for:
+
+| Case | Why |
+| --- | --- |
+| A chat whose message arrived over Telegram, or which is bound outward to Telegram | Telegram has already put the reply in front of the person |
+| `ConversationKind.AgentAgent` | Two agents talking to each other are not a person's inbox |
+| `NO_REPLY` and a heartbeat acknowledgement | Neither is a reply |
+| A run that failed | `AgentRunFailed` has reported it already |
+
+A device at the default level is still not sent it — `needsMeAndReplies` is the level that asks for
+finished replies — so raising it changes what a client can *see*, not what a phone is woken for.
+
+### The badge
+
+Every push carries `aps.badge`: the number of conversations waiting on a person's answer, counted
+from the conversations that hold a pending `ask_user` prompt and are active, user-facing and between
+a person and an agent. Zero is sent as well, since that is what takes the badge off the icon once
+the last question has been answered. A gateway that cannot count sends no badge at all rather than a
+guessed zero, which would clear a count the phone was rightly showing.
 
 `off` wins over any conversation level. A notification about no conversation follows the device
 level. A new registration starts at `needsMe`, and re-registering the same token keeps whatever

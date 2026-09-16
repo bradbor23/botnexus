@@ -1,6 +1,7 @@
 using BotNexus.Gateway.Api.Controllers;
 using BotNexus.Gateway.Abstractions.Notifications;
 using BotNexus.Gateway.Notifications;
+using BotNexus.Gateway.Notifications.Push;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -42,8 +43,19 @@ public sealed class NotificationsControllerTests : IDisposable
 
     private INotificationStore Store() => new SqliteNotificationStore(DbPath, timeProvider: _time);
 
-    private NotificationsController Controller(INotificationPublisher? publisher = null) =>
-        new(Store(), publisher ?? new NotificationPublisher(Store()));
+    private NotificationsController Controller(
+        INotificationPublisher? publisher = null,
+        int? waiting = null) =>
+        new(
+            Store(),
+            publisher ?? new NotificationPublisher(Store()),
+            waiting is { } count ? new StubWaitingCount(count) : null);
+
+    /// <summary>Stands in for the waiting count, which is a database read in the real thing.</summary>
+    private sealed class StubWaitingCount(int count) : IWaitingConversationCount
+    {
+        public Task<int> CountAsync(CancellationToken ct = default) => Task.FromResult(count);
+    }
 
     private async Task<Notification> Seed(
         string title = "Run finished",
@@ -167,6 +179,37 @@ public sealed class NotificationsControllerTests : IDisposable
 
         Assert.Equal(2, Assert.IsType<UnreadCountResponse>(
             Assert.IsType<OkObjectResult>(result.Result).Value).Count);
+    }
+
+    // The number an app icon carries. Separate from the unread count: a notification you have not
+    // read is not the same as a question still waiting for your answer.
+    [Fact]
+    public async Task Waiting_count_reports_the_conversations_waiting_on_an_answer()
+    {
+        var result = await Controller(waiting: 2).WaitingCount();
+
+        Assert.Equal(2, Assert.IsType<WaitingCountResponse>(
+            Assert.IsType<OkObjectResult>(result.Result).Value).Count);
+    }
+
+    // Zero is a real answer, and the one that takes the badge off the icon.
+    [Fact]
+    public async Task Waiting_count_reports_zero_when_nothing_is_waiting()
+    {
+        var result = await Controller(waiting: 0).WaitingCount();
+
+        Assert.Equal(0, Assert.IsType<WaitingCountResponse>(
+            Assert.IsType<OkObjectResult>(result.Result).Value).Count);
+    }
+
+    // A gateway that cannot count says so, rather than answering zero and clearing a badge that was
+    // right. The app reads that 404 the same way it reads the other routes it may be too old for.
+    [Fact]
+    public async Task Waiting_count_is_not_found_when_the_gateway_cannot_count()
+    {
+        var result = await Controller().WaitingCount();
+
+        Assert.IsType<NotFoundResult>(result.Result);
     }
 
     [Fact]

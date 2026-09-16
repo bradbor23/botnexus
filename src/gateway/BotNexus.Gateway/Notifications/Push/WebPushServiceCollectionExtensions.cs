@@ -1,3 +1,4 @@
+using BotNexus.Gateway.Abstractions.Conversations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -84,6 +85,12 @@ public static class WebPushServiceCollectionExtensions
             client.DefaultRequestVersion = System.Net.HttpVersion.Version20;
             client.DefaultVersionPolicy = System.Net.Http.HttpVersionPolicy.RequestVersionExact;
         });
+
+        // The badge on an app icon counts what is waiting on the person, which only the conversation
+        // store can answer. Registered here so a gateway that pushes to iOS gets the count without
+        // anyone wiring it, and resolved lazily so the registration order of the two does not matter.
+        services.TryAddSingleton<IWaitingConversationCount>(sp =>
+            new WaitingConversationCount(sp.GetRequiredService<IConversationStore>()));
 
         services.AddHostedService<ApnsBridge>();
 

@@ -72,11 +72,20 @@ public sealed class ApnsSenderTests : IDisposable
 
     private IApnsDeviceStore Store() => new SqliteApnsDeviceStore(DbPath, timeProvider: _time);
 
-    private ApnsSender Sender(StubApns apns, IApnsDeviceStore store, ApnsOptions? options = null)
+    private ApnsSender Sender(
+        StubApns apns,
+        IApnsDeviceStore store,
+        ApnsOptions? options = null,
+        int? waiting = null)
     {
         var resolved = options ?? Configured();
 
-        return new ApnsSender(new HttpClient(apns), store, resolved, new ApnsTokenProvider(resolved, _time));
+        return new ApnsSender(
+            new HttpClient(apns),
+            store,
+            resolved,
+            new ApnsTokenProvider(resolved, _time),
+            waiting is { } count ? new StubWaitingCount(count) : null);
     }
 
     private async Task<IApnsDeviceStore> StoreWithDevice(string environment = ApnsEnvironment.Production)
@@ -270,6 +279,51 @@ public sealed class ApnsSenderTests : IDisposable
         Assert.Equal("c1", root.GetProperty("aps").GetProperty("thread-id").GetString());
         Assert.Equal("assistant", root.GetProperty("agentId").GetString());
         Assert.Equal("c1", root.GetProperty("conversationId").GetString());
+    }
+
+    // The number on the icon is the one thing a phone shows without being opened. It counts what is
+    // waiting on the person, not what this particular push is about.
+    [Fact]
+    public async Task Carries_the_waiting_count_as_the_badge()
+    {
+        var apns = new StubApns();
+
+        await Sender(apns, await StoreWithDevice(), waiting: 3).SendAsync(Sample);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(3, payload.RootElement.GetProperty("aps").GetProperty("badge").GetInt32());
+    }
+
+    // Zero is a number worth sending: it is what takes the badge off the icon once the last
+    // question has been answered.
+    [Fact]
+    public async Task Sends_a_zero_badge_when_nothing_is_waiting()
+    {
+        var apns = new StubApns();
+
+        await Sender(apns, await StoreWithDevice(), waiting: 0).SendAsync(Sample);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.Equal(0, payload.RootElement.GetProperty("aps").GetProperty("badge").GetInt32());
+    }
+
+    // A gateway with no way to count leaves the badge alone rather than guessing at zero, which
+    // would clear a count the phone had rightly been showing.
+    [Fact]
+    public async Task Leaves_the_badge_out_when_there_is_nothing_to_count_with()
+    {
+        var apns = new StubApns();
+
+        await Sender(apns, await StoreWithDevice()).SendAsync(Sample);
+
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
+        Assert.False(payload.RootElement.GetProperty("aps").TryGetProperty("badge", out _));
+    }
+
+    /// <summary>Stands in for the waiting count, which is a database read in the real thing.</summary>
+    private sealed class StubWaitingCount(int count) : IWaitingConversationCount
+    {
+        public Task<int> CountAsync(CancellationToken ct = default) => Task.FromResult(count);
     }
 
     /// <summary>Stands in for APNs and records what it was sent.</summary>

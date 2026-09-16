@@ -340,8 +340,10 @@ a gateway health notification, for instance, is not about any one page.
   — what needs you, what needs you plus finished replies, or nothing — and can mute or turn up a
   single conversation. Scheduled-job outcomes and gateway health are never pushed to an iOS device;
   they stay in the notification list. See [Notification levels](../development/notification-clients.md#notification-levels).
-- **`AgentRunCompleted` is defined but never raised.** It exists in the API surface for clients to
-  handle, and is reserved for an opt-in "tell me when it finishes" setting that does not exist yet.
+- **A finished reply reaches iOS only if you ask for it.** `AgentRunCompleted` is raised when an
+  agent finishes replying to you, but a device is sent it only at the `needsMeAndReplies` level;
+  chats that Telegram already tells you about, and conversations between two agents, are left out.
+  The browser has no equivalent switch — web push remains all-or-nothing.
 - **Subscribing needs HTTPS.** Service workers are refused on an insecure origin, so web push has
   the same requirement as desktop alerts — and on a plain-http portal the switch quietly falls back
   to the in-page alert rather than failing.
