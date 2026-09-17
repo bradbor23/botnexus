@@ -1,4 +1,6 @@
 using BotNexus.Gateway.Api.Controllers;
+using BotNexus.Gateway.Abstractions.Notifications;
+using BotNexus.Gateway.Notifications;
 using BotNexus.Gateway.Notifications.Push;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -22,12 +24,14 @@ public sealed class ApnsDevicesControllerTests : IDisposable
     private const string ValidToken = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
     private string DbPath => Path.Combine(_dir, "apns.sqlite");
+    private string NotificationsDbPath => Path.Combine(_dir, "notifications.sqlite");
 
     public ApnsDevicesControllerTests() => Directory.CreateDirectory(_dir);
 
     public void Dispose()
     {
         SqlitePoolCleanup.ClearPoolFor(DbPath);
+        SqlitePoolCleanup.ClearPoolFor(NotificationsDbPath);
         try
         {
             if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
@@ -40,14 +44,17 @@ public sealed class ApnsDevicesControllerTests : IDisposable
 
     private IApnsDeviceStore Store() => new SqliteApnsDeviceStore(DbPath);
 
-    private ApnsDevicesController Controller(ApnsOptions? options = null, IApnsDeviceStore? store = null) =>
+    private ApnsDevicesController Controller(
+        ApnsOptions? options = null,
+        IApnsDeviceStore? store = null,
+        INotificationStore? notifications = null) =>
         new(store ?? Store(), options ?? new ApnsOptions
         {
             TeamId = "TEAM123456",
             KeyId = "KEY1234567",
             BundleId = "com.example.botnexus",
             PrivateKeyPath = "/tmp/AuthKey.p8",
-        })
+        }, notifications)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -276,4 +283,50 @@ public sealed class ApnsDevicesControllerTests : IDisposable
         Assert.Equal(204, StatusOf(await controller.ClearConversationLevel(ValidToken, "c1")));
         Assert.Empty(Assert.IsType<ApnsDevice>(await store.GetAsync(ValidToken)).ConversationLevels);
     }
+
+    // The app sets its own icon when it opens or reads something, and must land on the same number a
+    // push would have carried - otherwise the icon flickers between two answers to one question.
+    [Fact]
+    public async Task Reports_the_badge_a_push_to_this_device_would_carry()
+    {
+        var notifications = new SqliteNotificationStore(NotificationsDbPath);
+        var store = Store();
+        var controller = Controller(store: store, notifications: notifications);
+        await controller.Register(new ApnsRegisterRequest { DeviceToken = ValidToken, Environment = "production" });
+        await notifications.AppendAsync(Unread("failed", NotificationKind.AgentRunFailed));
+        await notifications.AppendAsync(Unread("job", NotificationKind.CronRunOutcome));
+        await notifications.AppendAsync(Unread("reply", NotificationKind.AgentRunCompleted));
+
+        var badge = Assert.IsType<ApnsBadgeResponse>(
+            Assert.IsType<OkObjectResult>((await controller.Badge(ValidToken)).Result).Value);
+
+        Assert.Equal(1, badge.Count);
+    }
+
+    [Fact]
+    public async Task The_badge_for_an_unknown_device_is_not_found()
+    {
+        var controller = Controller(notifications: new SqliteNotificationStore(NotificationsDbPath));
+
+        Assert.IsType<NotFoundResult>((await controller.Badge(ValidToken)).Result);
+    }
+
+    // No store to count from is a gateway that cannot answer, not a gateway with nothing unread:
+    // a zero here would wipe a badge the phone was rightly showing.
+    [Fact]
+    public async Task The_badge_is_not_found_when_there_is_nothing_to_count_with()
+    {
+        var (controller, _) = await Registered();
+
+        Assert.IsType<NotFoundResult>((await controller.Badge(ValidToken)).Result);
+    }
+
+    private static Notification Unread(string id, NotificationKind kind) => new()
+    {
+        Id = id,
+        Kind = kind,
+        Severity = NotificationSeverity.Info,
+        Title = id,
+        CreatedAtUtc = DateTimeOffset.UnixEpoch,
+    };
 }

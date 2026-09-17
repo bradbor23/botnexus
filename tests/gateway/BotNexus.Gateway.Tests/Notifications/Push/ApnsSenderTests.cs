@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BotNexus.Gateway.Abstractions.Notifications;
+using BotNexus.Gateway.Notifications;
 using BotNexus.Gateway.Notifications.Push;
 
 namespace BotNexus.Gateway.Tests.Notifications.Push;
@@ -26,6 +27,7 @@ public sealed class ApnsSenderTests : IDisposable
     private readonly ManualTimeProvider _time = new(new DateTimeOffset(2026, 8, 29, 9, 0, 0, TimeSpan.Zero));
 
     private string DbPath => Path.Combine(_dir, "apns.sqlite");
+    private string NotificationsDbPath => Path.Combine(_dir, "notifications.sqlite");
     private string KeyPath => Path.Combine(_dir, "AuthKey.p8");
 
     private const string DeviceToken = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
@@ -42,6 +44,7 @@ public sealed class ApnsSenderTests : IDisposable
     public void Dispose()
     {
         SqlitePoolCleanup.ClearPoolFor(DbPath);
+        SqlitePoolCleanup.ClearPoolFor(NotificationsDbPath);
         try
         {
             if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
@@ -77,8 +80,8 @@ public sealed class ApnsSenderTests : IDisposable
         StubApns apns,
         IApnsDeviceStore store,
         ApnsOptions? options = null,
-        int? waiting = null,
-        PendingQuestion? question = null)
+        PendingQuestion? question = null,
+        INotificationStore? notifications = null)
     {
         var resolved = options ?? Configured();
 
@@ -87,7 +90,7 @@ public sealed class ApnsSenderTests : IDisposable
             store,
             resolved,
             new ApnsTokenProvider(resolved, _time),
-            waiting is { } count ? new StubWaitingCount(count) : null,
+            notifications,
             question is null ? null : new StubQuestionLookup(question));
     }
 
@@ -293,30 +296,78 @@ public sealed class ApnsSenderTests : IDisposable
         Assert.Equal("c1", root.GetProperty("conversationId").GetString());
     }
 
-    // The number on the icon is the one thing a phone shows without being opened. It counts what is
-    // waiting on the person, not what this particular push is about.
+    // The number on the icon is the one thing a phone shows without being opened. It counts what
+    // is unread AND would have reached this phone - so it matches what buzzed, and a job failure or
+    // gateway notice that never reached the lock screen does not hold a number on the icon either.
     [Fact]
-    public async Task Carries_the_waiting_count_as_the_badge()
+    public async Task Counts_the_unread_notifications_this_device_would_have_been_sent()
     {
         var apns = new StubApns();
+        var notifications = NotificationStore();
+        await notifications.AppendAsync(Sample);
+        await notifications.AppendAsync(Sample with { Id = "q", Kind = NotificationKind.AgentWaitingForInput });
+        await notifications.AppendAsync(Sample with { Id = "reply", Kind = NotificationKind.AgentRunCompleted });
+        await notifications.AppendAsync(Sample with { Id = "job", Kind = NotificationKind.CronRunOutcome });
+        await notifications.AppendAsync(Sample with { Id = "health", Kind = NotificationKind.GatewayHealth, Title = "Provider slow" });
 
-        await Sender(apns, await StoreWithDevice(), waiting: 3).SendAsync(Sample);
+        await Sender(apns, await StoreWithDevice(), notifications: notifications).SendAsync(Sample);
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
-        Assert.Equal(3, payload.RootElement.GetProperty("aps").GetProperty("badge").GetInt32());
+        Assert.Equal(2, BadgeOf(apns.Requests[0]));
     }
 
-    // Zero is a number worth sending: it is what takes the badge off the icon once the last
-    // question has been answered.
     [Fact]
-    public async Task Sends_a_zero_badge_when_nothing_is_waiting()
+    public async Task Counts_finished_replies_for_a_device_that_asked_for_them()
+    {
+        var apns = new StubApns();
+        var notifications = NotificationStore();
+        await notifications.AppendAsync(Sample);
+        await notifications.AppendAsync(Sample with { Id = "reply", Kind = NotificationKind.AgentRunCompleted });
+
+        await Sender(apns, await StoreWantingReplies(), notifications: notifications).SendAsync(Sample);
+
+        Assert.Equal(2, BadgeOf(apns.Requests[0]));
+    }
+
+    // Reading is what clears the icon, wherever it was read.
+    [Fact]
+    public async Task Leaves_read_notifications_out_of_the_badge()
+    {
+        var apns = new StubApns();
+        var notifications = NotificationStore();
+        await notifications.AppendAsync(Sample with { Id = "old" });
+        await notifications.MarkReadAsync("old");
+        await notifications.AppendAsync(Sample);
+
+        await Sender(apns, await StoreWithDevice(), notifications: notifications).SendAsync(Sample);
+
+        Assert.Equal(1, BadgeOf(apns.Requests[0]));
+    }
+
+    // A muted conversation never buzzed, so it must not count either.
+    [Fact]
+    public async Task Leaves_a_muted_conversation_out_of_the_badge()
+    {
+        var apns = new StubApns();
+        var notifications = NotificationStore();
+        await notifications.AppendAsync(Sample with { Id = "muted", ConversationId = "quiet" });
+        await notifications.AppendAsync(Sample);
+        var store = await StoreWithDevice();
+        await store.SetConversationLevelAsync(DeviceToken, ConversationId.From("quiet"), ApnsConversationLevel.Mute);
+
+        await Sender(apns, store, notifications: notifications).SendAsync(Sample);
+
+        Assert.Equal(1, BadgeOf(apns.Requests[0]));
+    }
+
+    // Zero is a number worth sending: it is what takes the badge off the icon.
+    [Fact]
+    public async Task Sends_a_zero_badge_when_nothing_is_unread()
     {
         var apns = new StubApns();
 
-        await Sender(apns, await StoreWithDevice(), waiting: 0).SendAsync(Sample);
+        await Sender(apns, await StoreWithDevice(), notifications: NotificationStore()).SendAsync(Sample);
 
-        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(apns.Requests[0].Body));
-        Assert.Equal(0, payload.RootElement.GetProperty("aps").GetProperty("badge").GetInt32());
+        Assert.Equal(0, BadgeOf(apns.Requests[0]));
     }
 
     // A gateway with no way to count leaves the badge alone rather than guessing at zero, which
@@ -332,10 +383,13 @@ public sealed class ApnsSenderTests : IDisposable
         Assert.False(payload.RootElement.GetProperty("aps").TryGetProperty("badge", out _));
     }
 
-    /// <summary>Stands in for the waiting count, which is a database read in the real thing.</summary>
-    private sealed class StubWaitingCount(int count) : IWaitingConversationCount
+    private INotificationStore NotificationStore() =>
+        new SqliteNotificationStore(NotificationsDbPath, timeProvider: _time);
+
+    private static int BadgeOf(StubApns.Captured request)
     {
-        public Task<int> CountAsync(CancellationToken ct = default) => Task.FromResult(count);
+        using var payload = JsonDocument.Parse(Encoding.UTF8.GetString(request.Body));
+        return payload.RootElement.GetProperty("aps").GetProperty("badge").GetInt32();
     }
 
     // Telegram puts the answers under the question as buttons. A phone can do the same, but only if
@@ -386,7 +440,6 @@ public sealed class ApnsSenderTests : IDisposable
             await StoreWithDevice(),
             Configured(),
             new ApnsTokenProvider(Configured(), _time),
-            waiting: null,
             questions: lookup)
             .SendAsync(Sample);
 

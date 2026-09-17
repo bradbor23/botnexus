@@ -202,7 +202,8 @@ Entirely legitimate, and the right choice for a script or a status bar.
 `GET /api/notifications/waiting-count` answers `{"count":2}`: how many conversations hold a question
 waiting for a person's answer, counted over active, user-facing, person-to-agent conversations. It is
 not the unread count — a notification you have not read is not the same as a question still waiting —
-and it is what an app icon badge should show. A gateway with no way to count answers `404`, which a
+and it is what an app once showed on its icon; an app icon now shows the per-device badge described
+under [The badge](#the-badge). A gateway with no way to count answers `404`, which a
 client reads the same way it reads any route an older gateway does not have.
 
 Poll `GET /api/notifications/unread-count` rather than the list — it exists precisely so a badge
@@ -301,6 +302,7 @@ every app you own.
 | `POST` | `/api/notifications/apns/unregister` | Forget a device. Idempotent |
 | `GET` | `/api/notifications/apns/devices` | Every registered device, with its level |
 | `GET` | `/api/notifications/apns/devices/{deviceToken}/preferences` | One device's level and conversation levels |
+| `GET` | `/api/notifications/apns/devices/{deviceToken}/badge` | The number a push to this device would put on the app icon |
 | `PUT` | `/api/notifications/apns/devices/{deviceToken}/preferences` | Set the device's level |
 | `PUT` | `/api/notifications/apns/devices/{deviceToken}/conversations/{conversationId}` | Set one conversation's level on the device |
 | `DELETE` | `/api/notifications/apns/devices/{deviceToken}/conversations/{conversationId}` | Clear it, so the device level applies again |
@@ -370,11 +372,18 @@ finished replies — so raising it changes what a client can *see*, not what a p
 
 ### The badge
 
-Every push carries `aps.badge`: the number of conversations waiting on a person's answer, counted
-from the conversations that hold a pending `ask_user` prompt and are active, user-facing and between
-a person and an agent. Zero is sent as well, since that is what takes the badge off the icon once
-the last question has been answered. A gateway that cannot count sends no badge at all rather than a
-guessed zero, which would clear a count the phone was rightly showing.
+Every push carries `aps.badge`: the number of unread notifications that device would have been sent.
+It is counted per device with the same rule that decides delivery, so it follows the device level
+and any conversation levels — a scheduled-job outcome or gateway notice never counts, a finished
+reply counts only on a device that asked for replies, and a muted conversation counts for nothing.
+Reading a notification anywhere takes it off the count. Zero is sent as well, since that is what
+takes the badge off the icon. A gateway that cannot count sends no badge at all rather than a guessed
+zero, which would clear a count the phone was rightly showing.
+
+A push only arrives when something new is raised, so an app should set its own icon when it opens
+and after marking something read, from `GET /api/notifications/apns/devices/{deviceToken}/badge`,
+which answers `{"count":2}` — the same number a push to that device would carry. It answers `404`
+for an unknown device, or when the gateway cannot count.
 
 ### The question, and answering it
 
