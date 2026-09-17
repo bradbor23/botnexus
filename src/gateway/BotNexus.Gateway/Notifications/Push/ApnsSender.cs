@@ -22,7 +22,7 @@ public sealed class ApnsSender(
     IApnsDeviceStore store,
     ApnsOptions options,
     ApnsTokenProvider tokens,
-    IWaitingConversationCount? waiting = null,
+    INotificationStore? notifications = null,
     IPendingQuestionLookup? questions = null,
     ILogger<ApnsSender>? logger = null)
 {
@@ -49,11 +49,11 @@ public sealed class ApnsSender(
     private readonly ApnsTokenProvider _tokens = tokens;
 
     /// <summary>
-    /// Counts what is waiting on the person, for the number on the app icon. Absent on a gateway
-    /// wired without one, and then no badge is sent at all rather than a guessed zero - which would
-    /// clear a count the phone was rightly showing.
+    /// Where the number on the app icon is counted from (see <see cref="ApnsBadge"/>). Absent on a
+    /// gateway wired without one, and then no badge is sent at all rather than a guessed zero - which
+    /// would clear a count the phone was rightly showing.
     /// </summary>
-    private readonly IWaitingConversationCount? _waiting = waiting;
+    private readonly INotificationStore? _notifications = notifications;
 
     /// <summary>
     /// Finds the question a conversation is waiting on, so a notification can carry its answers.
@@ -77,18 +77,17 @@ public sealed class ApnsSender(
         if (devices.Count == 0)
             return 0;
 
-        // Counted once per notification rather than per device: the number is the same for every
-        // phone, and it is a database read.
-        var badge = _waiting is null
+        // Read once per notification rather than per device: it is a database read, and what each
+        // phone counts from it is decided below by that phone's own level.
+        var unread = _notifications is null
             ? null
-            : await CountWaitingAsync(ct).ConfigureAwait(false);
+            : await ListUnreadAsync(ct).ConfigureAwait(false);
 
         // Only a question has answers, and only a question pays for the read that finds them.
         var question = notification.Kind == NotificationKind.AgentWaitingForInput
             ? await FindQuestionAsync(notification, ct).ConfigureAwait(false)
             : null;
 
-        var payload = BuildPayload(notification, badge, question);
         var delivered = 0;
 
         foreach (var device in devices)
@@ -97,6 +96,10 @@ public sealed class ApnsSender(
             // asking for every finished reply must not wake another that did not.
             if (!ApnsDeliveryPolicy.ShouldDeliver(device, notification))
                 continue;
+
+            // #168: the badge is per device too - it counts what this phone would have been sent.
+            var badge = unread is null ? (int?)null : ApnsBadge.Count(device, unread);
+            var payload = BuildPayload(notification, badge, question);
 
             if (await SendOneAsync(device, notification, payload, ct).ConfigureAwait(false))
                 delivered++;
@@ -113,20 +116,20 @@ public sealed class ApnsSender(
     /// truncated for you, it simply does not arrive. A long provider error in the body is a
     /// realistic way to hit 4KB, so it is trimmed here rather than lost there.
     /// </remarks>
-    /// <summary>The waiting count, or nothing when it cannot be read.</summary>
+    /// <summary>The unread notifications to count a badge from, or nothing when they cannot be read.</summary>
     /// <remarks>
     /// A failure to count must not cost the notification: the push is what the person is waiting
     /// for, and a missing badge leaves the icon as it was rather than lying about it.
     /// </remarks>
-    private async Task<int?> CountWaitingAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<Notification>?> ListUnreadAsync(CancellationToken ct)
     {
         try
         {
-            return await _waiting!.CountAsync(ct).ConfigureAwait(false);
+            return await ApnsBadge.ListUnreadAsync(_notifications!, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Could not count waiting conversations; sending the push without a badge.");
+            _logger.LogWarning(ex, "Could not read unread notifications; sending the push without a badge.");
 
             return null;
         }
@@ -253,9 +256,9 @@ public sealed class ApnsSender(
                 aps["thread-id"] = notification.ConversationId;
 
             // #168: the count on the app icon. Zero is meaningful and must be sent - it is what
-            // takes the badge off once the last question has been answered.
-            if (badge is { } waitingCount)
-                aps["badge"] = waitingCount;
+            // takes the badge off once everything has been read.
+            if (badge is { } unreadCount)
+                aps["badge"] = unreadCount;
 
             var bytes = JsonSerializer.SerializeToUtf8Bytes(new
             {

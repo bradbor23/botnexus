@@ -1,4 +1,5 @@
 using BotNexus.Domain.Primitives;
+using BotNexus.Gateway.Notifications;
 using BotNexus.Gateway.Notifications.Push;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -18,7 +19,8 @@ namespace BotNexus.Gateway.Api.Controllers;
 [Route("api/notifications/apns")]
 public sealed class ApnsDevicesController(
     IApnsDeviceStore store,
-    ApnsOptions options) : ControllerBase
+    ApnsOptions options,
+    INotificationStore? notifications = null) : ControllerBase
 {
     /// <summary>APNs device tokens are 32 bytes, hex-encoded. Newer tokens may be longer.</summary>
     private const int MinTokenLength = 64;
@@ -29,6 +31,7 @@ public sealed class ApnsDevicesController(
 
     private readonly IApnsDeviceStore _store = store;
     private readonly ApnsOptions _options = options;
+    private readonly INotificationStore? _notifications = notifications;
 
     /// <summary>
     /// Whether this gateway can push to iOS at all, so an app can say so rather than registering
@@ -130,6 +133,33 @@ public sealed class ApnsDevicesController(
         return device is null ? NotFound() : Ok(ApnsPreferencesResponse.From(device));
     }
 
+    /// <summary>The number a push to this device would put on the app icon (#168).</summary>
+    /// <remarks>
+    /// The app sets its own icon when it opens and when something is read, and has to land on the
+    /// same number a push carries or the icon flickers between two answers. Not found when the
+    /// device is unknown or the gateway has nothing to count from - a zero would clear a badge the
+    /// phone was rightly showing.
+    /// </remarks>
+    /// <param name="deviceToken">The device token the app registered.</param>
+    /// <param name="ct">Cancellation token.</param>
+    [HttpGet("devices/{deviceToken}/badge")]
+    [ProducesResponseType(typeof(ApnsBadgeResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApnsBadgeResponse>> Badge(string deviceToken, CancellationToken ct = default)
+    {
+        if (_notifications is null)
+            return NotFound();
+
+        var device = await _store.GetAsync(deviceToken.Trim(), ct);
+
+        if (device is null)
+            return NotFound();
+
+        var unread = await ApnsBadge.ListUnreadAsync(_notifications, ct);
+
+        return Ok(new ApnsBadgeResponse { Count = ApnsBadge.Count(device, unread) });
+    }
+
     /// <summary>Sets a device's notification level (#168).</summary>
     /// <param name="deviceToken">The device token the app registered.</param>
     /// <param name="request"><c>needsMe</c>, <c>needsMeAndReplies</c> or <c>off</c>.</param>
@@ -215,6 +245,13 @@ public sealed class ApnsStatusResponse
 
     /// <summary>The bundle id pushes are sent for, so an app can check it matches its own.</summary>
     [JsonPropertyName("bundleId")] public string? BundleId { get; init; }
+}
+
+/// <summary>The number on a device's app icon (#168).</summary>
+public sealed class ApnsBadgeResponse
+{
+    /// <summary>Unread notifications of the kinds this device is pushed.</summary>
+    [JsonPropertyName("count")] public required int Count { get; init; }
 }
 
 /// <summary>A device token as iOS handed it to the app.</summary>
