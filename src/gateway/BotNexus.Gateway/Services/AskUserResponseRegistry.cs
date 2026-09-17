@@ -34,8 +34,7 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
     /// <inheritdoc />
     public (string RequestId, Task<AskUserResponse> Task) Register(
         ConversationId conversationId,
-        TimeSpan? timeout,
-        string? prompt = null)
+        TimeSpan? timeout)
     {
         var conversationKey = NormalizeConversationId(conversationId);
         if (_requestIdByConversation.ContainsKey(conversationKey))
@@ -68,32 +67,36 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
                 pending.TimeoutRegistration = pending.TimeoutCts.Token.Register(() => HandleTimeout(pending));
             }
 
-            // An agent blocked on a person is the one notification where the work is genuinely
-            // stopped until someone acts - which is exactly the case worth reaching a phone for.
-            //
-            // Fire-and-forget because Register is synchronous and on the path that is about to
-            // block: awaiting a database write here would make asking a question slower than
-            // answering it. TryPublishAsync contains every failure, so the discarded task cannot
-            // surface as an unobserved exception.
-            _ = _notificationPublisher.TryPublishAsync(new Notification
-            {
-                Id = string.Empty,
-                Kind = NotificationKind.AgentWaitingForInput,
-                Severity = NotificationSeverity.Warning,
-                Title = "An agent is waiting for your answer",
-                // The question itself, when the caller had it. Telegram has always shown this; a
-                // phone told only that something is paused makes someone open the app to find out
-                // what was asked (#168).
-                Body = string.IsNullOrWhiteSpace(prompt)
-                    ? "A conversation is paused until the question is answered."
-                    : prompt.Trim(),
-                ConversationId = conversationId.ToString(),
-                Link = $"conversation/{conversationId}",
-                CreatedAtUtc = default,
-            });
-
             return (requestId, pending.Completion.Task);
         }
+    }
+
+    /// <inheritdoc />
+    public void AnnounceWaiting(ConversationId conversationId, string? prompt)
+    {
+        // An agent blocked on a person is the one notification where the work is genuinely
+        // stopped until someone acts - which is exactly the case worth reaching a phone for.
+        //
+        // Fire-and-forget because the caller is on the path that is about to block: awaiting a
+        // database write here would make asking a question slower than answering it.
+        // TryPublishAsync contains every failure, so the discarded task cannot surface as an
+        // unobserved exception.
+        _ = _notificationPublisher.TryPublishAsync(new Notification
+        {
+            Id = string.Empty,
+            Kind = NotificationKind.AgentWaitingForInput,
+            Severity = NotificationSeverity.Warning,
+            Title = "An agent is waiting for your answer",
+            // The question itself, when the caller had it. Telegram has always shown this; a
+            // phone told only that something is paused makes someone open the app to find out
+            // what was asked (#168).
+            Body = string.IsNullOrWhiteSpace(prompt)
+                ? "A conversation is paused until the question is answered."
+                : prompt.Trim(),
+            ConversationId = conversationId.ToString(),
+            Link = $"conversation/{conversationId}",
+            CreatedAtUtc = default,
+        });
     }
 
     /// <inheritdoc />

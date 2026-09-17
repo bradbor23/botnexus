@@ -16,14 +16,31 @@ public interface IAskUserResponseRegistry
     /// <param name="conversationId">Conversation that owns the pending request.</param>
     /// <param name="timeout">Optional timeout after which the wait completes as timed out.</param>
     /// <returns>Generated request id and completion task.</returns>
-    /// <param name="prompt">
-    /// The question being asked, when the caller has it. It becomes what the notification says, so a
-    /// phone shows the question rather than the fact that one exists (#168).
-    /// </param>
+    /// <remarks>
+    /// Registering raises nothing. The caller announces the question with
+    /// <see cref="AnnounceWaiting"/> once it is saved, because a phone's push reads the question's
+    /// answers from the saved copy (#168).
+    /// </remarks>
     (string RequestId, Task<AskUserResponse> Task) Register(
         ConversationId conversationId,
-        TimeSpan? timeout,
-        string? prompt = null);
+        TimeSpan? timeout);
+
+    /// <summary>
+    /// Tells people a question is waiting on them: raises the <c>AgentWaitingForInput</c>
+    /// notification that reaches the bell and, through it, a phone.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Register"/> so it can come after the pending prompt is saved on the
+    /// conversation. A push carries the question's answers as buttons by reading that saved copy;
+    /// raised any earlier, it raced the save and often went out with no answers to tap (#168).
+    /// Never throws: a question must not fail because reporting it did.
+    /// </remarks>
+    /// <param name="conversationId">Conversation that is waiting.</param>
+    /// <param name="prompt">
+    /// The question being asked, when the caller has it. It becomes what the notification says, so a
+    /// phone shows the question rather than the fact that one exists.
+    /// </param>
+    void AnnounceWaiting(ConversationId conversationId, string? prompt);
 
     /// <summary>
     /// Rebuilds the conversation-to-request-id mapping for a durable pending prompt whose live

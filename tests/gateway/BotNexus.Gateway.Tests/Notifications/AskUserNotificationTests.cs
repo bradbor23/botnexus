@@ -9,27 +9,41 @@ namespace BotNexus.Gateway.Tests.Notifications;
 /// </summary>
 /// <remarks>
 /// This is the one kind where the work is genuinely stopped until a person acts, so it is the one
-/// most worth reaching a phone for. It is raised from a synchronous registration on the path that
-/// is about to block, which is why the tests care that a failing or slow publisher cannot affect
-/// registration at all.
+/// most worth reaching a phone for. It is raised once the question is saved, on the path that is
+/// about to block, which is why the tests care that a failing or slow publisher cannot affect asking
+/// at all.
 /// </remarks>
 public sealed class AskUserNotificationTests
 {
     private static ConversationId Conversation(string id = "c_test") => ConversationId.From(id);
 
     [Fact]
-    public void Registering_a_prompt_raises_a_waiting_notification()
+    public void Announcing_a_prompt_raises_a_waiting_notification()
     {
         var publisher = new RecordingPublisher();
         var registry = new AskUserResponseRegistry(publisher);
 
         registry.Register(Conversation(), timeout: null);
+        registry.AnnounceWaiting(Conversation(), prompt: null);
 
         var raised = Assert.Single(publisher.Published);
         Assert.Equal(NotificationKind.AgentWaitingForInput, raised.Kind);
         Assert.Equal(NotificationSeverity.Warning, raised.Severity);
         Assert.Equal("c_test", raised.ConversationId);
         Assert.Contains("c_test", raised.Link);
+    }
+
+    // #168: registering happens before the question is saved, and a push reads the question's
+    // answers from the saved copy. Announcing is the caller's, once the save is done.
+    [Fact]
+    public void Registering_alone_raises_nothing()
+    {
+        var publisher = new RecordingPublisher();
+        var registry = new AskUserResponseRegistry(publisher);
+
+        registry.Register(Conversation(), timeout: null);
+
+        Assert.Empty(publisher.Published);
     }
 
     // Telegram shows the question itself; a phone that says only "a conversation is paused" makes
@@ -40,9 +54,8 @@ public sealed class AskUserNotificationTests
         var publisher = new RecordingPublisher();
         var registry = new AskUserResponseRegistry(publisher);
 
-        registry.Register(
+        registry.AnnounceWaiting(
             Conversation(),
-            timeout: null,
             prompt: "Deploy the gateway now, or wait for the overnight window?");
 
         var raised = Assert.Single(publisher.Published);
@@ -56,19 +69,20 @@ public sealed class AskUserNotificationTests
         var publisher = new RecordingPublisher();
         var registry = new AskUserResponseRegistry(publisher);
 
-        registry.Register(Conversation(), timeout: null, prompt: "   ");
+        registry.AnnounceWaiting(Conversation(), prompt: "   ");
 
         Assert.False(string.IsNullOrWhiteSpace(Assert.Single(publisher.Published).Body));
     }
 
-    // Registration must not depend on the notification succeeding: asking a question cannot be
-    // allowed to fail because the thing that reports the question failed.
+    // Asking must not depend on the notification succeeding: a question cannot be allowed to fail
+    // because the thing that reports the question failed.
     [Fact]
-    public void A_throwing_publisher_does_not_break_registration()
+    public void A_throwing_publisher_does_not_break_asking()
     {
         var registry = new AskUserResponseRegistry(new ThrowingPublisher());
 
         var (requestId, task) = registry.Register(Conversation(), timeout: null);
+        registry.AnnounceWaiting(Conversation(), prompt: "Deploy now?");
 
         Assert.NotEmpty(requestId);
         Assert.NotNull(task);
@@ -94,6 +108,7 @@ public sealed class AskUserNotificationTests
         var publisher = new RecordingPublisher();
         var registry = new AskUserResponseRegistry(publisher);
         registry.Register(Conversation(), timeout: null);
+        registry.AnnounceWaiting(Conversation(), prompt: null);
 
         Assert.Throws<InvalidOperationException>(() => registry.Register(Conversation(), timeout: null));
 
