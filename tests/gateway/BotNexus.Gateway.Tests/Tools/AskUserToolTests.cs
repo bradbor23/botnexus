@@ -230,6 +230,58 @@ public sealed class AskUserToolTests
         await executionTask;
     }
 
+    // #168: a phone's push reads the question's answers from the saved prompt. Announced before the
+    // save, the push raced it and often went out with no answers and so no buttons - a question that
+    // could only be answered by opening the app.
+    [Fact]
+    public async Task ExecuteAsync_AnnouncesTheQuestion_OnlyOnceItIsSaved()
+    {
+        var store = new InMemoryConversationStore();
+        await SeedConversationAsync(store, "conversation-1");
+        var publisher = new SavedPromptProbe(store, ConversationId.From("conversation-1"));
+        var registry = new AskUserResponseRegistry(publisher);
+        var tool = CreateTool(registry, "conversation-1", store);
+        var updates = new List<AgentToolResult>();
+        var arguments = await tool.PrepareArgumentsAsync(new Dictionary<string, object?>
+        {
+            ["prompt"] = "Deploy now or wait?",
+            ["input_type"] = "single_choice",
+            ["choices"] = new[]
+            {
+                new Dictionary<string, object?> { ["value"] = "now", ["label"] = "Deploy now" },
+                new Dictionary<string, object?> { ["value"] = "wait", ["label"] = "Wait" }
+            }
+        });
+
+        var executionTask = tool.ExecuteAsync("call-ask-user", arguments, onUpdate: updates.Add);
+        var request = await WaitForRequestAsync(updates);
+        await TestAwait.EventuallyAsync(() => publisher.Announcements > 0, "the question to be announced");
+
+        publisher.Announcements.ShouldBe(1);
+        publisher.SavedWhenAnnounced.ShouldBeTrue();
+
+        registry.TryComplete(request.ConversationId, request.RequestId, CreateResponse(request.RequestId, selectedValues: ["wait"], freeFormText: null)).ShouldBeTrue();
+        await executionTask;
+    }
+
+    /// <summary>Records, at the moment a notification is published, whether the prompt was saved.</summary>
+    private sealed class SavedPromptProbe(IConversationStore store, ConversationId conversationId)
+        : BotNexus.Gateway.Abstractions.Notifications.INotificationPublisher
+    {
+        private int _announcements;
+        public int Announcements => Volatile.Read(ref _announcements);
+        public bool SavedWhenAnnounced { get; private set; }
+
+        public async Task PublishAsync(
+            BotNexus.Gateway.Abstractions.Notifications.Notification notification,
+            CancellationToken ct = default)
+        {
+            var conversation = await store.GetAsync(conversationId, ct);
+            SavedWhenAnnounced = !string.IsNullOrEmpty(conversation?.PendingAskUserJson);
+            Interlocked.Increment(ref _announcements);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_ClearsPendingPrompt_AfterAnswer()
     {

@@ -114,7 +114,7 @@ public sealed class AskUserTool(
             : null;
         var allowMultiple = ReadBool(arguments, "allow_multiple") ?? inputType == AskUserInputType.MultipleChoice;
         var allowFreeForm = inputType is AskUserInputType.FreeForm or AskUserInputType.ChoiceOrFreeForm;
-        var registration = responseRegistry.Register(conversationId.Value, timeout, prompt);
+        var registration = responseRegistry.Register(conversationId.Value, timeout);
 
         var request = new AskUserRequest
         {
@@ -148,6 +148,11 @@ public sealed class AskUserTool(
             // restart can rehydrate it (ask_user durability, #1488). Best-effort: a persistence hiccup
             // must never break the interactive prompt itself.
             await PersistPendingPromptAsync(request, cancellationToken).ConfigureAwait(false);
+
+            // Announced only now, once the prompt is saved: a phone's push reads the question's
+            // answers from that saved copy, and announced at registration it raced the save and
+            // often went out with no answers to tap (#168).
+            responseRegistry.AnnounceWaiting(conversationId.Value, prompt);
 
             var response = await registration.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             reachedTerminalState = true;
