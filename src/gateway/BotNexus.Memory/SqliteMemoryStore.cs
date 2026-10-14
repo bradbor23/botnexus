@@ -485,12 +485,8 @@ public sealed class SqliteMemoryStore(
             await using var connection = CreateConnection();
             await connection.OpenAsync(token).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT id, agent_id, session_id, turn_index, source_type, content, metadata_json,
-                       embedding, created_at, updated_at, expires_at, is_archived,
-                       provenance, origin_conversation_id, origin_session_id,
-                       role, category, tags_json, revision, archived_at, corrects_id, supersedes_id,
-                       superseded_by_id, origin_kind, origin_reference, embedding_status, user_id
+            command.CommandText = $"""
+                SELECT {MemoryColumnList}
                 FROM memories
                 WHERE id = $id
                 """;
@@ -514,12 +510,8 @@ public sealed class SqliteMemoryStore(
             await using var connection = CreateConnection();
             await connection.OpenAsync(token).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT id, agent_id, session_id, turn_index, source_type, content, metadata_json,
-                       embedding, created_at, updated_at, expires_at, is_archived,
-                       provenance, origin_conversation_id, origin_session_id,
-                       role, category, tags_json, revision, archived_at, corrects_id, supersedes_id,
-                       superseded_by_id, origin_kind, origin_reference, embedding_status, user_id
+            command.CommandText = $"""
+                SELECT {MemoryColumnList}
                 FROM memories
                 WHERE session_id = $sessionId
                 ORDER BY created_at DESC
@@ -548,10 +540,8 @@ public sealed class SqliteMemoryStore(
             await using var connection = CreateConnection();
             await connection.OpenAsync(token).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT id, agent_id, session_id, turn_index, source_type, content, metadata_json,
-                       embedding, created_at, updated_at, expires_at, is_archived,
-                       provenance, origin_conversation_id, origin_session_id
+            command.CommandText = $"""
+                SELECT {MemoryColumnList}
                 FROM memories
                 WHERE is_archived = 0
                 ORDER BY created_at DESC
@@ -1500,12 +1490,30 @@ public sealed class SqliteMemoryStore(
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Every column <see cref="ReadMemory"/> reads, in the ORDER it reads them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ReadMemory"/> addresses its columns by ordinal, so a SELECT feeding it must list
+    /// exactly these, exactly here. That coupling is invisible at the call site, and four
+    /// hand-maintained copies of this list is how it broke twice over: the 2026-10 upstream sync
+    /// added <c>user_id</c> to the three literal SELECTs and the reader but not to this constant,
+    /// which threw on every memory update, archive and get-by-id; and the recent-entries query
+    /// listed fifteen columns against a reader expecting twenty-seven.
+    /// </para>
+    /// <para>
+    /// Every unaliased reader query now shares this one string. The three that join
+    /// <c>memories_fts</c> still need their own <c>m.</c>-qualified list plus computed columns, so
+    /// they stay literal - keep them in this order too.
+    /// </para>
+    /// </remarks>
     private const string MemoryColumnList = """
         id, agent_id, session_id, turn_index, source_type, content, metadata_json,
         embedding, created_at, updated_at, expires_at, is_archived,
         provenance, origin_conversation_id, origin_session_id, role, category, tags_json,
         revision, archived_at, corrects_id, supersedes_id, superseded_by_id,
-        origin_kind, origin_reference, embedding_status
+        origin_kind, origin_reference, embedding_status, user_id
         """;
 
     private static void AddUpdateParameter(
