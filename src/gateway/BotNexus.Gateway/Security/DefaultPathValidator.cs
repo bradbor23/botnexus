@@ -16,6 +16,14 @@ public sealed class DefaultPathValidator : IPathValidator
     private readonly IReadOnlyList<string> _allowedWritePaths;
     private readonly IReadOnlyList<string> _deniedPaths;
 
+    // Link-resolved forms of the anchors above, computed on first need. Phase two of
+    // ValidateAndResolve is the only consumer and it only reaches them when a path's real target
+    // differs from its lexical one, so an ordinary workspace never pays for the extra walk.
+    private IReadOnlyList<string>? _linkResolvedAllowedReadPaths;
+    private IReadOnlyList<string>? _linkResolvedAllowedWritePaths;
+    private IReadOnlyList<string>? _linkResolvedDeniedPaths;
+    private string? _linkResolvedWorkspacePath;
+
     public DefaultPathValidator(FileAccessPolicy? policy, string workspacePath)
     {
         if (string.IsNullOrWhiteSpace(workspacePath))
@@ -76,7 +84,14 @@ public sealed class DefaultPathValidator : IPathValidator
                 ? CanRead(linkResolvedPath)
                 : CanWrite(linkResolvedPath);
 
-            if (!finalAllowed)
+            // The anchors `CanRead`/`CanWrite` compare against were normalized lexically, so a
+            // root that is itself reached through a link makes every real target look as though
+            // it escaped. On macOS that is the default: `Path.GetTempPath()` hands back
+            // `/var/folders/...` while `/var` is a link to `/private/var`, so a workspace under
+            // the temp directory refuses its own files. The control is "the real target is inside
+            // the real root"; comparing a link-resolved path with an unresolved root is neither
+            // side of that, so re-check against link-resolved anchors before refusing.
+            if (!finalAllowed && !IsAllowedUnderLinkResolvedAnchors(linkResolvedPath, mode))
             {
                 return null;
             }
@@ -132,6 +147,76 @@ public sealed class DefaultPathValidator : IPathValidator
         }
 
         return rebased;
+    }
+
+    /// <summary>
+    /// Re-runs the containment decision for <paramref name="linkResolvedPath"/> against anchors
+    /// that have themselves been link-resolved, so both sides of every comparison describe real
+    /// locations.
+    /// </summary>
+    /// <remarks>
+    /// Denials stay fail-closed: a path denied in either its lexical or its real form is refused,
+    /// because link-resolving an anchor must only ever be able to grant containment that was
+    /// always true, never to shake off a deny the operator configured. Glob patterns are compared
+    /// verbatim — a pattern names no single location for the OS to resolve.
+    /// </remarks>
+    private bool IsAllowedUnderLinkResolvedAnchors(string linkResolvedPath, FileAccessMode mode)
+    {
+        if (IsDenied(linkResolvedPath)
+            || LinkResolvedDeniedPaths.Any(pattern => PathMatchesPattern(linkResolvedPath, pattern)))
+        {
+            return false;
+        }
+
+        if (IsUnderPath(linkResolvedPath, LinkResolvedWorkspacePath))
+        {
+            return true;
+        }
+
+        if (_workspaceOnly)
+        {
+            return false;
+        }
+
+        var allowedPaths = mode == FileAccessMode.Read
+            ? LinkResolvedAllowedReadPaths
+            : LinkResolvedAllowedWritePaths;
+
+        return allowedPaths.Any(pattern => PathMatchesPattern(linkResolvedPath, pattern));
+    }
+
+    private string LinkResolvedWorkspacePath
+        => _linkResolvedWorkspacePath ??= ResolvePathFollowingLinks(_workspacePath) ?? _workspacePath;
+
+    private IReadOnlyList<string> LinkResolvedAllowedReadPaths
+        => _linkResolvedAllowedReadPaths ??= ResolveAnchorsFollowingLinks(_allowedReadPaths);
+
+    private IReadOnlyList<string> LinkResolvedAllowedWritePaths
+        => _linkResolvedAllowedWritePaths ??= ResolveAnchorsFollowingLinks(_allowedWritePaths);
+
+    private IReadOnlyList<string> LinkResolvedDeniedPaths
+        => _linkResolvedDeniedPaths ??= ResolveAnchorsFollowingLinks(_deniedPaths);
+
+    /// <summary>
+    /// Link-resolves each non-glob entry of <paramref name="anchors"/>, keeping the lexical form
+    /// for any entry whose real target cannot be determined.
+    /// </summary>
+    private IReadOnlyList<string> ResolveAnchorsFollowingLinks(IReadOnlyList<string> anchors)
+    {
+        if (anchors.Count == 0)
+        {
+            return [];
+        }
+
+        var resolved = new List<string>(anchors.Count);
+        foreach (var anchor in anchors)
+        {
+            resolved.Add(IsGlobPattern(anchor)
+                ? anchor
+                : ResolvePathFollowingLinks(anchor) ?? anchor);
+        }
+
+        return resolved;
     }
 
     /// <summary>
