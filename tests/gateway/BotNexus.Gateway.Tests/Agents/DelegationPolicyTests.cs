@@ -3,9 +3,6 @@ using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Agents;
 using BotNexus.Gateway.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using Moq;
 using Shouldly;
 
 namespace BotNexus.Gateway.Tests.Agents;
@@ -25,6 +22,24 @@ public sealed class DelegationPolicyTests
 {
     private const string Uid = "abc123";
 
+    /// <summary>The operator's stated policy, in the three shapes these cases cover.</summary>
+    private static AgentExchangeOptions Whitelist => new() { AccessPolicy = "whitelist" };
+
+    private static AgentExchangeOptions Open => new() { AccessPolicy = "open" };
+
+    /// <summary>Nothing stated at all: the default, which is open.</summary>
+    private static AgentExchangeOptions Default => new();
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+
+        dir.ShouldNotBeNull("the repository root should be reachable from the test output");
+        return dir.FullName;
+    }
+
     // ── The rule itself ───────────────────────────────────────────────────
 
     [Fact]
@@ -32,7 +47,7 @@ public sealed class DelegationPolicyTests
     {
         var initiator = Descriptor("nova", subAgents: ["scribe"]);
 
-        DelegationPolicy.IsGranted(initiator, "scribe", Descriptor("scribe")).ShouldBeTrue();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("scribe"), Descriptor("scribe")).ShouldBeTrue();
     }
 
     [Fact]
@@ -40,7 +55,7 @@ public sealed class DelegationPolicyTests
     {
         var initiator = Descriptor("nova", subAgents: ["scribe"]);
 
-        DelegationPolicy.IsGranted(initiator, "auditor", Descriptor("auditor")).ShouldBeFalse();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("auditor"), Descriptor("auditor")).ShouldBeFalse();
     }
 
     [Fact]
@@ -50,7 +65,7 @@ public sealed class DelegationPolicyTests
         var initiator = Descriptor("nova", subAgentRoles: ["reviewer"]);
         var target = Descriptor("auditor", role: "reviewer");
 
-        DelegationPolicy.IsGranted(initiator, "auditor", target).ShouldBeTrue();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("auditor"), target).ShouldBeTrue();
     }
 
     [Fact]
@@ -60,7 +75,7 @@ public sealed class DelegationPolicyTests
         // here, and a role asserted by a gateway we do not control is not a grant we made.
         var initiator = Descriptor("nova", subAgentRoles: ["reviewer"]);
 
-        DelegationPolicy.IsGranted(initiator, "remote-auditor", target: null).ShouldBeFalse();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("remote-auditor"), null).ShouldBeFalse();
     }
 
     [Fact]
@@ -68,8 +83,8 @@ public sealed class DelegationPolicyTests
     {
         var initiator = Descriptor("nova", subAgents: ["Scribe"], subAgentRoles: ["Reviewer"]);
 
-        DelegationPolicy.IsGranted(initiator, "scribe", Descriptor("scribe")).ShouldBeTrue();
-        DelegationPolicy.IsGranted(initiator, "auditor", Descriptor("auditor", role: "REVIEWER")).ShouldBeTrue();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("scribe"), Descriptor("scribe")).ShouldBeTrue();
+        PeerAccessPolicy.IsAllowed(Whitelist, initiator, AgentId.From("auditor"), Descriptor("auditor", role: "REVIEWER")).ShouldBeTrue();
     }
 
     // ── The gap that was open on the spawn path ───────────────────────────
@@ -82,35 +97,25 @@ public sealed class DelegationPolicyTests
         // ignored on delegation - the path that hands the child the TARGET's toolset.
         var parent = Descriptor("nova", subAgents: ["scribe"]);
         var target = Descriptor("privileged", tools: ["exec"]);
-        var manager = BuildManager(parent, target, whitelist: true);
-
-        Should.Throw<UnauthorizedAccessException>(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("privileged"))), parent));
+        PeerAccessPolicy.IsAllowed(Whitelist, parent, AgentId.From("privileged"), target).ShouldBeFalse();
     }
 
     [Fact]
     public void The_refusal_says_how_to_fix_it()
     {
         // A bare "not allowed" leaves an operator guessing which of three knobs to reach for.
-        var parent = Descriptor("nova", subAgents: ["scribe"]);
-        var manager = BuildManager(parent, Descriptor("privileged"), whitelist: true);
-
-        var error = Should.Throw<UnauthorizedAccessException>(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("privileged"))), parent));
-
-        error.Message.ShouldContain("subAgents");
-        error.Message.ShouldContain("subAgentRoles");
-        error.Message.ShouldContain("accessPolicy");
+        // The refusal is thrown from the spawn path (SubAgentMirrorPeerAccessTests drives that and
+        // pins the ids); what this pins is that it still carries the remedy.
+        DefaultSubAgentManager.MirrorRefusalRemedy.ShouldContain("subAgents");
+        DefaultSubAgentManager.MirrorRefusalRemedy.ShouldContain("subAgentRoles");
+        DefaultSubAgentManager.MirrorRefusalRemedy.ShouldContain("accessPolicy");
     }
 
     [Fact]
     public void Under_whitelist_a_granted_target_is_still_allowed()
     {
         var parent = Descriptor("nova", subAgents: ["scribe"]);
-        var manager = BuildManager(parent, Descriptor("scribe"), whitelist: true);
-
-        Should.NotThrow(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("scribe"))), parent));
+        PeerAccessPolicy.IsAllowed(Whitelist, parent, AgentId.From("scribe"), Descriptor("scribe")).ShouldBeTrue();
     }
 
     [Fact]
@@ -118,10 +123,7 @@ public sealed class DelegationPolicyTests
     {
         // Both paths share one implementation precisely so this cannot diverge.
         var parent = Descriptor("nova", subAgentRoles: ["reviewer"]);
-        var manager = BuildManager(parent, Descriptor("auditor", role: "reviewer"), whitelist: true);
-
-        Should.NotThrow(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("auditor"))), parent));
+        PeerAccessPolicy.IsAllowed(Whitelist, parent, AgentId.From("auditor"), Descriptor("auditor", role: "reviewer")).ShouldBeTrue();
     }
 
     // ── What must NOT change ──────────────────────────────────────────────
@@ -132,10 +134,7 @@ public sealed class DelegationPolicyTests
         // `open` is the default and the behaviour that shipped. An install that never stated a
         // policy must not start refusing spawns because this landed.
         var parent = Descriptor("nova");
-        var manager = BuildManager(parent, Descriptor("anyone"), whitelist: false);
-
-        Should.NotThrow(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("anyone"))), parent));
+        PeerAccessPolicy.IsAllowed(Open, parent, AgentId.From("anyone"), Descriptor("anyone")).ShouldBeTrue();
     }
 
     [Fact]
@@ -144,10 +143,7 @@ public sealed class DelegationPolicyTests
         // The options are optional on the constructor, so every existing construction site keeps
         // working. Absent must mean `open`, not "deny everything".
         var parent = Descriptor("nova");
-        var manager = BuildManager(parent, Descriptor("anyone"), whitelist: null);
-
-        Should.NotThrow(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("anyone"))), parent));
+        PeerAccessPolicy.IsAllowed(Default, parent, AgentId.From("anyone"), Descriptor("anyone")).ShouldBeTrue();
     }
 
     [Fact]
@@ -156,11 +152,18 @@ public sealed class DelegationPolicyTests
         // Embody clones the PARENT's own descriptor. It reaches no other agent, so there is no
         // grant to check - and checking one would break ordinary delegation under whitelist for
         // no security gain whatsoever.
-        var parent = Descriptor("nova", subAgents: []);
-        var manager = BuildManager(parent, target: null, whitelist: true);
+        // The exemption is now STRUCTURAL: the peer check is guarded on `request.Mode is Mirror`,
+        // so for Embody the policy is never consulted at all. Asserted against the source because
+        // that guard is the guarantee - the same shape the gateway-stop call-site fence uses.
+        var source = File.ReadAllText(Path.Combine(
+            RepoRoot(), "src", "gateway", "BotNexus.Gateway", "Agents", "DefaultSubAgentManager.cs"));
 
-        Should.NotThrow(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Embody(SubAgentArchetype.Coder)), parent));
+        var call = source.IndexOf("PeerAccessPolicy.IsAllowed", StringComparison.Ordinal);
+        call.ShouldBeGreaterThan(0, "the peer check must still be in the spawn path");
+        source[..call].TrimEnd().ShouldEndWith(
+            "if (request.Mode is Mirror mirror\n            && !",
+            Case.Sensitive,
+            "the peer check must stay guarded on Mirror, or Embody is refused under whitelist");
     }
 
     [Fact]
@@ -171,10 +174,7 @@ public sealed class DelegationPolicyTests
         // an unstated rule, and the point of this work is that the policy reads the way it is
         // written. An operator who wants it grants it.
         var parent = Descriptor("nova", subAgents: []);
-        var manager = BuildManager(parent, parent, whitelist: true);
-
-        Should.Throw<UnauthorizedAccessException>(() =>
-            manager.ValidateDelegationGrant(Request("nova", new Mirror(AgentId.From("nova"))), parent));
+        PeerAccessPolicy.IsAllowed(Whitelist, parent, AgentId.From("nova"), parent).ShouldBeFalse();
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
@@ -201,41 +201,5 @@ public sealed class DelegationPolicyTests
             ToolIds = tools ?? [],
             Metadata = metadata
         };
-    }
-
-    private static SubAgentSpawnRequest Request(string parent, SubAgentSpawnMode mode) => new()
-    {
-        ParentAgentId = AgentId.From(parent),
-        ParentSessionId = SessionId.From("s-1"),
-        Task = "do the thing",
-        InheritedConversationId = ConversationId.From("c-1"),
-        Mode = mode
-    };
-
-    private static DefaultSubAgentManager BuildManager(
-        AgentDescriptor parent,
-        AgentDescriptor? target,
-        bool? whitelist)
-    {
-        var registry = new Mock<IAgentRegistry>();
-        registry.Setup(r => r.Get(parent.AgentId)).Returns(parent);
-        if (target is not null)
-            registry.Setup(r => r.Get(target.AgentId)).Returns(target);
-
-        IOptions<AgentExchangeOptions>? exchange = whitelist is null
-            ? null
-            : Options.Create(new AgentExchangeOptions
-            {
-                AccessPolicy = whitelist.Value ? "whitelist" : "open"
-            });
-
-        return new DefaultSubAgentManager(
-            new Mock<IAgentSupervisor>().Object,
-            registry.Object,
-            new Mock<BotNexus.Gateway.Abstractions.Activity.IActivityBroadcaster>().Object,
-            new Mock<BotNexus.Gateway.Abstractions.Channels.IChannelDispatcher>().Object,
-            new TestOptionsMonitor<GatewayOptions>(new GatewayOptions()),
-            NullLogger<DefaultSubAgentManager>.Instance,
-            exchangeOptions: exchange);
     }
 }

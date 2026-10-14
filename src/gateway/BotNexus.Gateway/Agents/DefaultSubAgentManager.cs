@@ -67,6 +67,14 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
     private readonly ConcurrentDictionary<SessionId, ConcurrentBag<string>> _parentChildren = [];
 
     /// <summary>
+    /// How to lift a refused Mirror spawn. Carried in the exception because a bare "not allowed"
+    /// leaves an operator guessing which of three knobs to reach for.
+    /// </summary>
+    internal const string MirrorRefusalRemedy =
+        "Add it to that agent's subAgents list, grant a matching subAgentRoles role, or set "
+        + "gateway:agentExchange:accessPolicy to 'open'.";
+
+    /// <summary>
     /// Platform-wide count of sub-agents currently in the <see cref="SubAgentStatus.Running"/>
     /// state across all parent sessions. Mirrors the per-session running tally used by
     /// <c>EnforceSpawnLimits</c> but without the parent filter, so the portal stats overview can
@@ -337,8 +345,6 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         var subAgentId = uniqueId;
         var childSessionId = SessionId.ForSubAgent(request.ParentSessionId, uniqueId);
 
-        ValidateDelegationGrant(request, parentDescriptor);
-
         // Resolve the Embody | Mirror discriminated union into a side-effect-free plan
         // (descriptor + minted child id + customisation overrides). See ResolveSpawnPlan.
         var plan = ResolveSpawnPlan(request, parentDescriptor, uniqueId);
@@ -347,7 +353,8 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
         if (request.Mode is Mirror mirror
             && !PeerAccessPolicy.IsAllowed(_exchangeOptions.Value, parentDescriptor, mirror.TargetAgentId, plan.BaseDescriptor))
             throw new UnauthorizedAccessException(
-                $"Agent '{request.ParentAgentId}' is not allowed to mirror '{mirror.TargetAgentId}'.");
+                $"Agent '{request.ParentAgentId}' is not allowed to mirror '{mirror.TargetAgentId}'. "
+                + MirrorRefusalRemedy);
 
         var archetype = plan.Archetype;
         var baseDescriptor = plan.BaseDescriptor;
@@ -869,57 +876,6 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     $"Unknown SubAgentSpawnMode subclass '{request.Mode.GetType().FullName}'. "
                     + "Embody and Mirror are the only legal modes — see SubAgentSpawnMode.");
         }
-    }
-
-    /// <summary>
-    /// Rejects a Mirror spawn whose target the parent was never granted.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The gap this closes: <c>agent_converse</c> honoured <c>gateway:agentExchange:accessPolicy</c>
-    /// and <c>spawn_subagent</c> did not - so an operator who wrote <c>whitelist</c> got the policy
-    /// they stated applied to one of the two ways an agent reaches another agent.
-    /// </para>
-    /// <para>
-    /// Delegation is the stronger of the two. A Mirror spawn runs the TARGET's descriptor verbatim,
-    /// so the child holds the target's tools rather than the parent's - which means an agent whose
-    /// own policy denies a tool could obtain it by mirroring an agent that has it.
-    /// <see cref="ValidateToolGrants"/> does not catch that: it inspects the tools a spawn REQUESTS,
-    /// and a Mirror spawn requests none.
-    /// </para>
-    /// <para>
-    /// EMBODY spawns are not checked, and should not be: they clone the parent's own descriptor,
-    /// reach no other agent, and so have no grant to verify.
-    /// </para>
-    /// <para>
-    /// Under the default <c>open</c> policy this is a no-op, so nothing changes for an install that
-    /// never stated a policy.
-    /// </para>
-    /// </remarks>
-    /// <param name="request">The spawn request; only <see cref="Mirror"/> mode is subject to this.</param>
-    /// <param name="parentDescriptor">The parent, whose grants are the authority.</param>
-    /// <exception cref="UnauthorizedAccessException">Thrown when the grant is absent.</exception>
-    internal void ValidateDelegationGrant(SubAgentSpawnRequest request, AgentDescriptor parentDescriptor)
-    {
-        if (_exchangeOptions.Value.IsOpen)
-            return;
-
-        if (request.Mode is not Mirror mirror)
-            return;
-
-        var target = _registry.Get(mirror.TargetAgentId);
-        if (DelegationPolicy.IsGranted(parentDescriptor, mirror.TargetAgentId.Value, target))
-            return;
-
-        _logger.LogWarning(
-            "Sub-agent spawn refused: agent '{Parent}' is not granted '{Target}' (policy=whitelist).",
-            request.ParentAgentId.Value,
-            mirror.TargetAgentId.Value);
-
-        throw new UnauthorizedAccessException(
-            $"Agent '{request.ParentAgentId}' is not allowed to run '{mirror.TargetAgentId}' as a sub-agent. "
-            + "Add it to that agent's subAgents list, grant a matching subAgentRoles role, or set "
-            + "gateway:agentExchange:accessPolicy to 'open'.");
     }
 
     /// <summary>

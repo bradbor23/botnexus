@@ -1,6 +1,6 @@
 # App icons
 
-This directory contains a set of 45 original interface icons drawn on a rounded 24 × 24 grid. The SVG files are the source artwork for BotNexus's generated Blazor icon library.
+This directory contains a set of 47 original interface icons drawn on a rounded 24 × 24 grid. The SVG files are the source artwork for BotNexus's generated Blazor icon library.
 
 ## Delivered files
 
