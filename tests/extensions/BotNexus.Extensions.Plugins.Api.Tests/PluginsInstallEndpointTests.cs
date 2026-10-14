@@ -151,7 +151,11 @@ public sealed class PluginsInstallEndpointTests : IDisposable
     [Fact]
     public void Remove_returns_not_found_for_a_plugin_that_is_not_installed()
     {
-        var result = PluginsEndpointContributor.Remove("ghost", Manager());
+        // RemoveViaManager, not Remove(name, manager): the DELETE route binds Remove(name) ->
+        // Remove(name, pluginRoot, extensionsRoot) -> RemoveViaManager, and only that chain returns
+        // the outcome shape the portal reads. Remove(name, manager) is upstream's receipt-returning
+        // overload, reached by no route - PluginLifecycleApiCompositionTests covers that one.
+        var result = PluginsEndpointContributor.RemoveViaManager("ghost", Manager());
 
         Assert.Equal(StatusCodes.Status404NotFound, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
     }
@@ -163,7 +167,7 @@ public sealed class PluginsInstallEndpointTests : IDisposable
         await PluginsEndpointContributor.InstallAsync(
             new PluginInstallApiRequest(Source: "https://example.com/hello.git"), Manager(), _pluginRoot);
 
-        var result = PluginsEndpointContributor.Remove("hello-world", Manager());
+        var result = PluginsEndpointContributor.RemoveViaManager("hello-world", Manager());
 
         var ok = Assert.IsType<Ok<PluginOperationResponse>>(result);
         Assert.Equal("Removed", ok.Value!.Outcome);
