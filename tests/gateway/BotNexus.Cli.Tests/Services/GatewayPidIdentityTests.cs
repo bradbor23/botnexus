@@ -124,6 +124,32 @@ public sealed class GatewayPidIdentityTests : IDisposable
         GatewayPidFile.Verify(recycled, current).ShouldBe(GatewayIdentityMatch.Mismatch);
     }
 
+    [Theory]
+    [InlineData(0.25)]
+    [InlineData(1.5)]
+    [InlineData(5)]
+    [InlineData(9)]
+    public void Verify_StartTimeReadJitter_StillMatches(double skewSeconds)
+    {
+        // The regression this fence exists for. StopAsync against a live gateway reported the PID
+        // "recycled onto a different process" with the same pid AND the same process name, which no
+        // recycle can produce - only a start time read differently twice. On Unix .NET derives start
+        // time from boot time plus start ticks, and the boot-time term is re-derived per call and
+        // jitters, more so under load.
+        //
+        // It matters because the mismatch branch does not merely refuse to signal: it also deletes
+        // the PID file, so a false mismatch leaves a live gateway unstoppable by `gateway stop` and
+        // invisible to anything reading that file.
+        var current = Process.GetCurrentProcess();
+        var genuine = GatewayPidFile.Capture(current);
+        var jittered = genuine with
+        {
+            StartTimeUtc = genuine.StartTimeUtc!.Value.AddSeconds(-skewSeconds)
+        };
+
+        GatewayPidFile.Verify(jittered, current).ShouldBe(GatewayIdentityMatch.Match);
+    }
+
     [Fact]
     public void Verify_DifferentProcessName_ReturnsMismatch()
     {

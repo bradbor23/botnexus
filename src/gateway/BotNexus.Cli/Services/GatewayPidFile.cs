@@ -53,11 +53,29 @@ public sealed record GatewayPidRecord(
 public static class GatewayPidFile
 {
     /// <summary>
-    /// Start times read at different moments can differ by sub-tick rounding on some platforms, so
-    /// compare with a small tolerance. This stays recycling-safe: a recycled PID would have to be
-    /// re-issued to a process with the SAME name within one second of the original's start.
+    /// Start times read at different moments can differ by more than sub-tick rounding, so compare
+    /// with a tolerance.
     /// </summary>
-    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(1);
+    /// <remarks>
+    /// <para>
+    /// One second was too tight, and the failure was not theoretical: a stop against a live gateway
+    /// reported the PID "recycled onto a different process" with the SAME pid and the SAME process
+    /// name, which cannot describe a recycle - only a start time read differently twice.
+    /// </para>
+    /// <para>
+    /// On Unix .NET does not read start time directly: it derives it from system boot time plus the
+    /// process's start ticks, and the boot-time term is re-derived on each call and jitters. Under
+    /// load it jitters more. A one-second window cannot absorb that.
+    /// </para>
+    /// <para>
+    /// Ten seconds stays recycling-safe, because <see cref="GatewayPidRecord.ProcessName"/> carries
+    /// most of the discrimination: a recycled PID would have to be re-issued to a process with the
+    /// same name within ten seconds of the original's start. The cost of being wrong in the other
+    /// direction is far higher - see the mismatch branch in GatewayProcessManager, which refuses to
+    /// signal AND deletes the PID file, leaving a live gateway with no record of itself.
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Captures the identity of a live process for persistence. Falls back to a PID-only record if
