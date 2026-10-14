@@ -38,30 +38,51 @@ public class AnthropicRequestCacheBudgetTests
 
         // Compare every field, allowing only cache annotations and string-to-text-block wrapping.
         JsonNode.DeepEquals(NormalizeContent(body), NormalizeContent(uncached)).ShouldBeTrue();
-        FindMarkers(body["tools"]).ShouldBeEmpty();
+
+        // Placement is prefix order - tools, then system, then the newest messages - drawn from one
+        // shared budget. Two parts of that are deliberate and are the reason this differs from a
+        // system-and-messages-only split (see AnthropicBreakpointBudgetTests):
+        //   * the tools array ends the most stable segment of the prefix and gets its own marker,
+        //     so editing the system prompt re-bills the system prompt rather than the tool schemas
+        //     with it. Agent personas and AGENTS.md change often here; tool schemas do not.
+        //   * exactly ONE system marker, on the LAST stable block. The OAuth preamble and the
+        //     stable prompt are adjacent and equally stable, so marking both spends a slot for
+        //     nothing.
+        var cacheable = retention != CacheRetention.None;
+
+        var expectedToolMarkers = cacheable && tools ? 1 : 0;
+        FindMarkers(body["tools"]).Count().ShouldBe(expectedToolMarkers);
+        if (expectedToolMarkers == 1)
+        {
+            var toolArray = body["tools"].ShouldBeOfType<JsonArray>();
+            toolArray[^1].ShouldBeOfType<JsonObject>().ContainsKey("cache_control").ShouldBeTrue(
+                "the marker ends the tools prefix, so it belongs on the last entry");
+        }
 
         var systemBlocks = body["system"] as JsonArray;
         var expectedSystemMarkers = 0;
         if (systemBlocks is not null)
         {
-            foreach (var block in systemBlocks)
-            {
-                var obj = block.ShouldBeOfType<JsonObject>();
-                var text = RequiredString(obj["text"]);
-                var stable = text != "Dynamic tail";
-                obj.ContainsKey("cache_control").ShouldBe(retention != CacheRetention.None && stable);
-                if (stable && retention != CacheRetention.None)
-                    expectedSystemMarkers++;
-            }
+            var lastStable = -1;
+            for (var i = 0; i < systemBlocks.Count; i++)
+                if (RequiredString(systemBlocks[i].ShouldBeOfType<JsonObject>()["text"]) != "Dynamic tail")
+                    lastStable = i;
+
+            for (var i = 0; i < systemBlocks.Count; i++)
+                systemBlocks[i].ShouldBeOfType<JsonObject>()
+                    .ContainsKey("cache_control").ShouldBe(cacheable && i == lastStable);
+
+            expectedSystemMarkers = cacheable && lastStable >= 0 ? 1 : 0;
             if (oauth)
                 RequiredString(systemBlocks[0].ShouldBeOfType<JsonObject>()["text"]).ShouldBe(Preamble);
         }
 
         var markers = FindMarkers(body).ToList();
         markers.Count.ShouldBeLessThanOrEqualTo(4);
-        var expectedMessageMarkers = retention == CacheRetention.None
-            ? 0 : Math.Min(historyLength, Math.Min(3, 4 - expectedSystemMarkers));
-        markers.Count.ShouldBe(expectedSystemMarkers + expectedMessageMarkers);
+        var expectedMessageMarkers = cacheable
+            ? Math.Min(historyLength, 4 - expectedToolMarkers - expectedSystemMarkers)
+            : 0;
+        markers.Count.ShouldBe(expectedToolMarkers + expectedSystemMarkers + expectedMessageMarkers);
         var messageNodes = body["messages"].ShouldBeOfType<JsonArray>();
         for (var i = 0; i < messageNodes.Count; i++)
             FindMarkers(messageNodes[i]).Count().ShouldBe(i >= historyLength - expectedMessageMarkers ? 1 : 0);
