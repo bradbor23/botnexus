@@ -609,5 +609,25 @@ public sealed class PluginAgentDescriptorFenceTests
             {
                 ConversationAllowedAgents = ["other"]
             },
+            // The fork's persona fields. FencedMembers is a computed complement, so these were
+            // fenced the moment they were added to the descriptor - which is the default working as
+            // designed, and the conservative answer while no plugin ships them.
+            //
+            // Worth revisiting rather than assuming: DeclarableMembers already admits SystemPrompt,
+            // Soul and Emoji, so a plugin can already supply arbitrary prompt text and
+            // presentation. By the fence's own stated rule - "identity, presentation, prompt text,
+            // or model selection, none of them granting access the installing user does not already
+            // have" - these three arguably belong there instead. Moving them is a deliberate
+            // widening that must be mirrored in PluginAgentPrivilegeFenceArchitectureTests, which
+            // is exactly the friction that decision deserves.
+            [nameof(AgentDescriptor.AvatarHue)] = baseline => baseline with { AvatarHue = 210 },
+            [nameof(AgentDescriptor.Responsibility)] = baseline => baseline with
+            {
+                Responsibility = "Owns the deployment pipeline"
+            },
+            [nameof(AgentDescriptor.Boundaries)] = baseline => baseline with
+            {
+                Boundaries = "Never touches production credentials"
+            },
         };
 }
