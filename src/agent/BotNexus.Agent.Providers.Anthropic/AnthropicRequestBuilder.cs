@@ -98,7 +98,7 @@ internal static class AnthropicRequestBuilder
         var body = new JsonObject
         {
             ["model"] = model.Id,
-            ["messages"] = ToNode(messages),
+            ["messages"] = null,
             ["max_tokens"] = options?.MaxTokens ?? (model.MaxTokens / 3),
             ["stream"] = true
         };
@@ -169,6 +169,18 @@ internal static class AnthropicRequestBuilder
 
         if (options?.Temperature.HasValue == true && anthropicOpts?.ThinkingEnabled != true)
             body["temperature"] = options.Temperature.Value;
+
+        // Shared request-budget intent from bradbor23's PR #4132. Preserve the
+        // existing system markers and unmarked tools; only messages spend the remainder.
+        var systemBreakpoints = body["system"] is JsonArray system
+            ? system.Count(block => block?["cache_control"] is not null)
+            : 0;
+        AnthropicMessageConverter.ApplyMultiBreakpointCacheControl(
+            messages,
+            options?.CacheRetention ?? CacheRetention.Short,
+            model.BaseUrl,
+            maxBreakpoints: Math.Min(3, MaxCacheBreakpoints - systemBreakpoints));
+        body["messages"] = ToNode(messages);
 
         return body;
     }

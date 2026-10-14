@@ -8,7 +8,7 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
 /// Seam / integration guardrail for epic #2245 (final PBI #2249). Proves the single-writer
 /// contract at runtime: dispatching each inbound gateway event type must leave the store's
 /// <c>ViewSelection</c> — the projected (<see cref="IClientStateStore.ActiveAgentId"/>,
-/// <see cref="IClientStateStore.ActiveConversationId"/>,
+/// the selected conversation,
 /// <see cref="IClientStateStore.ActiveSelectionSource"/>) triple — BYTE-FOR-BYTE unchanged.
 /// </summary>
 /// <remarks>
@@ -49,7 +49,6 @@ public sealed class ViewSelectionSeamTests
             DisplayName = "Agent 1",
             IsConnected = true,
             SessionId = "sess-1",
-            ActiveConversationId = "conv-1"
         });
         var agent = _store.GetAgent("agent-1")!;
         agent.Conversations["conv-1"] = new ConversationState
@@ -65,7 +64,7 @@ public sealed class ViewSelectionSeamTests
     }
 
     private (string? Agent, string? Conversation, SelectionSource Source) Snapshot() =>
-        (_store.ActiveAgentId, _store.ActiveConversationId, _store.ActiveSelectionSource);
+        (_store.ActiveAgentId, (_store as IDisplayedConversation)?.DisplayedConversationIdFor(_store.ActiveAgentId), _store.ActiveSelectionSource);
 
     private static SubAgentEventPayload SubAgentPayload(string status) => new(
         SessionId: "sess-1",
@@ -137,7 +136,7 @@ public sealed class ViewSelectionSeamTests
         var before = Snapshot();
         await _service.SelectConversationAsync("agent-1", "conv-2");
 
-        // SelectConversationAsync routes through SetActiveConversation for conv-2, so restore the
+        // SelectConversationAsync routes through SelectView for conv-2, so restore the
         // seam scenario: the invariant under test is that the history-404 DROP of conv-2 does not
         // reassign the view onto a sub-agent or some unrelated target. conv-2 was removed by the
         // 404 handler; the active view is either conv-2 (if it survived) or a deliberate re-select

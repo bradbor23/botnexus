@@ -4,6 +4,18 @@ namespace BotNexus.Cron;
 
 public interface ICronStore
 {
+    /// <summary>
+    /// Reads bounded scheduled-run activity across the gateway (or one explicitly scoped job).
+    /// A null query defaults to the last 24 hours. Unsupported implementations fail explicitly;
+    /// they must not substitute invented zero measurements for unavailable activity.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// A measured sum cannot be represented exactly as Int64. The report fails closed with a
+    /// sanitized error instead of returning zero, null, a floating-point estimate or saturation.
+    /// </exception>
+    Task<CronRunActivity> GetRunActivityAsync(CronRunActivityQuery? query = null, CancellationToken ct = default)
+        => throw new NotSupportedException("Scheduled-run activity is not supported by this cron store.");
+
     Task InitializeAsync(CancellationToken ct = default);
     Task<CronJob> CreateAsync(CronJob job, CancellationToken ct = default);
     Task<CronJob?> GetAsync(JobId jobId, CancellationToken ct = default);
@@ -74,6 +86,16 @@ public interface ICronStore
     Task RecordRunFinalizationAsync(JobId jobId, DateTimeOffset lastRunAt, string lastRunStatus, string? lastRunError, CancellationToken ct = default);
     Task DeleteAsync(JobId jobId, CancellationToken ct = default);
     Task<CronRun> RecordRunStartAsync(JobId jobId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Persists the session that owns an in-flight run as soon as the action creates it. This is a
+    /// narrow, non-terminal write: status, completion, error and cost remain untouched. Repeated
+    /// writes of the same session converge, allowing a trigger to publish ownership before its
+    /// potentially long-running turn finishes (#4283).
+    /// </summary>
+    Task RecordRunSessionAsync(RunId runId, SessionId sessionId, CancellationToken ct = default)
+        => Task.CompletedTask;
+
     /// <summary>
     /// Records a run's terminal outcome and, when supplied, its per-run cost measurements (#2641).
     /// </summary>
@@ -113,6 +135,13 @@ public interface ICronStore
         IReadOnlyCollection<JobId> jobIds,
         int windowDays,
         CancellationToken ct = default);
+    /// <summary>
+    /// Reads the full persisted run by its exact identity, irrespective of status or recent-history
+    /// limits. Used to reconcile a terminal write whose acknowledgement failed. Returns null only
+    /// when that row is absent; read failures must propagate rather than masquerade as absence.
+    /// </summary>
+    Task<CronRun?> GetRunAsync(RunId runId, CancellationToken ct = default);
+
     Task<IReadOnlyList<CronRun>> GetRunHistoryAsync(JobId jobId, int limit = 20, CancellationToken ct = default);
 
     /// <summary>

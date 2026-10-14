@@ -74,6 +74,12 @@ public sealed class WebhookInboundQueue
     public int WaitingCount(AgentId targetId)
         => _depths.TryGetValue(targetId.Value, out var depth) ? Volatile.Read(ref depth.Waiting) : 0;
 
+    internal int RetainedSlotCount => _slots.Count;
+
+    internal int RetainedAgentDepthCount => _depths.Count;
+
+    internal Action? SlotResolvedForTesting { get; set; }
+
     /// <summary>The configured bound, guaranteed to be at least 1.</summary>
     public int MaxQueueDepth => _options.Value.EffectiveMaxQueueDepth;
 
@@ -107,32 +113,60 @@ public sealed class WebhookInboundQueue
     /// </exception>
     public WebhookQueueTicket Admit(AgentId targetId, ConversationId conversationId)
     {
-        var slot = _slots.GetOrAdd(conversationId.Value, static _ => new Slot());
-        var depth = _depths.GetOrAdd(targetId.Value, static _ => new AgentDepth());
-        int waitingAfterAdmission;
-
-        // Fast path: free slot AND nobody queued ahead of us on THIS conversation. The waiter check
-        // is what keeps this FIFO - without it a newly arriving delivery could snatch the slot the
-        // instant the holder released it, ahead of a delivery that has been waiting. Barging is how
-        // a queued delivery starves, which is the same silent loss in slower clothing.
-        lock (slot.SyncRoot)
+        var conversationKey = conversationId.Value;
+        while (true)
         {
-            if (slot.Waiting == 0 && slot.Gate.Wait(0, CancellationToken.None))
-                return new WebhookQueueTicket(this, slot, depth, targetId, isImmediate: true);
+            var slot = _slots.GetOrAdd(conversationKey, static key => new Slot(key));
+            SlotResolvedForTesting?.Invoke();
+            int waitingAfterAdmission;
+            WebhookQueueWaiter? waiter = null;
 
-            var maxDepth = MaxQueueDepth;
-            lock (depth.SyncRoot)
+            lock (slot.SyncRoot)
             {
-                if (depth.Waiting >= maxDepth)
-                    throw new WebhookBackpressureException(targetId, maxDepth);
-                waitingAfterAdmission = ++depth.Waiting;
+                if (!_slots.TryGetValue(conversationKey, out var current)
+                    || !ReferenceEquals(current, slot))
+                {
+                    continue;
+                }
+
+                if (!slot.Occupied && slot.Waiters.Count == 0)
+                {
+                    slot.Occupied = true;
+                    slot.Admissions++;
+                    return new WebhookQueueTicket(this, slot, targetId, waiter: null);
+                }
+
+                var depth = ReserveDepth(targetId, MaxQueueDepth, out waitingAfterAdmission);
+                slot.Admissions++;
+                waiter = new WebhookQueueWaiter(slot, depth, targetId);
+                waiter.Node = slot.Waiters.AddLast(waiter);
             }
 
-            slot.Waiting++;
+            RaiseWaitingCountChanged(targetId, waitingAfterAdmission);
+            return new WebhookQueueTicket(this, slot, targetId, waiter);
         }
+    }
 
-        RaiseWaitingCountChanged(targetId, waitingAfterAdmission);
-        return new WebhookQueueTicket(this, slot, depth, targetId, isImmediate: false);
+    private AgentDepth ReserveDepth(AgentId targetId, int maxDepth, out int waitingAfterAdmission)
+    {
+        while (true)
+        {
+            var depth = _depths.GetOrAdd(targetId.Value, static key => new AgentDepth(key));
+            lock (depth.SyncRoot)
+            {
+                if (!_depths.TryGetValue(depth.Key, out var current)
+                    || !ReferenceEquals(current, depth))
+                {
+                    continue;
+                }
+
+                if (depth.Waiting >= maxDepth)
+                    throw new WebhookBackpressureException(targetId, maxDepth);
+
+                waitingAfterAdmission = ++depth.Waiting;
+                return depth;
+            }
+        }
     }
 
     /// <summary>
@@ -151,17 +185,30 @@ public sealed class WebhookInboundQueue
         }
     }
 
-    internal sealed class Slot
+    internal sealed class Slot(string key)
     {
-        public readonly SemaphoreSlim Gate = new(1, 1);
         public readonly object SyncRoot = new();
-        public int Waiting;
+        public readonly LinkedList<WebhookQueueWaiter> Waiters = new();
+        public string Key { get; } = key;
+        public bool Occupied;
+        public int Admissions;
+    }
+
+    internal sealed class WebhookQueueWaiter(Slot slot, AgentDepth depth, AgentId targetId)
+    {
+        public readonly TaskCompletionSource Turn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Slot Slot { get; } = slot;
+        public AgentDepth Depth { get; } = depth;
+        public AgentId TargetId { get; } = targetId;
+        public LinkedListNode<WebhookQueueWaiter>? Node { get; set; }
+        public bool Granted { get; set; }
     }
 
     /// <summary>Per-agent backlog counter: the unit the bound and the depth signal apply to.</summary>
-    internal sealed class AgentDepth
+    internal sealed class AgentDepth(string key)
     {
         public readonly object SyncRoot = new();
+        public string Key { get; } = key;
         public int Waiting;
     }
 
@@ -178,10 +225,71 @@ public sealed class WebhookInboundQueue
             var released = Interlocked.Exchange(ref _slot, null);
             if (released is null)
                 return;
-            released.Gate.Release();
-            // Re-announce depth after the handoff so an observer sees the queue drain, not only
-            // fill. Without this the last transition an observer sees is the peak.
-            owner.RaiseWaitingCountChanged(targetId, owner.WaitingCount(targetId));
+            owner.Release(released, targetId);
+        }
+    }
+
+    private void Release(Slot slot, AgentId releasingTargetId)
+    {
+        WebhookQueueWaiter? next = null;
+        int waitingAfterExit = 0;
+        lock (slot.SyncRoot)
+        {
+            if (slot.Waiters.First is { } first)
+            {
+                next = first.Value;
+                slot.Waiters.RemoveFirst();
+                next.Node = null;
+                next.Granted = true;
+                waitingAfterExit = ReleaseDepth(next.Depth);
+            }
+            else
+            {
+                slot.Occupied = false;
+            }
+
+            if (--slot.Admissions == 0)
+                _slots.TryRemove(new KeyValuePair<string, Slot>(slot.Key, slot));
+        }
+
+        if (next is not null)
+        {
+            RaiseWaitingCountChanged(next.TargetId, waitingAfterExit);
+            next.Turn.SetResult();
+        }
+        else
+        {
+            RaiseWaitingCountChanged(releasingTargetId, WaitingCount(releasingTargetId));
+        }
+    }
+
+    internal void Cancel(WebhookQueueWaiter waiter)
+    {
+        int waitingAfterExit;
+        lock (waiter.Slot.SyncRoot)
+        {
+            if (waiter.Granted || waiter.Node is null)
+                return;
+
+            waiter.Slot.Waiters.Remove(waiter.Node);
+            waiter.Node = null;
+            waitingAfterExit = ReleaseDepth(waiter.Depth);
+            if (--waiter.Slot.Admissions == 0)
+                _slots.TryRemove(new KeyValuePair<string, Slot>(waiter.Slot.Key, waiter.Slot));
+        }
+
+        RaiseWaitingCountChanged(waiter.TargetId, waitingAfterExit);
+        waiter.Turn.TrySetException(new WebhookNotDispatchedException(waiter.TargetId));
+    }
+
+    private int ReleaseDepth(AgentDepth depth)
+    {
+        lock (depth.SyncRoot)
+        {
+            var waiting = --depth.Waiting;
+            if (waiting == 0)
+                _depths.TryRemove(new KeyValuePair<string, AgentDepth>(depth.Key, depth));
+            return waiting;
         }
     }
 }
@@ -190,26 +298,26 @@ public sealed class WebhookInboundQueue
 /// The outcome of <see cref="WebhookInboundQueue.Admit"/>: an accepted delivery that either holds
 /// the target agent's execution slot already or has a reserved place in the bounded queue.
 /// </summary>
-public sealed class WebhookQueueTicket
+public sealed class WebhookQueueTicket : IDisposable
 {
     private readonly WebhookInboundQueue _owner;
     private readonly WebhookInboundQueue.Slot _slot;
-    private readonly WebhookInboundQueue.AgentDepth _depth;
+    private readonly WebhookInboundQueue.WebhookQueueWaiter? _waiter;
     private readonly AgentId _targetId;
-    private int _consumed;
+    // 0 = owned by the caller, 1 = consumed by WaitAsync, 2 = abandoned.
+    private int _state;
 
     internal WebhookQueueTicket(
         WebhookInboundQueue owner,
         WebhookInboundQueue.Slot slot,
-        WebhookInboundQueue.AgentDepth depth,
         AgentId targetId,
-        bool isImmediate)
+        WebhookInboundQueue.WebhookQueueWaiter? waiter)
     {
         _owner = owner;
         _slot = slot;
-        _depth = depth;
         _targetId = targetId;
-        IsImmediate = isImmediate;
+        _waiter = waiter;
+        IsImmediate = waiter is null;
     }
 
     /// <summary>
@@ -232,33 +340,40 @@ public sealed class WebhookQueueTicket
     /// </exception>
     public async Task<IDisposable> WaitAsync(CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref _consumed, 1) == 1)
-            throw new InvalidOperationException("This webhook queue ticket has already been consumed.");
+        if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
+            throw new InvalidOperationException("This webhook queue ticket has already been consumed or abandoned.");
 
         if (IsImmediate)
             return new WebhookInboundQueue.Lease(_slot, _owner, _targetId);
 
-        try
+        using var registration = cancellationToken.Register(
+            static state =>
+            {
+                var (owner, waiter) = ((WebhookInboundQueue, WebhookInboundQueue.WebhookQueueWaiter))state!;
+                owner.Cancel(waiter);
+            },
+            (_owner, _waiter!));
+
+        await _waiter!.Turn.Task.ConfigureAwait(false);
+        return new WebhookInboundQueue.Lease(_slot, _owner, _targetId);
+    }
+
+    /// <summary>
+    /// Abandons an admission that will not be consumed. This is idempotent and cannot release a
+    /// lease already transferred by <see cref="WaitAsync"/>.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.CompareExchange(ref _state, 2, 0) != 0)
+            return;
+
+        if (IsImmediate)
         {
-            await _slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw new WebhookNotDispatchedException(_targetId);
-        }
-        finally
-        {
-            // Decrement on EVERY exit, including the cancelled one: a waiter that abandons without
-            // returning its depth would permanently shrink the bound until the queue wedged shut.
-            int waitingAfterExit;
-            lock (_slot.SyncRoot)
-                _slot.Waiting--;
-            lock (_depth.SyncRoot)
-                waitingAfterExit = --_depth.Waiting;
-            _owner.RaiseWaitingCountChanged(_targetId, waitingAfterExit);
+            using var lease = new WebhookInboundQueue.Lease(_slot, _owner, _targetId);
+            return;
         }
 
-        return new WebhookInboundQueue.Lease(_slot, _owner, _targetId);
+        _owner.Cancel(_waiter!);
     }
 }
 

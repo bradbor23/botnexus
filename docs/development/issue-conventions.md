@@ -91,6 +91,17 @@ $s = Join-Path $skillDir 'scripts/New-BotNexusIssue.ps1'
 
 The forms and the agent templates are generated from one schema
 (`reference/issue-schema.json` inside that same skill directory), so they cannot drift apart.
+**Other agents and contributors** — use an issue form, or use `gh issue create` with a body that
+follows the shared spine and type-specific requirements above. Supply labels according to the
+cardinality rules below; for example:
+
+```shell
+gh issue create --repo Sytone/botnexus --title "[Docs] ..." \
+  --body-file issue.md --label "type:docs,priority:low,area:tooling"
+```
+
+The checked-in forms under `.github/ISSUE_TEMPLATE/` are the repository-visible templates.
+Contributors do not need the maintainer's private schema or script to file a conforming issue.
 
 ## Labels
 
@@ -114,8 +125,10 @@ The `squad:` namespace was retired on 2026-07-29 along with the multi-agent squa
 improvement changes it for the better on something that already works; chore changes no product
 behaviour at all (dependencies, CI, build).
 
-Labels are written only by `Set-BotNexusLabels.ps1`, against a closed allow-list. Bare legacy names
-(`bug`, `enhancement`, `documentation`, …) were migrated and deleted on 2026-07-29 and no longer exist.
+Maintainer automation writes labels through `Set-BotNexusLabels.ps1`, against a closed allow-list.
+Other filers select labels through an issue form or `gh issue create --label` and must follow the
+same cardinality rules. Bare legacy names (`bug`, `enhancement`, `documentation`, …) were migrated
+and deleted on 2026-07-29 and no longer exist.
 
 ## Existing issues
 

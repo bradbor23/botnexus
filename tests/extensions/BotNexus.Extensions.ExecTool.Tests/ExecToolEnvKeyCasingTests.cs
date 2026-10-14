@@ -1,4 +1,5 @@
 using BotNexus.Agent.Core.Types;
+using BotNexus.Agent.Core.Tools;
 using System.IO.Abstractions.TestingHelpers;
 
 namespace BotNexus.Extensions.ExecTool.Tests;
@@ -24,13 +25,8 @@ public class ExecToolEnvKeyCasingTests : IDisposable
     private const string InheritedName = "BN2892_CASING_PROBE";
     private const string OverrideName = "bn2892_casing_probe";
 
-    // The probe is opted in explicitly: without it the allow-list would (correctly) withhold a
-    // variable named BN2892_* from the child, and there would be no inherited entry for the
-    // caller's differently-cased override to collide with - which is the whole subject here.
-    private readonly ExecTool _tool = new(
-        workingDirectory: null,
-        fileSystem: new MockFileSystem(),
-        environmentPassThrough: [InheritedName]);
+    private readonly ExecTool _tool = new(workingDirectory: null, fileSystem: new MockFileSystem(),
+        environmentPolicy: new LocalChildEnvironmentPolicy([InheritedName, "BN2892_UNRELATED_PROBE"]));
 
     public ExecToolEnvKeyCasingTests() =>
         Environment.SetEnvironmentVariable(InheritedName, "inherited");
@@ -73,7 +69,7 @@ public class ExecToolEnvKeyCasingTests : IDisposable
     }
 
     /// <summary>
-    /// The inverse of what this test used to assert, deliberately.
+    /// An unrelated explicitly approved ambient variable must still reach the child.
     /// </summary>
     /// <remarks>
     /// It previously guarded that an unrelated INHERITED variable still reached the child. That

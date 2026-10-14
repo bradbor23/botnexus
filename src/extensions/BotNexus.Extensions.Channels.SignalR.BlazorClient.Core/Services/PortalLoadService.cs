@@ -122,29 +122,8 @@ public sealed class PortalLoadService : IPortalLoadService
             // #2532: one shared walk, terminating on the server's hasMore flag.
             await ReloadSessionRosterAsync(cancellationToken);
 
-            var selectedAgentId = agents.OrderBy(a => a.DisplayName).FirstOrDefault()?.AgentId;
-            if (selectedAgentId is not null)
-            {
-                _store.SelectView(selectedAgentId, string.Empty, SelectionSource.Bootstrap);
-
-                var selectedAgent = _store.GetAgent(selectedAgentId);
-                while (selectedAgent is not null)
-                {
-                    var selectedConversation = selectedAgent.Conversations.Values
-                        .OrderByDescending(c => c.IsDefault)
-                        .ThenByDescending(c => c.UpdatedAt)
-                        .FirstOrDefault();
-
-                    if (selectedConversation is null)
-                        break;
-
-                    _store.SetActiveConversation(selectedAgentId, selectedConversation.ConversationId);
-                    await LoadInitialHistoryAsync(selectedAgent!, selectedConversation, cancellationToken);
-
-                    if (selectedAgent.Conversations.ContainsKey(selectedConversation.ConversationId))
-                        break;
-                }
-            }
+            // Bootstrap loads data only. The page route owns visible agent/conversation identity;
+            // agent-only routes are canonicalized through the MRU/cold-start resolver in Home.
 
             // Wire conversation-refresh delegate so ConversationChanged SignalR events
             // trigger a REST re-fetch of the conversation list for the affected agent.
@@ -161,8 +140,9 @@ public sealed class PortalLoadService : IPortalLoadService
             _hub.OnReconnected += OnHubReconnected;
             _hub.OnDisconnected += OnHubClosed;
 
+            var subscribeRevision = _eventHandler.CaptureRunStateRevision();
             var subscribeResult = await _hub.SubscribeAllAsync();
-            _ = subscribeResult; // joined for the conversation GROUPS only; session data comes from REST (#2541)
+            _eventHandler.TryApplyRunActivitySnapshot(subscribeResult.ActiveRuns, subscribeRevision);
             await SubscribeAgentsForNotificationsAsync();
 
             _ = _eventHandler; // force construction so hub event subscriptions are active
@@ -263,42 +243,12 @@ public sealed class PortalLoadService : IPortalLoadService
     private static string MapRole(string role) => MessageRole.Normalize(role);
 
     /// <summary>
-    /// Projects a conversation-history REST page onto the client timeline model. Extracted so the
-    /// initial load and the refresh re-fetch (#3846) share ONE mapping - a second copy would let the
-    /// two paths drift and would break the identity the reconciler keys on.
+    /// Projects a conversation-history REST page onto the same client timeline model used by the
+    /// initial and scroll-up loaders. A second projector previously lost compaction identity and
+    /// made refresh reconciliation disagree with the already displayed transcript.
     /// </summary>
-    private static List<ChatMessage> ToChatMessages(IReadOnlyList<ConversationHistoryEntryDto> entries)
-    {
-        var messages = new List<ChatMessage>(entries.Count);
-        foreach (var entry in entries)
-        {
-            if (entry.Kind == "boundary")
-            {
-                messages.Add(new ChatMessage("System", string.Empty, entry.Timestamp)
-                {
-                    Kind = "boundary",
-                    BoundaryLabel = $"Session · {entry.Timestamp.ToLocalTime():MMM d HH:mm} · {entry.SessionId}",
-                    BoundarySessionId = entry.SessionId
-                });
-            }
-            else
-            {
-                var isTool = entry.ToolName is not null;
-                messages.Add(new ChatMessage(MapRole(entry.Role ?? "system"), entry.Content ?? string.Empty, entry.Timestamp)
-                {
-                    ToolName = entry.ToolName,
-                    ToolCallId = entry.ToolCallId,
-                    ToolArgs = entry.ToolArgs,
-                    ToolIsError = entry.ToolIsError,
-                    ToolResult = isTool ? AnsiStripper.Strip(entry.Content) : null,
-                    IsToolCall = isTool,
-                    IsFolded = entry.IsFolded
-                });
-            }
-        }
-
-        return messages;
-    }
+    private static List<ChatMessage> ToChatMessages(IReadOnlyList<ConversationHistoryEntryDto> entries) =>
+        entries.Select(AgentInteractionService.ProjectConversationEntry).ToList();
 
     /// <summary>
     /// Re-fetches the ACTIVE conversation's transcript over REST and reconciles it into the
@@ -312,16 +262,19 @@ public sealed class PortalLoadService : IPortalLoadService
     /// either. A no-op when nothing is active, when the row is a locally synthesised sub-agent
     /// observer transcript (no server conversation behind it), or when history was never loaded.
     /// </remarks>
-    private async Task RefreshActiveTranscriptAsync(CancellationToken cancellationToken)
+    private async Task RefreshConversationTranscriptAsync(
+        string? conversationId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (_store.ActiveConversationId is not { Length: > 0 } conversationId)
+            if (string.IsNullOrWhiteSpace(conversationId))
                 return;
 
             var conversation = _store.GetConversation(conversationId);
             if (conversation is null || conversation.IsLocallySynthesised || !conversation.HistoryLoaded)
                 return;
+            var snapshot = conversation.Messages;
 
             var history = await _restClient.GetHistoryAsync(
                 conversationId,
@@ -333,19 +286,19 @@ public sealed class PortalLoadService : IPortalLoadService
                 return;
 
             var serverPage = ToChatMessages(entries);
-            var local = conversation.Messages;
-            var inserted = TranscriptReconciler.CountMissing(local, serverPage);
-            if (inserted == 0)
-                return;
-
-            var reconciled = TranscriptReconciler.Reconcile(local, serverPage);
-            conversation.ClearMessages();
-            foreach (var message in reconciled)
-                conversation.AppendMessage(message);
+            var inserted = conversation.ReconcileMessages(snapshot, serverPage);
 
             // Repaired rows are real history rows, so the backwards-paging offset must advance by
             // exactly the number inserted or the next scroll-up would re-fetch a page it already has.
             conversation.LoadedHistoryRows += inserted;
+
+            // Refresh is also an authoritative paging-metadata read. In particular, an exhausted
+            // conversation must become pageable again when the server total grows, even when this
+            // page inserts nothing because a preceding refresh already reconciled its rows (#3954).
+            conversation.HasMoreHistory = AgentInteractionService.HasMoreHistory(
+                conversation.LoadedHistoryRows,
+                history.TotalCount,
+                entries.Count);
         }
         catch (Exception ex)
         {
@@ -354,14 +307,64 @@ public sealed class PortalLoadService : IPortalLoadService
     }
 
     /// <inheritdoc />
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    public Task RefreshAsync(CancellationToken cancellationToken = default) =>
+        RefreshCoreAsync(
+            (_store as IDisplayedConversation)?.DisplayedConversationIdFor(_store.ActiveAgentId),
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task RefreshAsync(
+        string agentId,
+        string conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+        return RefreshCoreAsync(conversationId, cancellationToken);
+    }
+
+    private async Task RefreshCoreAsync(
+        string? conversationId,
+        CancellationToken cancellationToken)
     {
         if (_hubUrl is null || IsLoading)
             return;
 
         try
         {
-            // Re-fetch agent and conversation lists from REST
+            await RefreshRosterAsync(cancellationToken);
+
+            // #3846: re-fetch and reconcile the ACTIVE conversation's transcript. Before this, the
+            // refresh button reloaded the rosters but never the transcript, so the one thing a user
+            // reaches for refresh to repair - a conversation missing messages dropped by SignalR -
+            // was the one thing it could not fix. Placed here, before the optional re-dial, for the
+            // same #2541 reason the roster load is: a failed re-dial must not cost the user the REST
+            // refresh they asked for. The call is independently guarded and never throws.
+            await RefreshConversationTranscriptAsync(conversationId, cancellationToken);
+
+            // Reconnect SignalR if needed
+            if (!_hub.IsConnected)
+            {
+                await _hub.ConnectAsync(_hubUrl, ClientKind, Tuning);
+                var subscribeRevision = _eventHandler.CaptureRunStateRevision();
+                var subscribeResult = await _hub.SubscribeAllAsync();
+                _eventHandler.TryApplyRunActivitySnapshot(subscribeResult.ActiveRuns, subscribeRevision);
+                await SubscribeAgentsForNotificationsAsync();
+            }
+
+            _store.NotifyChanged();
+            OnConnectionStateChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[PortalLoadService] RefreshAsync failed: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshRosterAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
             var agents = await _restClient.GetAgentsAsync(cancellationToken);
             foreach (var agent in agents)
             {
@@ -387,34 +390,15 @@ public sealed class PortalLoadService : IPortalLoadService
             });
             await Task.WhenAll(conversationTasks);
 
-            // REST load happens BEFORE the optional hub reconnect below, and deliberately so: the
-            // roster is the thing the user sees, and a failed re-dial must not also cost them the
-            // data refresh they asked for. Ordering this after the reconnect made a hub failure
-            // silently skip the whole session reload (#2541).
+            // REST load happens before the optional hub reconnect. A failed re-dial must not also
+            // cost the user the roster refresh they asked for (#2541).
             await ReloadSessionRosterAsync(cancellationToken);
-
-            // #3846: re-fetch and reconcile the ACTIVE conversation's transcript. Before this, the
-            // refresh button reloaded the rosters but never the transcript, so the one thing a user
-            // reaches for refresh to repair - a conversation missing messages dropped by SignalR -
-            // was the one thing it could not fix. Placed here, before the optional re-dial, for the
-            // same #2541 reason the roster load is: a failed re-dial must not cost the user the REST
-            // refresh they asked for. The call is independently guarded and never throws.
-            await RefreshActiveTranscriptAsync(cancellationToken);
-
-            // Reconnect SignalR if needed
-            if (!_hub.IsConnected)
-            {
-                await _hub.ConnectAsync(_hubUrl, ClientKind, Tuning);
-                await _hub.SubscribeAllAsync();
-                await SubscribeAgentsForNotificationsAsync();
-            }
-
-            _store.NotifyChanged();
-            OnConnectionStateChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[PortalLoadService] RefreshAsync failed: {ex.Message}");
+            // Roster and transcript refreshes are independent: a transient roster failure must not
+            // prevent RefreshActiveTranscriptAsync from repairing the conversation on screen.
+            Console.Error.WriteLine($"[PortalLoadService] Roster refresh failed: {ex.Message}");
         }
     }
 
@@ -457,7 +441,9 @@ public sealed class PortalLoadService : IPortalLoadService
         _hub.OnReconnected += OnHubReconnected;
         _hub.OnDisconnected += OnHubClosed;
 
-        await _hub.SubscribeAllAsync();
+        var subscribeRevision = _eventHandler.CaptureRunStateRevision();
+        var subscribeResult = await _hub.SubscribeAllAsync();
+        _eventHandler.TryApplyRunActivitySnapshot(subscribeResult.ActiveRuns, subscribeRevision);
         await SubscribeAgentsForNotificationsAsync();
         await ReloadSessionRosterAsync();
 

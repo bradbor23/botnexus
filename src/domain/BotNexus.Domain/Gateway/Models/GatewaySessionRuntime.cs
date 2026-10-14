@@ -1,3 +1,5 @@
+using BotNexus.Domain.Primitives;
+
 namespace BotNexus.Gateway.Abstractions.Models;
 
 /// <summary>
@@ -27,6 +29,7 @@ public sealed class GatewaySessionRuntime
     private long _persistedDestructiveVersion;
     private long _nextTransientPersistenceId = -1;
     private readonly HashSet<long> _observedPersistedHistoryIds = [];
+    private readonly HashSet<string> _ownedPersistenceKeys = new(StringComparer.Ordinal);
 
     public GatewaySessionRuntime(Session session)
     {
@@ -56,6 +59,7 @@ public sealed class GatewaySessionRuntime
     {
         lock (_lock)
         {
+            if (IsRetainedToolResultDuplicate(entry)) return;
             Session.History.Add(entry);
             _additionVersion++;
             Session.UpdatedAt = DateTimeOffset.UtcNow;
@@ -70,11 +74,18 @@ public sealed class GatewaySessionRuntime
     {
         lock (_lock)
         {
-            Session.History.AddRange(entries);
+            foreach (var entry in entries)
+                if (!IsRetainedToolResultDuplicate(entry)) Session.History.Add(entry);
             _additionVersion++;
             Session.UpdatedAt = DateTimeOffset.UtcNow;
         }
     }
+
+    private bool IsRetainedToolResultDuplicate(SessionEntry entry)
+        => entry.Kind == MessageKind.ToolResult && entry.PersistenceKey is { } key
+            && key.StartsWith("tool-result:", StringComparison.Ordinal)
+            && Session.History.Any(existing => existing.PersistenceKey == key
+                && existing.AgentRunId == entry.AgentRunId);
 
     /// <summary>
     /// Executes replace history.
@@ -281,10 +292,14 @@ public sealed class GatewaySessionRuntime
             {
                 entry.PersistenceId ??= _nextTransientPersistenceId--;
                 if (entry.PersistenceId < 0)
+                {
                     entry.PersistenceKey ??= Guid.NewGuid().ToString("N");
+                    _ownedPersistenceKeys.Add(entry.PersistenceKey);
+                }
             }
 
             IReadOnlyList<long> removedPersistedIds = [];
+            IReadOnlyList<string> removedPersistenceKeys = [];
             if (requiresReplacement)
             {
                 var retainedPersistedIds = Session.History
@@ -295,10 +310,18 @@ public sealed class GatewaySessionRuntime
                 removedPersistedIds = _observedPersistedHistoryIds
                     .Where(id => !retainedPersistedIds.Contains(id))
                     .ToArray();
+                var retainedPersistenceKeys = Session.History
+                    .Select(static entry => entry.PersistenceKey)
+                    .OfType<string>()
+                    .ToHashSet(StringComparer.Ordinal);
+                removedPersistenceKeys = _ownedPersistenceKeys
+                    .Where(key => !retainedPersistenceKeys.Contains(key))
+                    .ToArray();
             }
             return new SessionHistoryPersistenceSnapshot(
                 entries,
                 removedPersistedIds,
+                removedPersistenceKeys,
                 requiresReplacement,
                 startIndex,
                 Session.History.Count,
@@ -346,6 +369,8 @@ public sealed class GatewaySessionRuntime
 
             foreach (var removedId in snapshot.RemovedPersistedIds)
                 _observedPersistedHistoryIds.Remove(removedId);
+            foreach (var removedKey in snapshot.RemovedPersistenceKeys)
+                _ownedPersistenceKeys.Remove(removedKey);
             foreach (var durableId in insertedRowIds.Values)
                 _observedPersistedHistoryIds.Add(durableId);
 
@@ -371,12 +396,19 @@ public sealed class GatewaySessionRuntime
             _persistedHistoryCount = Session.History.Count;
             _persistedDestructiveVersion = _destructiveVersion;
             _observedPersistedHistoryIds.Clear();
+            _ownedPersistenceKeys.Clear();
             foreach (var id in Session.History
                          .Select(static entry => entry.PersistenceId)
                          .OfType<long>()
                          .Where(static id => id > 0))
             {
                 _observedPersistedHistoryIds.Add(id);
+            }
+            foreach (var key in Session.History
+                         .Select(static entry => entry.PersistenceKey)
+                         .OfType<string>())
+            {
+                _ownedPersistenceKeys.Add(key);
             }
         }
     }
@@ -414,6 +446,7 @@ public sealed class GatewaySessionRuntime
 public sealed record SessionHistoryPersistenceSnapshot(
     IReadOnlyList<SessionEntry> Entries,
     IReadOnlyList<long> RemovedPersistedIds,
+    IReadOnlyList<string> RemovedPersistenceKeys,
     bool RequiresReplacement,
     int StartIndex,
     int EndIndex,

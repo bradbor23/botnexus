@@ -8,8 +8,7 @@ using Microsoft.AspNetCore.Routing;
 namespace BotNexus.Extensions.Plugins.Api;
 
 /// <summary>
-/// Registers the plugins read/preference API (<c>/api/plugins</c>) backing the portal plugins
-/// page (#2687, slice 8 of #2623).
+/// Registers the plugin read and lifecycle API at <c>/api/plugins</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -25,6 +24,10 @@ namespace BotNexus.Extensions.Plugins.Api;
 /// <c>SkillsEndpointContributor</c> precedent, which moved the skills file browser out of the
 /// gateway for the same reason.
 /// </para>
+/// <para>
+/// Writes receive the production lifecycle manager from dependency injection, so HTTP and
+/// scheduled updates act on the same state graph.
+/// </para>
 /// </remarks>
 public sealed class PluginsEndpointContributor : IEndpointContributor
 {
@@ -33,8 +36,17 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
     {
         var group = app.MapGroup("/api/plugins");
 
-        group.MapGet("/", () => List());
-        group.MapGet("/{name}", (string name) => Get(name));
+        group.MapGet("/", (PluginStateStore store) => List(store.PluginRoot));
+        group.MapGet("/{name}", (string name, PluginStateStore store) => Get(name, store.PluginRoot));
+        group.MapPost("/", Install);
+        group.MapPost("/{name}/pin", Pin);
+        group.MapPost("/{name}/unpin", Unpin);
+
+        // The portal reads a refreshed plugin ROW back from the preference writes and an outcome
+        // carrying RestartRequired from install/update/remove, so these routes stay on the
+        // row-and-outcome overloads. Upstream's manager-injected Update/Remove/SetUpdatePreference
+        // remain available to direct callers and the scheduled-update path, just not double-mapped
+        // onto the same verb and path - two handlers on one route is an ambiguous match at runtime.
         group.MapPut("/{name}/update-preference",
             (string name, PluginUpdatePreferenceRequest request) => SetUpdatePreference(name, request));
         group.MapPut("/{name}/nav-visibility",
@@ -240,13 +252,13 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
             return Results.BadRequest(new { error = "A plugin name is required." });
         }
 
-        return Remove(name, CreateManager(pluginRoot, extensionsRoot));
+        return RemoveViaManager(name, CreateManager(pluginRoot, extensionsRoot));
     }
 
     /// <summary>Removes through a supplied lifecycle manager.</summary>
     /// <param name="name">Plugin identifier.</param>
     /// <param name="manager">Lifecycle manager to remove through.</param>
-    internal static IResult Remove(string name, PluginLifecycleManager manager)
+    internal static IResult RemoveViaManager(string name, PluginLifecycleManager manager)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -303,41 +315,31 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
     }
 
     /// <summary>
-    /// Absolute path of the plugin root: <c>~/.botnexus/plugins</c>, honouring the
-    /// <c>BOTNEXUS_HOME</c> override so a container deployment or a test is not pinned to the real
-    /// user profile. Mirrors <c>SkillsEndpointContributor.GetSkillsRootPath</c>.
+    /// Resolves the compatibility plugin root for direct callers that predate production DI.
     /// </summary>
     internal static string GetPluginRootPath()
     {
         var homeOverride = Environment.GetEnvironmentVariable("BOTNEXUS_HOME");
         if (!string.IsNullOrWhiteSpace(homeOverride))
         {
-            return Path.Combine(Path.GetFullPath(homeOverride), "plugins");
+            return Path.Combine(Path.GetFullPath(homeOverride), PluginSkillRootResolver.PluginRootDirectoryName);
         }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".botnexus", "plugins");
+        return Path.Combine(home, ".botnexus", PluginSkillRootResolver.PluginRootDirectoryName);
     }
 
     /// <summary>Lists every installed plugin, ordered by name.</summary>
     internal static IResult List() => List(GetPluginRootPath());
 
     /// <summary>Lists every installed plugin under an explicit plugin root.</summary>
-    /// <param name="pluginRoot">Directory holding installed plugins.</param>
     internal static IResult List(string pluginRoot) =>
         Results.Ok(new PluginPortalProjector(new PluginStateStore(pluginRoot)).List());
 
     /// <summary>Returns one installed plugin by name.</summary>
-    /// <param name="name">Plugin identifier.</param>
     internal static IResult Get(string name) => Get(name, GetPluginRootPath());
 
-    /// <summary>
-    /// Returns one installed plugin under an explicit plugin root. An unknown name is a 404 rather
-    /// than an empty 200: the portal distinguishes "not installed" from "installed with nothing to
-    /// show", and collapsing the two would make a typo indistinguishable from an empty plugin.
-    /// </summary>
-    /// <param name="name">Plugin identifier.</param>
-    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <summary>Returns one installed plugin under an explicit plugin root.</summary>
     internal static IResult Get(string name, string pluginRoot)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -351,20 +353,87 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
             : Results.Ok(row);
     }
 
+    /// <summary>Installs plugin content from the requested source.</summary>
+    internal static async Task<IResult> Install(
+        PluginInstallRequest request,
+        PluginLifecycleManager manager,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return ToWriteResult(
+                PluginLifecycleOperation.Install,
+                PluginOperationResult.Failure(string.Empty, "request", "A request body is required."),
+                missingIsNotFound: false);
+        }
+
+        var result = await manager.InstallAsync(request, cancellationToken).ConfigureAwait(false);
+        return ToWriteResult(
+            PluginLifecycleOperation.Install,
+            result,
+            missingIsNotFound: false,
+            request.Reference);
+    }
+
+    /// <summary>Updates an installed plugin from its recorded source.</summary>
+    internal static async Task<IResult> Update(
+        string name,
+        PluginLifecycleManager manager,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return MissingName(PluginLifecycleOperation.Update);
+        }
+
+        var result = await manager.UpdateAsync(name, cancellationToken).ConfigureAwait(false);
+        return ToWriteResult(PluginLifecycleOperation.Update, result, missingIsNotFound: true);
+    }
+
+    /// <summary>Removes an installed plugin's recorded files.</summary>
+    internal static IResult Remove(string name, PluginLifecycleManager manager)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return MissingName(PluginLifecycleOperation.Remove);
+        }
+
+        return ToWriteResult(
+            PluginLifecycleOperation.Remove,
+            manager.Remove(name),
+            missingIsNotFound: true);
+    }
+
+    /// <summary>Prevents source updates for an installed plugin.</summary>
+    internal static IResult Pin(string name, PluginLifecycleManager manager) =>
+        SetUpdatePreference(name, updatesEnabled: false, manager);
+
+    /// <summary>Allows source updates for an installed plugin.</summary>
+    internal static IResult Unpin(string name, PluginLifecycleManager manager) =>
+        SetUpdatePreference(name, updatesEnabled: true, manager);
+
     /// <summary>Sets whether scheduled updates may replace a plugin's content.</summary>
-    /// <param name="name">Plugin identifier.</param>
-    /// <param name="request">New preference.</param>
+    internal static IResult SetUpdatePreference(
+        string name,
+        PluginUpdatePreferenceRequest request,
+        PluginLifecycleManager manager)
+    {
+        if (request is null)
+        {
+            return ToWriteResult(
+                PluginLifecycleOperation.SetUpdatePreference,
+                PluginOperationResult.Failure(name, "request", "A request body is required."),
+                missingIsNotFound: false);
+        }
+
+        return SetUpdatePreference(name, request.UpdatesEnabled, manager);
+    }
+
+    /// <summary>Compatibility entry point for direct callers using the default plugin root.</summary>
     internal static IResult SetUpdatePreference(string name, PluginUpdatePreferenceRequest request) =>
         SetUpdatePreference(name, request, GetPluginRootPath());
 
-    /// <summary>
-    /// Sets the auto-update preference under an explicit plugin root. The change is written back to
-    /// the installed record, not held in memory, so it survives a restart - a preference that did
-    /// not persist would leave the portal's toggle asserting something the gateway never stored.
-    /// </summary>
-    /// <param name="name">Plugin identifier.</param>
-    /// <param name="request">New preference.</param>
-    /// <param name="pluginRoot">Directory holding installed plugins.</param>
+    /// <summary>Compatibility entry point for direct callers using an explicit plugin root.</summary>
     internal static IResult SetUpdatePreference(
         string name,
         PluginUpdatePreferenceRequest request,
@@ -387,13 +456,50 @@ public sealed class PluginsEndpointContributor : IEndpointContributor
             return Results.NotFound(new { error = $"Plugin '{name}' is not installed." });
         }
 
-        // `with` preserves the recorded file set and every other field: the file list is the only
-        // description of what the plugin owns, and a preference write that dropped it would orphan
-        // every file the install wrote.
         store.Upsert(existing with { UpdatesEnabled = request.UpdatesEnabled });
-
         return Results.Ok(new PluginPortalProjector(store).Find(name));
     }
+
+    private static IResult SetUpdatePreference(
+        string name,
+        bool updatesEnabled,
+        PluginLifecycleManager manager)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return MissingName(PluginLifecycleOperation.SetUpdatePreference);
+        }
+
+        return ToWriteResult(
+            PluginLifecycleOperation.SetUpdatePreference,
+            manager.SetUpdatePreference(name, updatesEnabled),
+            missingIsNotFound: true);
+    }
+
+    private static IResult ToWriteResult(
+        PluginLifecycleOperation operation,
+        PluginOperationResult result,
+        bool missingIsNotFound,
+        string? requestedReference = null)
+    {
+        var receipt = PluginOperationReceipt.FromResult(operation, result, requestedReference);
+        if (result.IsSuccess)
+        {
+            return Results.Ok(receipt);
+        }
+
+        return missingIsNotFound && result.Errors.Any(error =>
+                string.Equals(error.Field, "name", StringComparison.Ordinal) &&
+                error.Message.Contains("not installed", StringComparison.OrdinalIgnoreCase))
+            ? Results.NotFound(receipt)
+            : Results.BadRequest(receipt);
+    }
+
+    private static IResult MissingName(PluginLifecycleOperation operation) =>
+        ToWriteResult(
+            operation,
+            PluginOperationResult.Failure(string.Empty, "name", "A plugin name is required."),
+            missingIsNotFound: false);
 }
 
 /// <summary>Request body for toggling a plugin's auto-update preference.</summary>

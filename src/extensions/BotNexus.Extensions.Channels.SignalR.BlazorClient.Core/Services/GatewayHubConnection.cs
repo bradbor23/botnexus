@@ -288,8 +288,8 @@ public sealed class GatewayHubConnection : IAsyncDisposable
     /// <c>PortalLoadService</c> for why. This verb is retained for its GROUP-JOINING side effect,
     /// which is the only thing the hub is responsible for on that path.
     /// </remarks>
-    public async Task<SubscribeAllResult> SubscribeAllAsync()
-        => await _connection!.InvokeAsync<SubscribeAllResult>("SubscribeAll");
+    public async Task<SubscribeAllResult> SubscribeAllAsync(CancellationToken cancellationToken = default)
+        => await _connection!.InvokeAsync<SubscribeAllResult>("SubscribeAll", cancellationToken);
 
     /// <summary>
     /// Joins the per-agent notification groups so this connection receives
@@ -356,10 +356,15 @@ public sealed class GatewayHubConnection : IAsyncDisposable
     }
 
     /// <summary>Send a message to the specified agent, optionally targeting a specific conversation.</summary>
-    public async Task<SendMessageResult> SendMessageAsync(string agentId, string channelType, string content, string? conversationId = null)
+    public async Task<SendMessageResult> SendMessageAsync(
+        string agentId,
+        string channelType,
+        string content,
+        string conversationId,
+        InboundDeliveryMode deliveryMode)
     {
-        // Hub.SendMessage now accepts an optional conversationId — no separate SendMessageToConversation method.
-        return await _connection!.InvokeAsync<SendMessageResult>("SendMessage", agentId, channelType, content, conversationId);
+        return await _connection!.InvokeAsync<SendMessageResult>(
+            "DeliverMessage", agentId, channelType, content, conversationId, deliveryMode);
     }
 
     /// <summary>
@@ -371,8 +376,15 @@ public sealed class GatewayHubConnection : IAsyncDisposable
         => await _connection!.InvokeAsync<SendMessageResult>("SubmitCanvasPrompt", agentId, channelType, content, conversationId);
 
     /// <summary>Sends optional text and generic content parts to a specific conversation.</summary>
-    public async Task<SendMessageResult> SendMessageWithMediaAsync(string agentId, string channelType, string content, IReadOnlyList<MediaContentPartDto> parts, string? conversationId = null)
-        => await _connection!.InvokeAsync<SendMessageResult>("SendMessageWithMedia", agentId, channelType, content, parts, conversationId);
+    public async Task<SendMessageResult> SendMessageWithMediaAsync(
+        string agentId,
+        string channelType,
+        string content,
+        IReadOnlyList<MediaContentPartDto> parts,
+        string conversationId,
+        InboundDeliveryMode deliveryMode)
+        => await _connection!.InvokeAsync<SendMessageResult>(
+            "DeliverMessageWithMedia", agentId, channelType, content, parts, conversationId, deliveryMode);
 
     /// <summary>Steer an in-progress agent response.</summary>
     public async Task<SendMessageResult> SteerAsync(string agentId, string sessionId, string content, string? conversationId)

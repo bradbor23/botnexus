@@ -75,6 +75,24 @@ public sealed class ActivityDashboardComponentTests : IDisposable
         _rest.GetAllConversationsAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<ConversationSummaryDto>>(conversations));
 
+    private void SetupSessions(params (string Id, string Status)[] sessions) =>
+        _rest.GetSessionsAsync(
+                Arg.Any<string?>(),
+                Arg.Any<int?>(),
+                Arg.Any<int>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new SessionPageDto(
+                sessions.Select(session => new SessionSummary(
+                    session.Id,
+                    "alpha",
+                    "signalr",
+                    "interactive",
+                    session.Status,
+                    0)).ToList(),
+                sessions.Length,
+                false));
+
     // ── Structure ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -88,6 +106,24 @@ public sealed class ActivityDashboardComponentTests : IDisposable
         cut.Find("[data-testid='activity-filter-agent']");
         cut.Find("[data-testid='activity-filter-status']");
         cut.Find("[data-testid='activity-filter-recency']");
+    }
+
+    [Fact]
+    public void Long_title_is_preserved_in_inner_wrapper_with_badges_and_purpose()
+    {
+        const string title = "Review the complete rendering regression for scheduled automation and conversation activity " +
+            "including this unbroken identifier abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz";
+        SetupConversations(Conv("long-title", title: title, source: "Webhook", purpose: "Keep the full identifying text readable."));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.WaitForState(() => cut.FindAll("[data-testid='activity-row']").Count == 1);
+        var cell = cut.Find("[data-testid='activity-row'] td.activity-cell-title");
+        cell.Children.ShouldHaveSingleItem().ClassList.ShouldContain("activity-title-content");
+        cell.QuerySelector(".activity-title-content > .activity-conversation-title")?.TextContent.ShouldBe(title);
+        cell.QuerySelector(".activity-title-content > [data-testid='activity-origin-badge']").ShouldNotBeNull();
+        cell.QuerySelector(".activity-title-content > [data-testid='activity-purpose']")?.TextContent
+            .ShouldBe("Keep the full identifying text readable.");
+        cut.FindAll("[data-testid='activity-row'] td").Count.ShouldBe(5);
     }
 
     // ── Empty state ────────────────────────────────────────────────────────
@@ -180,6 +216,56 @@ public sealed class ActivityDashboardComponentTests : IDisposable
         Assert.Equal(2, chips.Count);
         Assert.Contains("Alpha", cut.Markup);
         Assert.Contains("Beta", cut.Markup);
+    }
+
+    [Fact]
+    public void Agent_chips_render_normalized_emoji_without_spacing_blank_emoji()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["alpha"] = new() { AgentId = "alpha", DisplayName = "Alpha", Emoji = "🚀\n" },
+            ["beta"] = new() { AgentId = "beta", DisplayName = "Beta", Emoji = "   " }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+        _store.GetAgent(Arg.Any<string>()).Returns(ci => agents.GetValueOrDefault(ci.ArgAt<string>(0)));
+        SetupConversations(Conv("c1", agentId: "alpha", participants:
+        [
+            new ParticipantDto("Agent", "beta", "peer")
+        ]));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+
+        cut.WaitForState(() => cut.FindAll(".activity-agent-chip").Count == 2);
+        var chips = cut.FindAll(".activity-agent-chip");
+        chips[0].TextContent.ShouldBe("🚀 Alpha");
+        chips[1].TextContent.ShouldBe("Betapeer");
+        chips[1].FirstChild?.TextContent.ShouldBe("Beta");
+    }
+
+    [Fact]
+    public void Agent_filter_option_renders_normalized_emoji()
+    {
+        var agents = new Dictionary<string, AgentState>
+        {
+            ["alpha"] = new() { AgentId = "alpha", DisplayName = "Alpha", Emoji = "🔬\t" }
+        };
+        _store.Agents.Returns(agents.AsReadOnly());
+        _store.GetAgent(Arg.Any<string>()).Returns(ci => agents.GetValueOrDefault(ci.ArgAt<string>(0)));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+
+        cut.Find("[data-testid='activity-filter-agent'] option[value='alpha']").TextContent.ShouldBe("🔬 Alpha");
+    }
+
+    [Fact]
+    public void Unknown_agent_chip_keeps_bare_id_without_placeholder()
+    {
+        SetupConversations(Conv("c1", agentId: "unknown-agent"));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+
+        cut.WaitForState(() => cut.FindAll(".activity-agent-chip").Count == 1);
+        cut.Find(".activity-agent-chip").TextContent.ShouldBe("unknown-agent");
     }
 
     [Fact]
@@ -548,7 +634,7 @@ public sealed class ActivityDashboardComponentTests : IDisposable
     }
 
     [Fact]
-    public void Long_title_is_length_bounded_in_the_dom_and_the_full_value_is_available_on_hover()
+    public void Long_title_is_complete_in_the_dom_and_the_full_value_is_available_on_hover()
     {
         var longTitle = string.Join(" ", Enumerable.Repeat("verbose", 200));
         SetupConversations(Conv("c1", title: longTitle));
@@ -557,7 +643,7 @@ public sealed class ActivityDashboardComponentTests : IDisposable
         cut.WaitForAssertion(() => cut.Find("[data-testid='activity-row']"));
 
         var title = cut.Find(".activity-conversation-title");
-        Assert.True(title.TextContent.Length <= ConversationLabel.MaxTitleLength);
+        Assert.Equal(longTitle, title.TextContent);
         Assert.Equal(longTitle, title.GetAttribute("title"));
     }
 
@@ -862,7 +948,83 @@ public sealed class ActivityDashboardComponentTests : IDisposable
             .Single(r => r.GetAttribute("data-conversation-id") == "c1");
         Assert.Empty(userFacingRow.QuerySelectorAll("[data-testid='activity-readonly-badge']"));
     }
-    // ---- #1888: live (running-session) surface ----------------------------
+    // ---- #1888/#3713: live (running-session) surface ----------------------
+
+    [Fact]
+    public void Session_roster_controls_badges_count_and_live_idle_filters()
+    {
+        SetupConversations(
+            Conv("active", activeSessionId: "s-active"),
+            Conv("sealed", activeSessionId: "s-sealed"),
+            Conv("expired", activeSessionId: "s-expired"),
+            Conv("absent", activeSessionId: "s-absent"));
+        SetupSessions(
+            ("s-active", "Active"),
+            ("s-sealed", "Sealed"),
+            ("s-expired", "Expired"));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.WaitForState(() => cut.FindAll("[data-testid='activity-row']").Count == 4);
+
+        Assert.Equal("1", cut.Find("[data-testid='activity-summary-live'] .activity-summary-value").TextContent.Trim());
+        var badge = Assert.Single(cut.FindAll("[data-testid='activity-live-badge']"));
+        Assert.Equal("s-active", badge.Closest("[data-testid='activity-row']")?.GetAttribute("data-session-id"));
+
+        cut.Find("[data-testid='activity-filter-live']").Change(nameof(ActivityLiveFilter.Live));
+        cut.WaitForState(() => RowIds(cut).SequenceEqual(new[] { "active" }));
+
+        cut.Find("[data-testid='activity-filter-live']").Change(nameof(ActivityLiveFilter.Idle));
+        cut.WaitForState(() => RowIds(cut).OrderBy(id => id, StringComparer.Ordinal)
+            .SequenceEqual(new[] { "absent", "expired", "sealed" }));
+    }
+
+    [Fact]
+    public void Empty_successful_roster_treats_an_unknown_pointer_as_idle()
+    {
+        SetupConversations(Conv("absent", activeSessionId: "s-absent"));
+        SetupSessions();
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.WaitForState(() => cut.FindAll("[data-testid='activity-row']").Count == 1);
+
+        Assert.Empty(cut.FindAll("[data-testid='activity-live-badge']"));
+        Assert.Equal("0", cut.Find("[data-testid='activity-summary-live'] .activity-summary-value").TextContent.Trim());
+    }
+
+    [Fact]
+    public void Stopped_session_pointer_remains_inspectable_without_a_live_badge()
+    {
+        SetupConversations(Conv("sealed", activeSessionId: "s-sealed"));
+        SetupSessions(("s-sealed", "Sealed"));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.WaitForState(() => cut.FindAll("[data-testid='activity-row']").Count == 1);
+
+        var row = cut.Find("[data-testid='activity-row']");
+        Assert.Empty(row.QuerySelectorAll("[data-testid='activity-live-badge']"));
+        Assert.Equal("s-sealed", row.GetAttribute("data-session-id"));
+        Assert.Contains("s-sealed", row.GetAttribute("title"));
+    }
+
+    [Fact]
+    public void Failed_session_roster_preserves_compatibility_liveness()
+    {
+        SetupConversations(Conv("running", activeSessionId: "s-unknown"));
+        _rest.GetSessionsAsync(
+                Arg.Any<string?>(),
+                Arg.Any<int?>(),
+                Arg.Any<int>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<SessionPageDto>>(_ => throw new HttpRequestException("session roster unavailable"));
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.WaitForState(() => cut.FindAll("[data-testid='activity-row']").Count == 1);
+
+        Assert.Single(cut.FindAll("[data-testid='activity-live-badge']"));
+        Assert.Equal("1", cut.Find("[data-testid='activity-summary-live'] .activity-summary-value").TextContent.Trim());
+        Assert.Empty(cut.FindAll("[data-testid='activity-error']"));
+    }
 
     /// <summary>
     /// A conversation with a running session renders the live badge; an idle one does not, so the
@@ -1105,6 +1267,77 @@ public sealed class ActivityDashboardComponentTests : IDisposable
             "j1",
             cut.Find("[data-testid='activity-source-id']").GetAttribute("title"),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Failed_cron_health_tooltip_includes_bounded_reason_and_job_id_without_visible_prose()
+    {
+        var longLine = new string('x', ActivityDashboardProjection.CronErrorDisplayLength + 20);
+        SetupConversations(Conv("c1", title: "Nightly", source: "Cron", sourceId: "j1"));
+        SetupCronJobs($$"""[{"id":"j1","name":"Nightly digest","lastRunStatus":"failed","lastRunError":"  {{longLine}}\nstack trace"}]""");
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.Find("[data-testid='activity-filter-cron']").Click();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[data-testid='activity-cron-health']")));
+
+        var dot = cut.Find("[data-testid='activity-cron-health']");
+        var title = dot.GetAttribute("title");
+        Assert.NotNull(title);
+        Assert.Contains("Job id: j1", title, StringComparison.Ordinal);
+        Assert.Contains($"Error: {new string('x', ActivityDashboardProjection.CronErrorDisplayLength)}\u2026", title, StringComparison.Ordinal);
+        Assert.DoesNotContain("stack trace", title, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', title);
+        Assert.DoesNotContain(longLine, cut.Markup, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("[data-testid='activity-cron-error']"));
+    }
+
+    [Theory]
+    [InlineData("ok")]
+    [InlineData(null)]
+    public void Nonfailed_cron_health_tooltip_suppresses_stale_error(string? status)
+    {
+        var statusJson = status is null ? "null" : $"\"{status}\"";
+        SetupConversations(Conv("c1", title: "Nightly", source: "Cron", sourceId: "j1"));
+        SetupCronJobs($$"""[{"id":"j1","lastRunStatus":{{statusJson}},"lastRunError":"stale failure"}]""");
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.Find("[data-testid='activity-filter-cron']").Click();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[data-testid='activity-cron-health']")));
+
+        Assert.DoesNotContain("stale failure", cut.Find("[data-testid='activity-cron-health']").GetAttribute("title"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Expired_and_disabled_jobs_override_ok_without_losing_last_run_outcome()
+    {
+        SetupConversations(
+            Conv("c-expired", title: "Expired", source: "Cron", sourceId: "expired"),
+            Conv("c-disabled", title: "Disabled", source: "Cron", sourceId: "disabled"),
+            Conv("c-live", title: "Live", source: "Cron", sourceId: "live"));
+        SetupCronJobs("""
+            [
+              {"id":"expired","name":"Expired job","enabled":true,"expiresAt":"2000-01-01T00:00:00Z","lastRunStatus":"ok"},
+              {"id":"disabled","name":"Disabled job","enabled":false,"expiresAt":"2999-01-01T00:00:00Z","lastRunStatus":"ok"},
+              {"id":"live","name":"Live job","enabled":true,"lastRunStatus":"ok"}
+            ]
+            """);
+
+        var cut = _ctx.Render<ActivityDashboard>();
+        cut.Find("[data-testid='activity-filter-cron']").Click();
+        cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("[data-testid='activity-cron-health']").Count));
+
+        var dots = cut.FindAll("[data-testid='activity-cron-health']")
+            .ToDictionary(dot => dot.GetAttribute("data-health")!, dot => dot);
+
+        Assert.Contains("expired", dots.Keys);
+        Assert.Contains("disabled", dots.Keys);
+        Assert.Contains("ok", dots.Keys);
+        Assert.DoesNotContain("activity-cron-health--ok", dots["expired"].GetAttribute("class"));
+        Assert.Contains("Last run status: ok", dots["expired"].GetAttribute("title"), StringComparison.Ordinal);
+        Assert.Contains("Expired:", dots["expired"].GetAttribute("title"), StringComparison.Ordinal);
+        Assert.Contains("Last run status: ok", dots["disabled"].GetAttribute("title"), StringComparison.Ordinal);
+        Assert.Contains("Disabled", dots["disabled"].GetAttribute("title"), StringComparison.Ordinal);
+        Assert.DoesNotContain("System", cut.Markup, StringComparison.Ordinal);
     }
 
     /// <summary>

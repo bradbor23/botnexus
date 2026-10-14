@@ -29,7 +29,8 @@ public sealed class WebhookInboundController(
     ILogger<WebhookInboundController> logger,
     WebhookInboundBodyGuard? bodyGuard = null,
     WebhookInboundQueue? inboundQueue = null,
-    IHostApplicationLifetime? applicationLifetime = null) : ControllerBase
+    IHostApplicationLifetime? applicationLifetime = null,
+    TimeProvider? timeProvider = null) : ControllerBase
 {
     private const string SignatureHeader = "X-BotNexus-Signature-256";
     private const int SyncTimeoutSeconds = 120;
@@ -308,8 +309,16 @@ public sealed class WebhookInboundController(
             return await RejectAsync(run, agentId, ex);
         }
 
-        if (!ticket.IsImmediate)
-            await MarkQueuedAsync(run, agentId);
+        try
+        {
+            if (!ticket.IsImmediate)
+                await MarkQueuedAsync(run, agentId);
+        }
+        catch
+        {
+            ticket.Dispose();
+            throw;
+        }
 
         var shutdown = ShutdownToken;
         var runTimeout = InboundQueue.RunTimeout;
@@ -318,10 +327,10 @@ public sealed class WebhookInboundController(
         // bounded, cancellable and observable, which the bare Task.Run it replaces was not.
         _ = Task.Run(async () =>
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
-            cts.CancelAfter(runTimeout);
             try
             {
+                using var deadline = new CancellationTokenSource(runTimeout, timeProvider ?? TimeProvider.System);
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown, deadline.Token);
                 using var lease = await ticket.WaitAsync(cts.Token);
                 await ExecuteAgentAsync(run, agentId, conversationId, message, cts.Token);
             }
@@ -338,6 +347,10 @@ public sealed class WebhookInboundController(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Background webhook run '{RunId}' failed.", run.Id);
+            }
+            finally
+            {
+                ticket.Dispose();
             }
         }, CancellationToken.None);
 
@@ -359,11 +372,13 @@ public sealed class WebhookInboundController(
             return await RejectAsync(run, agentId, ex);
         }
 
+        using var ticketOwnership = ticket;
         if (!ticket.IsImmediate)
             await MarkQueuedAsync(run, agentId);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, ShutdownToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(SyncTimeoutSeconds));
+        using var deadline = new CancellationTokenSource(
+            TimeSpan.FromSeconds(SyncTimeoutSeconds), timeProvider ?? TimeProvider.System);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, ShutdownToken, deadline.Token);
 
         try
         {
@@ -378,7 +393,23 @@ public sealed class WebhookInboundController(
 
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Agent run did not complete." });
         }
-        catch (WebhookNotDispatchedException ex) when (!ct.IsCancellationRequested)
+        catch (WebhookNotDispatchedException) when (ct.IsCancellationRequested)
+        {
+            // The request disappeared while this accepted run was still queued. Persist with a
+            // non-cancelled token before preserving the caller's cancellation contract; otherwise
+            // the durable row remains Queued forever even though the ticket returned its capacity.
+            try
+            {
+                await MarkCallerCancelledAsync(run, agentId);
+            }
+            finally
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            throw new InvalidOperationException("The caller cancellation token was expected to be cancelled.");
+        }
+        catch (WebhookNotDispatchedException ex)
         {
             // The deadline expired while still queued: the agent never saw this message at all.
             // Say so, rather than reporting a timeout of work that never started.
@@ -410,18 +441,26 @@ public sealed class WebhookInboundController(
             return await RejectAsync(run, agentId, ex);
         }
 
-        if (!ticket.IsImmediate)
-            await MarkQueuedAsync(run, agentId);
+        try
+        {
+            if (!ticket.IsImmediate)
+                await MarkQueuedAsync(run, agentId);
+        }
+        catch
+        {
+            ticket.Dispose();
+            throw;
+        }
 
         var shutdown = ShutdownToken;
         var runTimeout = InboundQueue.RunTimeout;
 
         _ = Task.Run(async () =>
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
-            cts.CancelAfter(runTimeout);
             try
             {
+                using var deadline = new CancellationTokenSource(runTimeout, timeProvider ?? TimeProvider.System);
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown, deadline.Token);
                 using (await ticket.WaitAsync(cts.Token))
                 {
                     await ExecuteAgentAsync(run, agentId, conversationId, message, cts.Token);
@@ -432,17 +471,21 @@ public sealed class WebhookInboundController(
             }
             catch (WebhookNotDispatchedException ex)
             {
-                await MarkTimedOutAsync(run, agentId, ex.Message);
+                await MarkCallbackTimedOutAsync(run, agentId, callbackUrl, shutdown, ex.Message);
             }
             catch (OperationCanceledException)
             {
-                await MarkTimedOutAsync(
-                    run, agentId,
+                await MarkCallbackTimedOutAsync(
+                    run, agentId, callbackUrl, shutdown,
                     $"Callback webhook run exceeded its {runTimeout.TotalSeconds:0}s ceiling or the gateway is shutting down.");
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Callback webhook run '{RunId}' failed.", run.Id);
+            }
+            finally
+            {
+                ticket.Dispose();
             }
         }, CancellationToken.None);
 
@@ -490,6 +533,23 @@ public sealed class WebhookInboundController(
     }
 
     /// <summary>
+    /// Records an accepted run abandoned by its caller before dispatch. Failed is the existing
+    /// terminal non-timeout state; the explicit error preserves cancellation provenance without a
+    /// persisted-status migration.
+    /// </summary>
+    private async Task MarkCallerCancelledAsync(WebhookRun run, AgentId agentId)
+    {
+        run.Status = WebhookRunStatus.Failed;
+        run.CompletedAt = DateTimeOffset.UtcNow;
+        run.Error = "The webhook caller cancelled the request before the queued delivery was dispatched.";
+        await runStore.UpdateAsync(run, CancellationToken.None);
+
+        logger.LogInformation(
+            "Webhook run '{RunId}' for agent '{AgentId}' was cancelled by its caller before dispatch.",
+            run.Id, agentId.Value);
+    }
+
+    /// <summary>
     /// Records a run that hit its deadline, whether it timed out waiting for the slot or while
     /// executing (#3851 AC3).
     /// </summary>
@@ -504,14 +564,28 @@ public sealed class WebhookInboundController(
             "Webhook run '{RunId}' for agent '{AgentId}' timed out: {Error}", run.Id, agentId.Value, error);
     }
 
+    /// <summary>
+    /// Persists the callback run's terminal timeout before attempting delivery. A live-host deadline
+    /// still owes the accepted caller one terminal callback; host shutdown does not start new
+    /// outbound work and remains bounded by the existing shutdown token.
+    /// </summary>
+    private async Task MarkCallbackTimedOutAsync(
+        WebhookRun run,
+        AgentId agentId,
+        string? callbackUrl,
+        CancellationToken shutdown,
+        string error)
+    {
+        await MarkTimedOutAsync(run, agentId, error);
+
+        if (!shutdown.IsCancellationRequested && !string.IsNullOrWhiteSpace(callbackUrl))
+            await DeliverCallbackAsync(run.Id, callbackUrl, shutdown);
+    }
+
     private async Task ExecuteAgentAsync(
         WebhookRun run, AgentId agentId, ConversationId conversationId,
         string message, CancellationToken ct)
     {
-        run.Status = WebhookRunStatus.Running;
-        run.StartedAt = DateTimeOffset.UtcNow;
-        await runStore.UpdateAsync(run, CancellationToken.None);
-
         try
         {
             // Build inbound message routing through the existing orchestrator —
@@ -534,7 +608,15 @@ public sealed class WebhookInboundController(
                 }
             };
 
-            var result = await orchestrator.AcceptAsync(inbound, ct);
+            var executionControl = new InboundExecutionControl(
+                ct,
+                async () =>
+                {
+                    run.Status = WebhookRunStatus.Running;
+                    run.StartedAt = DateTimeOffset.UtcNow;
+                    await runStore.UpdateAsync(run, CancellationToken.None);
+                });
+            var result = await orchestrator.AcceptAsync(inbound, executionControl, ct);
 
             // Extract session ID and agent response from the session store.
             var sessionId = result.Dispatches.FirstOrDefault()?.Resolution.SessionId;
@@ -554,6 +636,10 @@ public sealed class WebhookInboundController(
                 AgentResponse = agentResponse,
                 SessionId = sessionId
             };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

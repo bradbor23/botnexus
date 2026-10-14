@@ -116,7 +116,7 @@ public sealed class SoulTrigger(
         // the soul session records a durable, auditable tool trail rather than final text only.
         foreach (var toolEntry in TriggerToolAuditProjector.ProjectToolEntries(response))
             session.AddEntry(toolEntry);
-        session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = response.Content });
+        session.AddEntry(new SessionEntry { AgentRunId = response.AgentRunId, Role = MessageRole.Assistant, Content = response.Content });
 
         await sessions.SaveAsync(session, ct).ConfigureAwait(false);
 
@@ -155,10 +155,9 @@ public sealed class SoulTrigger(
                 // #2127: reflection-on-seal is a blocking run too - record its tool timeline durably.
                 foreach (var toolEntry in TriggerToolAuditProjector.ProjectToolEntries(reflectionResponse))
                     previousSession.AddEntry(toolEntry);
-                previousSession.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = reflectionResponse.Content });
-                // Reflection-on-seal is a second blocking run in this trigger. The first one is
-                // recorded at the top of the method; this one was not, so a soul session's last
-                // recorded prompt cost predated its final turn.
+                previousSession.AddEntry(new SessionEntry { AgentRunId = reflectionResponse.AgentRunId, Role = MessageRole.Assistant, Content = reflectionResponse.Content });
+
+                // #2522: same provider-usage stamp the streaming and blocking chat paths apply.
                 ProviderTokenUsageRecorder.Record(previousSession, reflectionResponse.Usage);
             }
 

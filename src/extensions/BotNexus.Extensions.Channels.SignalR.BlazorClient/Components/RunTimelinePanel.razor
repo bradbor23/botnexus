@@ -129,7 +129,10 @@
             if (agent is null)
                 return null;
 
-            var id = ConversationId ?? agent.ActiveConversationId;
+            // Route-derived, never ambient: the per-agent conversation marker is gone, so an
+            // unparameterised panel asks the store which conversation is actually displayed.
+            var id = ConversationId
+                ?? (Store as IDisplayedConversation)?.DisplayedConversationIdFor(AgentId);
             return id is not null ? agent.Conversations.GetValueOrDefault(id) : null;
         }
     }

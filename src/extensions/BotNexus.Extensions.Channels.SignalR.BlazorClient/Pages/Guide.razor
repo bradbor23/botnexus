@@ -5,6 +5,7 @@
 @inject HttpClient Http
 @inject IJSRuntime JS
 @inject NavigationManager Nav
+@implements IDisposable
 
 <PageTitle>BotNexus &mdash; Guide</PageTitle>
 
@@ -31,9 +32,13 @@
                 {
                     <div class="workspace-state t-caption">
                         Nothing matches “@_query”.
-                        @if (!_fullTextLoaded)
+                        @if (_indexingTask is { IsCompleted: false })
                         {
                             <span> Still indexing page contents…</span>
+                        }
+                        else if (!_fullTextLoaded)
+                        {
+                            <span> Search again to retry missing page contents.</span>
                         }
                     </div>
                 }
@@ -44,7 +49,7 @@
                         <button class="guide-nav-item @(s.Id == _currentId ? "active" : "")"
                                 data-testid="guide-nav-@s.Id"
                                 title="@s.Blurb"
-                                @onclick="() => SelectAsync(s.Id)">
+                                @onclick="() => SelectFromContentsAsync(s.Id)">
                             <span class="guide-nav-title t-label">@s.Title</span>
                             @if (!string.IsNullOrWhiteSpace(s.Blurb))
                             {
@@ -57,7 +62,8 @@
                             @foreach (var c in s.Children)
                             {
                                 <button class="guide-nav-item is-child @(c.Id == _currentId ? "active" : "")"
-                                        @onclick="() => SelectAsync(c.Id)">
+                                        data-testid="guide-nav-@c.Id"
+                                        @onclick="() => SelectFromContentsAsync(c.Id)">
                                     <span class="guide-nav-title t-caption">@c.Title</span>
                                 </button>
                             }
@@ -95,13 +101,17 @@
     private string? _html;
     private string? _error;
     private bool _isLoading;
+    private long _selectionGeneration;
     private string _query = string.Empty;
 
     // Page bodies, fetched once so search can look inside them. Titles alone are a poor index:
     // the answer to "why is my agent 404ing" is in a page called "Troubleshooting", which the
     // word "404" would never match.
     private readonly Dictionary<string, string> _bodies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _disposeCancellation = new();
+    private Task? _indexingTask;
     private bool _fullTextLoaded;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -115,14 +125,28 @@
             return;
         }
 
-        await SelectAsync(SectionId ?? _index?.Sections.FirstOrDefault()?.Id);
+        var initialId = ResolvePage(SectionId)?.Id ?? _index?.Sections.FirstOrDefault()?.Id;
+        if (initialId is not null && !string.Equals(SectionId, initialId, StringComparison.OrdinalIgnoreCase))
+            NavigateToSection(initialId, replaceHistoryEntry: true);
+
+        await SelectAsync(initialId);
     }
 
     // A deep link arriving while the page is already open changes the parameter, not the component.
     protected override async Task OnParametersSetAsync()
     {
-        if (_index is not null && SectionId is { Length: > 0 } && SectionId != _currentId)
-            await SelectAsync(SectionId);
+        if (_index is null)
+            return;
+
+        var requestedId = ResolvePage(SectionId)?.Id ?? _index.Sections.FirstOrDefault()?.Id;
+        if (requestedId is null)
+            return;
+
+        if (!string.Equals(SectionId, requestedId, StringComparison.OrdinalIgnoreCase))
+            NavigateToSection(requestedId, replaceHistoryEntry: true);
+
+        if (!string.Equals(requestedId, _currentId, StringComparison.OrdinalIgnoreCase))
+            await SelectAsync(requestedId);
     }
 
     private IReadOnlyList<GuideSection> Matches
@@ -158,21 +182,43 @@
 
     private async Task LoadAllBodiesAsync()
     {
-        _fullTextLoaded = true;
+        var indexingTask = _indexingTask ??= IndexMissingBodiesAsync(_disposeCancellation.Token);
+        StateHasChanged();
+
+        try
+        {
+            await indexingTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_indexingTask, indexingTask))
+                _indexingTask = null;
+        }
+    }
+
+    private async Task IndexMissingBodiesAsync(CancellationToken cancellationToken)
+    {
+        var failed = false;
         foreach (var (id, file) in AllPages())
         {
             if (_bodies.ContainsKey(id))
                 continue;
+
             try
             {
-                _bodies[id] = await Http.GetStringAsync($"guide/{file}");
+                _bodies[id] = await Http.GetStringAsync($"guide/{file}", cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {
-                // A page that will not load is simply not searchable. The nav still lists it, and
-                // selecting it surfaces the real error.
+                failed = true;
             }
         }
+
+        _fullTextLoaded = !failed && AllPages().All(page => _bodies.ContainsKey(page.Id));
         StateHasChanged();
     }
 
@@ -186,18 +232,43 @@
         }
     }
 
-    private async Task SelectAsync(string? id)
+    private async Task SelectFromContentsAsync(string id)
+    {
+        var page = ResolvePage(id);
+        if (page is null)
+            return;
+
+        // Start selection first so a synchronous route callback observes the new current section and
+        // does not create a duplicate request. Explicit contents navigation remains a history entry.
+        var selection = SelectAsync(page.Value.Id);
+        NavigateToSection(page.Value.Id, replaceHistoryEntry: false);
+        await selection;
+    }
+
+    private void NavigateToSection(string id, bool replaceHistoryEntry) =>
+        Nav.NavigateTo($"guide/{Uri.EscapeDataString(id)}", replace: replaceHistoryEntry);
+
+    private (string Id, string File)? ResolvePage(string? id)
     {
         if (_index is null || string.IsNullOrWhiteSpace(id))
-            return;
+            return null;
 
         var page = AllPages().FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (page.File is null)
+        return page.File is null ? null : page;
+    }
+
+    private async Task SelectAsync(string? id)
+    {
+        var page = ResolvePage(id);
+        if (page is null)
             return;
 
-        _currentId = page.Id;
-        _currentTopId = _index.Sections
-            .FirstOrDefault(s => s.Id == page.Id || (s.Children?.Any(c => c.Id == page.Id) ?? false))?.Id;
+        var resolvedPage = page.Value;
+
+        var selectionGeneration = ++_selectionGeneration;
+        _currentId = resolvedPage.Id;
+        _currentTopId = _index!.Sections
+            .FirstOrDefault(s => s.Id == resolvedPage.Id || (s.Children?.Any(c => c.Id == resolvedPage.Id) ?? false))?.Id;
 
         _isLoading = true;
         _error = null;
@@ -206,28 +277,55 @@
 
         try
         {
-            var markdown = _bodies.TryGetValue(page.Id, out var cached)
+            var markdown = _bodies.TryGetValue(resolvedPage.Id, out var cached)
                 ? cached
-                : await Http.GetStringAsync($"guide/{page.File}");
-            _bodies[page.Id] = markdown;
+                : await Http.GetStringAsync($"guide/{resolvedPage.File}");
+            _bodies[resolvedPage.Id] = markdown;
 
-            // Same sanitising renderer the chat transcript uses. It fails closed: with marked or
-            // DOMPurify missing it returns escaped text rather than raw HTML. Unlike chat, a
-            // source newline is not a line break: the docs are hard-wrapped, and keeping those
-            // breaks pins every paragraph to the source width however wide the window is.
-            _html = await JS.InvokeAsync<string>("BotNexus.renderMarkdown", markdown, new { breaks = false });
+            if (selectionGeneration != _selectionGeneration)
+                return;
+
+            // Guide links need the current source path and complete index to resolve relative
+            // documents into in-app routes. The renderer still shares the chat sanitization path
+            // and fails closed when marked or DOMPurify is unavailable.
+            var html = await JS.InvokeAsync<string>(
+                "BotNexus.renderGuideMarkdown",
+                markdown,
+                resolvedPage.File,
+                AllPages().Select(page => new GuideLinkTarget(page.Id, page.File)).ToArray());
+            if (selectionGeneration != _selectionGeneration)
+                return;
+
+            _html = html;
         }
         catch (Exception ex)
         {
-            _error = $"Could not load this page: {ex.Message}";
+            if (selectionGeneration == _selectionGeneration)
+                _error = $"Could not load this page: {ex.Message}";
         }
         finally
         {
-            _isLoading = false;
+            if (selectionGeneration == _selectionGeneration)
+                _isLoading = false;
         }
 
-        StateHasChanged();
+        if (selectionGeneration == _selectionGeneration)
+            StateHasChanged();
     }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _disposeCancellation.Cancel();
+        _disposeCancellation.Dispose();
+    }
+
+    private sealed record GuideLinkTarget(
+        [property: JsonPropertyName("id")] string Id,
+        [property: JsonPropertyName("file")] string File);
 
     private sealed class GuideIndex
     {

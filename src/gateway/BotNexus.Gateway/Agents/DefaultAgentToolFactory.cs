@@ -35,20 +35,20 @@ public sealed class DefaultAgentToolFactory : IAgentToolFactory
     private readonly string? _platformConfigPath;
     private readonly string[]? _shellCommand;
     private readonly ReadToolOptions? _readToolOptions;
-    private readonly IReadOnlyList<string>? _toolEnvironmentPassThrough;
+    private readonly LocalChildEnvironmentPolicy _environmentPolicy;
 
     public DefaultAgentToolFactory(
         ShellPreference shellPreference = ShellPreference.Auto,
         string? platformConfigPath = null,
         string[]? shellCommand = null,
         ReadToolOptions? readToolOptions = null,
-        IReadOnlyList<string>? toolEnvironmentPassThrough = null)
+        LocalChildEnvironmentPolicy? environmentPolicy = null)
     {
+        _environmentPolicy = environmentPolicy ?? LocalChildEnvironmentPolicy.Default;
         _shellPreference = shellPreference;
         _platformConfigPath = platformConfigPath;
         _shellCommand = shellCommand;
         _readToolOptions = readToolOptions;
-        _toolEnvironmentPassThrough = toolEnvironmentPassThrough;
     }
 
     public IReadOnlyList<IAgentTool> CreateTools(WorkingDir workingDirectory, IPathValidator? pathValidator = null, string[]? shellCommand = null)
@@ -88,7 +88,8 @@ public sealed class DefaultAgentToolFactory : IAgentToolFactory
             new ReadTool(resolved, effectivePathValidator, fileSystem, _readToolOptions),
             new WriteTool(resolved, effectivePathValidator, fileSystem),
             new EditTool(resolved, effectivePathValidator, fileSystem),
-            new ShellTool(workingDirectory: resolved, shellPreference: _shellPreference, shellCommand: effectiveShellCommand, environmentPassThrough: _toolEnvironmentPassThrough),
+            new ShellTool(workingDirectory: resolved, shellPreference: _shellPreference, shellCommand: effectiveShellCommand,
+                environmentPolicy: _environmentPolicy),
             new ListDirectoryTool(resolved, effectivePathValidator, fileSystem),
             new GrepTool(resolved, effectivePathValidator, fileSystem),
             new GlobTool(resolved, effectivePathValidator, fileSystem),

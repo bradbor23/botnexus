@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using BotNexus.Gateway.Configuration.Store;
 using Microsoft.Extensions.Configuration;
@@ -29,8 +28,9 @@ namespace BotNexus.Gateway.Configuration;
 /// would therefore produce a key space subtly different from <c>AddJsonFile</c> over the same
 /// document - arrays would arrive as one opaque JSON string instead of indexed children, and binding
 /// a <c>List&lt;T&gt;</c> would silently yield an empty list. So the entries are rehydrated to a
-/// document and handed to the framework's own JSON parser: the key semantics are then identical to
-/// the JSON provider by construction rather than by inspection.
+/// document and handed to the framework's own JSON parser. As with the platform JSON sources,
+/// exact model-capacity maps are excluded from that projection and retained in the accepted raw
+/// document for post-configuration; all other keys use ordinary framework semantics.
 /// </para>
 /// <para>
 /// <b>Fail-safe reload, matching #2358.</b> A store that is missing, unreadable, or corrupt retains
@@ -40,20 +40,43 @@ namespace BotNexus.Gateway.Configuration;
 /// here.
 /// </para>
 /// </remarks>
-public sealed class SqliteConfigurationProvider : ConfigurationProvider
+public sealed class SqliteConfigurationProvider : ConfigurationProvider, IDisposable, IAcceptedRawConfigDocumentProvider
 {
+    private static readonly TimeSpan DefaultDetectionInterval = TimeSpan.FromSeconds(1);
+
     private readonly IConfigStore _store;
     private readonly Action<string, Exception?>? _onLoadFailure;
+    private readonly TimeSpan _detectionInterval;
+    private readonly TimeProvider _timeProvider;
+    private readonly bool _startChangeDetection;
+    private readonly SemaphoreSlim _reloadLock = new(1, 1);
+    private readonly CancellationTokenSource _disposeToken = new();
+    private Task? _changeDetectionTask;
+    private long _appliedRevision = -1;
+    private ConfigDocument? _acceptedRawDocument;
 
     /// <summary>Creates a provider over <paramref name="store"/>.</summary>
     /// <param name="store">The configuration store to read.</param>
     /// <param name="onLoadFailure">
     /// Invoked with a human-readable reason when a load is rejected and the previous data retained.
     /// </param>
-    public SqliteConfigurationProvider(IConfigStore store, Action<string, Exception?>? onLoadFailure = null)
+    public SqliteConfigurationProvider(
+        IConfigStore store,
+        Action<string, Exception?>? onLoadFailure = null,
+        TimeSpan? detectionInterval = null,
+        bool startChangeDetection = true,
+        TimeProvider? timeProvider = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _onLoadFailure = onLoadFailure;
+        _detectionInterval = detectionInterval ?? DefaultDetectionInterval;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _startChangeDetection = startChangeDetection;
+
+        if (_detectionInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(detectionInterval), "Detection interval must be positive.");
+        }
     }
 
     /// <summary>
@@ -80,42 +103,95 @@ public sealed class SqliteConfigurationProvider : ConfigurationProvider
     /// <inheritdoc />
     public override void Load()
     {
-        // Synchronous by contract. Safe to block: Load runs either during host construction (nothing
-        // else executing) or from a change-token callback on a background thread with no
-        // synchronization context to deadlock against.
-        var previous = Data;
+        // Synchronous by contract. Safe to block during host construction because no synchronization
+        // context is involved. Revision and entries come from one SQLite read transaction.
+        _ = TryApplySnapshotAsync(notify: false, CancellationToken.None).GetAwaiter().GetResult();
 
-        IReadOnlyDictionary<string, ConfigEntry> entries;
-        try
+        if (_startChangeDetection && _store.SupportsExternalChangeDetection && _changeDetectionTask is null)
         {
-            entries = _store.ReadEntriesAsync().GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            // Retain last-known-good rather than clearing and rethrowing (#2358). On the reload path
-            // a throw here reaches a background thread and takes the process down.
-            _onLoadFailure?.Invoke("Configuration store could not be read; retaining previous values.", ex);
-            Data = previous;
-            return;
-        }
-
-        try
-        {
-            var document = ConfigDocumentRehydrator.Rehydrate(entries);
-            Data = Parse(document);
-        }
-        catch (Exception ex)
-        {
-            _onLoadFailure?.Invoke(
-                "Configuration store contents could not be materialised; retaining previous values.", ex);
-            Data = previous;
+            _changeDetectionTask = DetectChangesAsync(_disposeToken.Token);
         }
     }
 
     /// <summary>
-    /// Produces provider data with key semantics identical to <c>AddJsonFile</c> over the same
-    /// document, by running the framework's own <see cref="JsonConfigurationProvider"/> over the
-    /// rehydrated document rather than reimplementing the dotted-to-colon and array-indexing rules.
+    /// Reads one coherent store snapshot and publishes a reload only when a newer revision was
+    /// materialised successfully. Duplicate checks are coalesced by revision.
+    /// </summary>
+    public Task<bool> CheckForChangesAsync(CancellationToken cancellationToken = default)
+        => TryApplySnapshotAsync(notify: true, cancellationToken);
+
+    private async Task<bool> TryApplySnapshotAsync(bool notify, CancellationToken cancellationToken)
+    {
+        await _reloadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ConfigStoreSnapshot snapshot;
+            try
+            {
+                snapshot = await _store.ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _onLoadFailure?.Invoke("Configuration store could not be read; retaining previous values.", ex);
+                return false;
+            }
+
+            if (snapshot.Revision <= _appliedRevision)
+            {
+                return false;
+            }
+
+            IDictionary<string, string?> candidate;
+            ConfigDocument rawDocument;
+            try
+            {
+                var rehydrated = ConfigDocumentRehydrator.Rehydrate(snapshot.Entries);
+                rawDocument = new ConfigDocument(rehydrated.DeepClone().AsObject());
+                candidate = Parse(rehydrated);
+            }
+            catch (Exception ex)
+            {
+                _onLoadFailure?.Invoke(
+                    "Configuration store contents could not be materialised; retaining previous values.", ex);
+                return false;
+            }
+
+            Data = candidate;
+            _acceptedRawDocument = rawDocument;
+            _appliedRevision = snapshot.Revision;
+            if (notify)
+            {
+                OnReload();
+            }
+
+            return true;
+        }
+        finally
+        {
+            _reloadLock.Release();
+        }
+    }
+
+    private async Task DetectChangesAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(_detectionInterval, _timeProvider);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await CheckForChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Provider disposal owns shutdown; cancellation is the normal terminal state.
+        }
+    }
+
+    /// <summary>
+    /// Produces ordinary binding data with the framework's <see cref="JsonConfigurationProvider"/>.
+    /// Exact model-capacity maps use the same raw-document exception as platform JSON sources;
+    /// dotted-to-colon and array-indexing rules for all other values remain the framework's job.
     /// </summary>
     /// <remarks>
     /// The framework's parser type is <c>internal</c>, so the supported way to reach it is to drive a
@@ -126,8 +202,8 @@ public sealed class SqliteConfigurationProvider : ConfigurationProvider
     /// </remarks>
     private static IDictionary<string, string?> Parse(JsonObject document)
     {
-        var bytes = Encoding.UTF8.GetBytes(document.ToJsonString());
-        var source = new JsonStreamConfigurationSource { Stream = new MemoryStream(bytes) };
+        using var stream = ExactModelCapacityConfiguration.CreateBindingStream(new ConfigDocument(document));
+        var source = new JsonStreamConfigurationSource { Stream = stream };
         var provider = (JsonStreamConfigurationProvider)source.Build(new ConfigurationBuilder());
         provider.Load();
 
@@ -161,9 +237,17 @@ public sealed class SqliteConfigurationProvider : ConfigurationProvider
     /// change-token plumbing does the rest.
     /// </summary>
     public void NotifyChanged()
+        => _ = CheckForChangesAsync().GetAwaiter().GetResult();
+
+    ConfigDocument? IAcceptedRawConfigDocumentProvider.GetAcceptedRawDocument()
+        => _acceptedRawDocument?.DeepClone();
+
+    /// <inheritdoc />
+    public void Dispose()
     {
-        Load();
-        OnReload();
+        // Do not dispose the semaphore while an in-flight check may still release it. Cancelling the
+        // provider-owned token stops the timer and lets the short SQLite read finish safely.
+        _disposeToken.Cancel();
     }
 }
 

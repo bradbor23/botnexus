@@ -19,6 +19,7 @@
          only after app.css parses would guarantee a visible swap. latin-ext is deliberately
          NOT preloaded - it is fetched on demand via unicode-range. -->
     <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="_content/BotNexus.Extensions.Channels.SignalR.BlazorClient.Core/css/icons.css" />
     <link rel="stylesheet" href="css/app.css?v=ds52" />
     <script>
         // Applied BEFORE first paint and before Blazor boots. The WASM runtime takes seconds to
@@ -167,6 +168,8 @@
     <script src="js/desktopNotifications.js?v=ds52"></script>
     <script src="js/conversationSwitcher.js?v=ds52"></script>
     <script src="js/navToolbar.js?v=ds52"></script>
+    <script src="js/modalFocus.js?v=ds52"></script>
+    <script src="js/conversationActionMenu.js?v=ds52"></script>
     <script>
         // Clipboard helper for copy-to-clipboard via JS interop
         window.BotNexus = window.BotNexus || {};
@@ -175,6 +178,15 @@
                 return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; });
             }
             return Promise.resolve(false);
+        };
+        window.BotNexus.downloadFile = function (fileName, contentType, base64Content) {
+            var bytes = Uint8Array.from(atob(base64Content), function (c) { return c.charCodeAt(0); });
+            var url = URL.createObjectURL(new Blob([bytes], { type: contentType }));
+            var anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = fileName;
+            anchor.click();
+            URL.revokeObjectURL(url);
         };
     </script>
     <script src="js/bootDiagnostics.js?v=ds52"></script>

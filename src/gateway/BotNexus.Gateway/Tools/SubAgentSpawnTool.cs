@@ -12,18 +12,22 @@ public sealed class SubAgentSpawnTool(
     ISubAgentManager subAgentManager,
     AgentId agentId,
     SessionId sessionId,
-    ConversationId conversationId) : IAgentTool
+    ConversationId conversationId) : BotNexus.Agent.Core.ExtensionPoints.ToolExecution.IContextAwareAgentTool
 {
     public string Name => "spawn_subagent";
     public string Label => "Spawn Sub-Agent";
 
+    public TimeSpan? DefaultTimeout => TimeSpan.FromSeconds(610);
+    public ToolTimeoutArgument? TimeoutArgument => new("subAgentSpawnTimeoutSeconds", ToolTimeoutUnit.Seconds);
+
     public Tool Definition => new(
         Name,
-        "Spawn a background sub-agent to work on a delegated task.",
+        "Spawn a sub-agent and await its terminal result. Set background=true to return admission immediately; use manage_subagent wait to join it.",
         JsonDocument.Parse("""
             {
               "type": "object",
               "properties": {
+                "background": { "type": "boolean", "description": "Return admission immediately only when true. Default false awaits the result." },
                 "task": { "type": "string", "description": "Task prompt for the sub-agent." },
                 "name": { "type": "string", "description": "Optional friendly label for this sub-agent RUN. Accepted in every mode, including alongside targetAgentId - it titles the run, it does not customise the agent's descriptor." },
                 "model": { "type": "string", "description": "Optional model override for the sub-agent run." },
@@ -35,7 +39,7 @@ public sealed class SubAgentSpawnTool(
                 },
                 "systemPrompt": { "type": "string", "description": "Optional system prompt override." },
                 "maxTurns": { "type": "integer", "minimum": 1, "description": "Optional max turn budget." },
-                "timeoutSeconds": { "type": "integer", "minimum": 1, "description": "Optional timeout in seconds. Values above the configured ceiling are clamped down." }
+                "timeoutSeconds": { "type": "integer", "minimum": 1, "description": "Optional timeout in seconds. Omission uses the configured default for the spawning parent. Values above the configured ceiling are clamped down." }
                 ,
                 "archetype": {
                   "type": "string",
@@ -68,14 +72,35 @@ public sealed class SubAgentSpawnTool(
         if (string.IsNullOrWhiteSpace(task))
             throw new ArgumentException("Missing required argument: task.");
 
-        return Task.FromResult(arguments);
+        if (arguments.ContainsKey("timeoutSeconds") && ReadInt(arguments, "timeoutSeconds", 0) < 1)
+            throw new ArgumentException("Argument 'timeoutSeconds' must be at least 1 when supplied.");
+
+        // Preparation is read-only: no child admission, tools, or persistence before audit/policy.
+        // Never trust a caller-supplied internal hint or replace the raw request: the latter must
+        // still reach admission unchanged so clamp and advisory disclosures remain truthful.
+        var prepared = new Dictionary<string, object?>(arguments);
+        prepared["subAgentSpawnTimeoutSeconds"] = subAgentManager.ResolveSpawnTimeoutSeconds(
+            agentId, ReadInt(arguments, "timeoutSeconds", 0));
+        return Task.FromResult<IReadOnlyDictionary<string, object?>>(prepared);
     }
 
-    public async Task<AgentToolResult> ExecuteAsync(
+    public Task<AgentToolResult> ExecuteAsync(
         string toolCallId,
         IReadOnlyDictionary<string, object?> arguments,
         CancellationToken cancellationToken = default,
         AgentToolUpdateCallback? onUpdate = null)
+        => ExecuteCoreAsync(toolCallId, arguments, cancellationToken, null);
+
+    /// <inheritdoc />
+    public Task<AgentToolResult> ExecuteAsync(
+        BotNexus.Agent.Core.ExtensionPoints.ToolExecution.ToolExecutionContext context,
+        CancellationToken cancellationToken = default,
+        AgentToolUpdateCallback? onUpdate = null)
+        => ExecuteCoreAsync(context.ToolCallRequest.Id, context.ValidatedArgs, cancellationToken,
+            context.AgentRunId is { } run ? BotNexus.Domain.Primitives.AgentRunId.From(run.Value) : null);
+
+    private async Task<AgentToolResult> ExecuteCoreAsync(string toolCallId,
+        IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken, BotNexus.Domain.Primitives.AgentRunId? agentRunId)
     {
         var task = ReadString(arguments, "task")
             ?? throw new ArgumentException("Missing required argument: task.");
@@ -114,7 +139,7 @@ public sealed class SubAgentSpawnTool(
             ParentSessionId = sessionId,
             Task = task,
             MaxTurns = ReadInt(arguments, "maxTurns", 30),
-            TimeoutSeconds = ReadInt(arguments, "timeoutSeconds", 600),
+            TimeoutSeconds = ReadInt(arguments, "timeoutSeconds", 0),
             InheritedConversationId = conversationId,
             // #2338: binds the child conversation back to the exact spawn_subagent call so a channel
             // can render the run as an expandable card in place of it, instead of guessing the
@@ -150,43 +175,61 @@ public sealed class SubAgentSpawnTool(
                 Status = "failed"
             }, JsonOptions));
         }
-        // #2789: the clamp field is emitted ONLY when a ceiling actually reduced the request, so
-        // its presence is the signal to re-scope. Serialized through two shapes rather than a
-        // nullable property because a field that is always there (even as null) is boilerplate a
-        // calling model stops reading, which is the failure this issue exists to fix.
-        var result = spawned.BudgetClamp is { } clamp
-            ? JsonSerializer.Serialize(new
-            {
-                spawned.SubAgentId,
-                SessionId = spawned.ChildSessionId,
-                ConversationId = spawned.ChildConversationId,
-                spawned.Status,
-                spawned.Name,
-                BudgetClamp = new
-                {
-                    clamp.PolicyTier,
-                    clamp.MaxTurnsClamped,
-                    clamp.RequestedMaxTurns,
-                    clamp.EffectiveMaxTurns,
-                    clamp.TimeoutSecondsClamped,
-                    clamp.RequestedTimeoutSeconds,
-                    clamp.EffectiveTimeoutSeconds,
-                    Notice = "Your requested budget exceeded a configured ceiling and was reduced. "
-                        + "Scope the delegated task to the effective values above, not the requested ones."
-                }
-            }, JsonOptions)
-            : JsonSerializer.Serialize(new
-            {
-                spawned.SubAgentId,
-                SessionId = spawned.ChildSessionId,
-                // #2338: the run's own conversation id. This is what a channel expands to load the
-                // child's transcript on demand; it is deliberately NOT the caller's conversation id.
-                ConversationId = spawned.ChildConversationId,
-                spawned.Status,
-                spawned.Name
-            }, JsonOptions);
+        // Optional warning fields are added only when actionable. A plain in-range spawn keeps the
+        // compact historical result, while clamp and advisory disclosures can compose independently.
+        var result = new Dictionary<string, object?>
+        {
+            ["subAgentId"] = spawned.SubAgentId,
+            ["sessionId"] = spawned.ChildSessionId,
+            // #2338: the run's own conversation id. This is what a channel expands to load the
+            // child's transcript on demand; it is deliberately NOT the caller's conversation id.
+            ["conversationId"] = spawned.ChildConversationId,
+            ["status"] = spawned.Status,
+            ["name"] = spawned.Name
+        };
 
-        return TextResult(result);
+        if (spawned.BudgetClamp is { } clamp)
+        {
+            result["budgetClamp"] = new
+            {
+                clamp.PolicyTier,
+                clamp.MaxTurnsClamped,
+                clamp.RequestedMaxTurns,
+                clamp.EffectiveMaxTurns,
+                clamp.TimeoutSecondsClamped,
+                clamp.RequestedTimeoutSeconds,
+                clamp.EffectiveTimeoutSeconds,
+                Notice = "Your requested budget exceeded a configured ceiling and was reduced. "
+                    + "Scope the delegated task to the effective values above, not the requested ones."
+            };
+        }
+
+        if (spawned.BudgetAdvisory is { } advisory)
+        {
+            result["budgetAdvisory"] = new
+            {
+                advisory.MaxTurnsAboveThreshold,
+                advisory.MaxTurnsThreshold,
+                advisory.EffectiveMaxTurns,
+                advisory.TimeoutSecondsAboveThreshold,
+                advisory.TimeoutSecondsThreshold,
+                advisory.EffectiveTimeoutSeconds,
+                Warning = "The effective budget exceeds a configured staging advisory. Delegate one coherent stage "
+                    + "and split multi-stage work into separate sub-agent runs. This warning did not change the effective budget."
+            };
+        }
+
+        if (!ReadBool(arguments, "background"))
+        {
+            var terminal = await subAgentManager.WaitAsync(spawned.SubAgentId, sessionId, cancellationToken).ConfigureAwait(false);
+            result["status"] = terminal.Status;
+            result["resultSummary"] = SubAgentRunDetail.FromLive(terminal).ResultSummary;
+            result["result"] = SubAgentRunDetail.FromLive(terminal).Result;
+            var payload = JsonSerializer.Serialize(result, JsonOptions);
+            return TextResult(await subAgentManager.ConsumeResultAsync(terminal, toolCallId, Name,
+                JsonSerializer.Serialize(arguments), payload, cancellationToken, agentRunId).ConfigureAwait(false));
+        }
+        return TextResult(JsonSerializer.Serialize(result, JsonOptions));
     }
 
     private static SubAgentSpawnMode BuildSpawnMode(

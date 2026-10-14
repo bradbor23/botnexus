@@ -9,6 +9,7 @@ using BotNexus.Agent.Providers.Copilot.Responses;
 using BotNexus.Agent.Providers.Core.Diagnostics;
 using BotNexus.Agent.Providers.Core.Models;
 using BotNexus.Agent.Providers.Core.Streaming;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BotNexus.Agent.Providers.Copilot.Tests.Responses;
@@ -58,6 +59,126 @@ public sealed class CopilotResponsesTransportTests
         websocket.OfType<DoneEvent>().Single().Message.Usage.TotalTokens.ShouldBe(15);
     }
 
+    [Fact]
+    public async Task Gpt56_OpaqueReasoningWithoutSummary_ReportsUnavailableWithoutExposingEncryptedContent()
+    {
+        // Sanitized from the captured gpt-5.6-sol Copilot Responses shape: the provider reports a
+        // reasoning item, opaque encrypted content, and non-zero reasoning-token usage, but emits
+        // no reasoning-summary event. Payload bytes are synthetic and must never reach content or
+        // diagnostics.
+        const string opaquePayload = "synthetic-encrypted-reasoning-4154";
+        var frames = new[]
+        {
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"reason_1\",\"type\":\"reasoning\",\"summary\":[]}}",
+            $"{{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_1\",\"type\":\"reasoning\",\"encrypted_content\":\"{opaquePayload}\",\"summary\":[]}}}}",
+            "{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"answer\"}",
+            "{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8,\"total_tokens\":18,\"output_tokens_details\":{\"reasoning_tokens\":6}}}}"
+        };
+
+        var (websocket, sse) = await ParseThroughCopilotTransportsAsync(frames);
+
+        Project(websocket).ShouldBe(Project(sse));
+        var warning = websocket.OfType<WarningEvent>().ShouldHaveSingleItem();
+        warning.Code.ShouldBe(WarningCodes.ReasoningSummaryUnavailable);
+        warning.Message.ShouldContain("summary not provided");
+        warning.Message.ShouldNotContain(opaquePayload);
+        websocket.OfType<ThinkingDeltaEvent>().ShouldBeEmpty();
+        var final = websocket.OfType<DoneEvent>().ShouldHaveSingleItem().Message;
+        var opaque = final.Content.OfType<ThinkingContent>().ShouldHaveSingleItem();
+        opaque.Thinking.ShouldBeEmpty();
+        var signature = Assert.IsType<string>(opaque.ThinkingSignature);
+        signature.ShouldContain(opaquePayload);
+    }
+
+    [Fact]
+    public async Task Gpt56_TerminalReasoningSummaryWithoutDeltas_ReachesFinalThinkingContent()
+    {
+        var frames = new[]
+        {
+            "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"reason_1\",\"type\":\"reasoning\",\"summary\":[]}}",
+            "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"reason_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Displayable summary\"}]}}",
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}"
+        };
+
+        var (websocket, sse) = await ParseThroughCopilotTransportsAsync(frames);
+
+        Project(websocket).ShouldBe(Project(sse));
+        websocket.OfType<WarningEvent>().ShouldBeEmpty();
+        websocket.OfType<ThinkingDeltaEvent>().ShouldHaveSingleItem().Delta.ShouldBe("Displayable summary");
+        websocket.OfType<DoneEvent>().ShouldHaveSingleItem().Message.Content
+            .OfType<ThinkingContent>().ShouldHaveSingleItem().Thinking.ShouldBe("Displayable summary");
+    }
+
+    [Fact]
+    public async Task RawReasoningTextDelta_IsNotExposedAsDisplayableThinking()
+    {
+        var frames = new[]
+        {
+            "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"reason_1\",\"type\":\"reasoning\",\"summary\":[]}}",
+            "{\"type\":\"response.reasoning_text.delta\",\"item_id\":\"reason_1\",\"content_index\":0,\"delta\":\"hidden chain of thought\"}",
+            "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"reason_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\",\"summary\":[]}}",
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"output_tokens\":5,\"total_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":5}}}}"
+        };
+
+        var parsed = await ParseJsonEventsAsync(frames);
+
+        parsed.OfType<ThinkingDeltaEvent>().ShouldBeEmpty();
+        parsed.OfType<WarningEvent>().ShouldHaveSingleItem().Code
+            .ShouldBe(WarningCodes.ReasoningSummaryUnavailable);
+        parsed.OfType<DoneEvent>().ShouldHaveSingleItem().Message.Content
+            .OfType<ThinkingContent>().ShouldAllBe(block => block.Thinking.Length == 0);
+        JsonSerializer.Serialize(parsed).ShouldNotContain("hidden chain of thought");
+    }
+
+    [Fact]
+    public async Task Gpt56_WebSocketAndSse_ProduceEquivalentDeltasAndFinalText()
+    {
+        // Transport parity acceptance: reproduce via the actual capability-aware WebSocket path AND
+        // the SSE fallback for the same frame sequence, asserting both the emitted TextDeltaEvent
+        // values and the final accumulated assistant text on each path. The model advertises both
+        // endpoints so Auto selects WebSocket; the SSE run pins the transport explicitly so the two
+        // paths are compared head-to-head.
+        //
+        // #3442: the frames no longer carry a synthetic CRLF prefix. This test used to assert both
+        // transports stripped it (#2119), but mitm captures contain 0 raw CR bytes across 3,025
+        // Copilot deltas - the framing was never on the wire. The parity property is untouched and
+        // is what the test was always really worth: two transports, one assembled result.
+        var frames = new[]
+        {
+            "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"Under\"}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"stood\"}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\" now\"}",
+            "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}"
+        };
+        var model = MapModel(["/responses", "ws:/responses"], "gpt-5.6-sol");
+
+        var socket = new StubWebSocketTransport(messages: frames);
+        var websocketProvider = new CopilotResponsesProvider(
+            new HttpClient(new RecordingHandler(_ =>
+                throw new InvalidOperationException("SSE fallback must not run for a clean WebSocket stream."))),
+            NullLogger<CopilotResponsesProvider>.Instance,
+            socket);
+        var sseProvider = new CopilotResponsesProvider(
+            new HttpClient(new RecordingHandler(_ => SseResponse(frames))),
+            NullLogger<CopilotResponsesProvider>.Instance);
+
+        var websocketEvents = await CollectAsync(
+            websocketProvider.Stream(model, BuildContext(), Options()));
+        var sseEvents = await CollectAsync(
+            sseProvider.Stream(model, BuildContext(), SseOptions()));
+
+        string[] expectedDeltas = ["Under", "stood", " now"];
+        websocketEvents.OfType<TextDeltaEvent>().Select(x => x.Delta).ShouldBe(expectedDeltas);
+        sseEvents.OfType<TextDeltaEvent>().Select(x => x.Delta).ShouldBe(expectedDeltas);
+
+        websocketEvents.OfType<DoneEvent>().Single().Message.Content.OfType<TextContent>().Single().Text
+            .ShouldBe("Understood now");
+        sseEvents.OfType<DoneEvent>().Single().Message.Content.OfType<TextContent>().Single().Text
+            .ShouldBe("Understood now");
+    }
 
     [Fact]
     public async Task JsonEventParser_PreservesStandaloneNewlineDelta()
@@ -147,6 +268,30 @@ public sealed class CopilotResponsesTransportTests
 
         handler.RequestCount.ShouldBe(0);
         result.StopReason.ShouldBe(StopReason.Error);
+        result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello");
+    }
+
+
+    [Fact]
+    public async Task WebSocketFailureAfterSemanticOutput_RedactsPeerDiagnosticAndPreservesContext()
+    {
+        const string token = "synthetic-stream-token-4119";
+        var socket = new StubWebSocketTransport(messages:
+        [
+            "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"hello\"}"
+        ], receiveFailure: new WebSocketException("connection rejected " + token));
+        var provider = new CopilotResponsesProvider(
+            new HttpClient(new RecordingHandler(_ => throw new InvalidOperationException("SSE replay must be suppressed."))),
+            NullLogger<CopilotResponsesProvider>.Instance, socket, new StubRedactor());
+
+        var result = await provider.Stream(MapModel(["/responses", "ws:/responses"]), BuildContext(), Options())
+            .GetResultAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        var error = result.ErrorMessage;
+        error.ShouldBe("connection rejected [REDACTED]");
+        error.ShouldNotBeNull();
+        error.ShouldNotContain(token);
         result.Content.OfType<TextContent>().Single().Text.ShouldBe("hello");
     }
 
@@ -385,6 +530,24 @@ public sealed class CopilotResponsesTransportTests
             : null));
     }
 
+    private static async Task<(List<AssistantMessageEvent> WebSocket, List<AssistantMessageEvent> Sse)>
+        ParseThroughCopilotTransportsAsync(IReadOnlyList<string> frames)
+    {
+        var model = MapModel(["/responses", "ws:/responses"], "gpt-5.6-sol");
+        var websocketProvider = new CopilotResponsesProvider(
+            new HttpClient(new RecordingHandler(_ =>
+                throw new InvalidOperationException("SSE fallback must not run for the WebSocket fixture."))),
+            NullLogger<CopilotResponsesProvider>.Instance,
+            new StubWebSocketTransport(messages: frames));
+        var sseProvider = new CopilotResponsesProvider(
+            new HttpClient(new RecordingHandler(_ => SseResponse(frames))),
+            NullLogger<CopilotResponsesProvider>.Instance);
+
+        return (
+            await CollectAsync(websocketProvider.Stream(model, BuildContext(), Options())),
+            await CollectAsync(sseProvider.Stream(model, BuildContext(), SseOptions())));
+    }
+
     private static async Task<List<AssistantMessageEvent>> ParseSseAsync(IEnumerable<string> json)
     {
         var payload = SsePayload(json);
@@ -443,6 +606,42 @@ public sealed class CopilotResponsesTransportTests
             RequestCount++;
             return Task.FromResult(response(request));
         }
+    }
+
+    /// <summary>
+    /// Captures level + rendered message so a test can assert on WHAT was logged, not merely that the
+    /// code path ran. #3674 AC3 is a statement about operator-visible severity and wording, so the log
+    /// is the assertion surface and <c>NullLogger</c> cannot express it.
+    /// </summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get { lock (_entries) return [.. _entries]; }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_entries) _entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
+
+    private sealed class StubRedactor : BotNexus.Gateway.Abstractions.Security.ISecretRedactor
+    {
+        public string Redact(string input) => input.Replace("synthetic-stream-token-4119", "[REDACTED]", StringComparison.Ordinal);
+        public string RedactForExternalDelivery(string input) => Redact(input);
     }
 
     private sealed class StubWebSocketTransport(

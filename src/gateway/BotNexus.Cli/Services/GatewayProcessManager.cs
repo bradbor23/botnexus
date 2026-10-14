@@ -17,18 +17,13 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     // Timeout for WaitForExit after Kill(). Defaults to 5 seconds in production;
     // injectable for tests to simulate the timeout path without actually waiting.
     private readonly TimeSpan _waitForExitTimeout;
-
     /// <summary>
-    /// How long the gateway gets to shut itself down after being asked, before it is killed.
-    ///
-    /// <remarks>
-    /// Longer than the post-kill wait on purpose: this budget covers real shutdown work — the
-    /// TRUNCATE WAL checkpoint among it — whereas the post-kill wait only covers the kernel
-    /// reaping a process that has already been shot. Generous enough that a busy gateway is not
-    /// killed for being slow, bounded so a redeploy cannot hang on one that is wedged.
-    /// </remarks>
+    /// How long a gateway is given to act on a shutdown request before it is killed. Named rather
+    /// than inlined so the stop tests can pin "the stated budget" instead of a magic number.
     /// </summary>
-    internal static readonly TimeSpan GracefulStopTimeout = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan DefaultGracefulStopTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly TimeSpan _gracefulStopTimeout;
     // Allows tests to inject a custom WaitForExit implementation to simulate timeout scenarios
     // without relying on OS-level process termination timing.
     private readonly Func<Process, int, bool>? _waitForExitOverride;
@@ -37,6 +32,7 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     // Injectable process enumeration for PID-file-less discovery (#2772). Tests supply fakes so no
     // real process is ever inspected or signalled.
     private readonly Func<IEnumerable<IGatewayProcessHandle>> _processEnumerator;
+    private readonly Func<string?, string, CancellationToken, Task<bool>> _plannedShutdownRequester;
     // Default health URL used for status probing when no override is provided.
     internal const string DefaultHealthUrl = GatewayDefaults.LoopbackListenUrl + "/health";
 
@@ -45,15 +41,19 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         ILogger<GatewayProcessManager> logger,
         TimeSpan? waitForExitTimeout = null,
         Func<Process, int, bool>? waitForExitOverride = null,
+        TimeSpan? gracefulStopTimeout = null,
         HttpClient? probeClient = null,
-        Func<IEnumerable<IGatewayProcessHandle>>? processEnumerator = null)
+        Func<IEnumerable<IGatewayProcessHandle>>? processEnumerator = null,
+        Func<string?, string, CancellationToken, Task<bool>>? plannedShutdownRequester = null)
     {
         _processEnumerator = processEnumerator ?? LiveProcessHandle.EnumerateAll;
         _healthChecker = healthChecker;
         _logger = logger;
         _waitForExitTimeout = waitForExitTimeout ?? TimeSpan.FromSeconds(5);
+        _gracefulStopTimeout = gracefulStopTimeout ?? DefaultGracefulStopTimeout;
         _waitForExitOverride = waitForExitOverride;
         _probeClient = probeClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        _plannedShutdownRequester = plannedShutdownRequester ?? SendPlannedShutdownRequestAsync;
     }
 
     /// <summary>
@@ -254,6 +254,22 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// Falls back to <c>dotnet &lt;dll&gt;</c> when no apphost is found next to the DLL.
     /// </para>
     /// </summary>
+    internal static string? ResolveApphostPath(string executablePath)
+    {
+        if (!executablePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            return executablePath;
+
+        var directory = Path.GetDirectoryName(executablePath);
+        var stem = Path.GetFileNameWithoutExtension(executablePath);
+        if (directory is null || string.IsNullOrEmpty(stem))
+            return null;
+
+        var candidate = OperatingSystem.IsWindows()
+            ? Path.Combine(directory, stem + ".exe")
+            : Path.Combine(directory, stem);
+        return File.Exists(candidate) ? candidate : null;
+    }
+
     internal (string FileName, string Arguments) ResolveLaunchTarget(GatewayStartOptions options)
     {
         var extraArgs = options.Arguments ?? string.Empty;
@@ -264,21 +280,11 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
             if (!string.IsNullOrWhiteSpace(dllPath)
                 && dllPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
             {
-                // The apphost sits beside the DLL with the same base name. On Windows it carries a
-                // .exe suffix; on Unix it is extension-less. Probe both so this works cross-platform.
-                var dir = Path.GetDirectoryName(dllPath) ?? string.Empty;
-                var baseName = Path.GetFileNameWithoutExtension(dllPath);
-                var candidates = OperatingSystem.IsWindows()
-                    ? new[] { Path.Combine(dir, baseName + ".exe") }
-                    : new[] { Path.Combine(dir, baseName) };
-
-                foreach (var apphost in candidates)
+                var apphost = ResolveApphostPath(dllPath);
+                if (apphost is not null)
                 {
-                    if (File.Exists(apphost))
-                    {
-                        _logger.LogDebug("Launching gateway via apphost executable {Apphost}", apphost);
-                        return (apphost, extraArgs.Trim());
-                    }
+                    _logger.LogDebug("Launching gateway via apphost executable {Apphost}", apphost);
+                    return (apphost, extraArgs.Trim());
                 }
             }
         }
@@ -319,15 +325,26 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     }
 
     /// <summary>
-    /// Stops the gateway process by sending a hard kill signal, waiting up to 5 seconds
-    /// for exit, then cleaning up the PID file.
+    /// Stops the gateway process by requesting graceful termination, waiting up to 10 seconds,
+    /// then escalating to a hard kill and waiting up to 5 seconds before cleaning up the PID file.
     /// <para>
     /// The PID is only signalled after its recorded identity has been verified against the live
     /// process (issue #2369). A recycled or unverifiable PID is cleaned up and reported as
     /// not-running — it is NEVER killed.
     /// </para>
     /// </summary>
-    public async Task<GatewayStopResult> StopAsync(string? homePath = null, string? gatewayBinaryPath = null, CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    public Task<bool> RequestPlannedShutdownAsync(
+        string? homePath,
+        string gatewayUrl,
+        CancellationToken cancellationToken = default)
+        => _plannedShutdownRequester(homePath, gatewayUrl, cancellationToken);
+
+    public async Task<GatewayStopResult> StopAsync(
+        string? homePath = null,
+        string? gatewayBinaryPath = null,
+        CancellationToken cancellationToken = default,
+        string? gatewayUrl = null)
     {
         var pidFilePath = ResolvePidFilePath(homePath);
         var (verifiedProcess, record, staleReason) = await ResolveVerifiedProcessAsync(pidFilePath);
@@ -371,27 +388,41 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         }
 
         var pid = discoveredByPath ? handle.Id : record!.Pid;
-        var escalatedAfterTimeout = false;
-        _logger.LogInformation(
-            "Stopping gateway process {Pid} ({Source})", pid, discoveredByPath ? "discovered by binary path" : "from PID file");
+        var source = discoveredByPath ? "discovered by binary path" : "from PID file";
+        var escalated = false;
 
         try
         {
-            // Ask first, kill second.
-            //
-            // A SIGKILL gives the gateway no chance to run its shutdown path, which is where the
-            // TRUNCATE WAL checkpoint happens - so every subsequent start logged "previous gateway
-            // run terminated uncleanly" about a stop this CLI had performed on purpose.
-            //
-            // Escalation is not optional. A gateway wedged badly enough to ignore SIGTERM still has
-            // to stop, because the caller is usually a redeploy that is about to overwrite the
-            // extension assemblies this process holds mapped.
-            if (handle.RequestGracefulStop())
+            if (gatewayUrl is not null &&
+                await _plannedShutdownRequester(homePath, gatewayUrl, cancellationToken).ConfigureAwait(false))
             {
                 _logger.LogInformation(
-                    "Asked gateway {Pid} to shut down; waiting up to {Seconds}s", pid, GracefulStopTimeout.TotalSeconds);
+                    "Requested planned host shutdown for gateway process {Pid} at {GatewayUrl}",
+                    pid,
+                    gatewayUrl);
+                var gracefulTimeoutMs = (int)_gracefulStopTimeout.TotalMilliseconds;
+                if (await Task.Run(() => handle.WaitForExit(gracefulTimeoutMs), cancellationToken))
+                {
+                    await CleanupPidFileAsync(pidFilePath);
+                    return new GatewayStopResult(
+                        Success: true,
+                        Message: $"Gateway stopped gracefully (PID {pid})",
+                        Outcome: GatewayStopOutcome.Stopped);
+                }
 
-                if (handle.WaitForExit((int)GracefulStopTimeout.TotalMilliseconds))
+                escalated = true;
+                _logger.LogWarning(
+                    "Gateway process {Pid} did not exit after accepting planned shutdown within {Timeout}s; escalating",
+                    pid,
+                    _gracefulStopTimeout.TotalSeconds);
+            }
+
+            if (!escalated && handle.RequestGracefulStop())
+            {
+                _logger.LogInformation(
+                    "Requested graceful stop for gateway process {Pid} ({Source})", pid, source);
+                var gracefulTimeoutMs = (int)_gracefulStopTimeout.TotalMilliseconds;
+                if (await Task.Run(() => handle.WaitForExit(gracefulTimeoutMs), cancellationToken))
                 {
                     await CleanupPidFileAsync(pidFilePath);
                     return new GatewayStopResult(
@@ -400,11 +431,11 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
                         Outcome: GatewayStopOutcome.Stopped);
                 }
 
-                // Say the number. "Did not stop" invites a guess at how long anyone waited.
+                escalated = true;
                 _logger.LogWarning(
-                    "Gateway {Pid} did not exit within {Seconds}s of being asked; killing it",
-                    pid, GracefulStopTimeout.TotalSeconds);
-                escalatedAfterTimeout = true;
+                    "Gateway process {Pid} did not exit within graceful timeout {Timeout}s; escalating to a forced kill",
+                    pid,
+                    _gracefulStopTimeout.TotalSeconds);
             }
 
             handle.Kill();
@@ -420,14 +451,13 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         }
         catch (Win32Exception ex)
         {
-            _logger.LogError(ex, "Failed to kill gateway process {Pid}", pid);
+            _logger.LogError(ex, "Failed to stop gateway process {Pid}", pid);
             return new GatewayStopResult(
                 Success: false,
-                Message: $"Failed to kill gateway process {pid}: {ex.Message}",
+                Message: $"Failed to stop gateway process {pid}: {ex.Message}",
                 Outcome: GatewayStopOutcome.Failed);
         }
 
-        // Wait for process to exit after kill
         var timeoutMs = (int)_waitForExitTimeout.TotalMilliseconds;
         var exited = await Task.Run(() => handle.WaitForExit(timeoutMs), cancellationToken);
         if (!exited)
@@ -451,13 +481,11 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         // An escalated stop is still a stop, but the operator should know the gateway ignored the
         // request: it means shutdown work did not finish, and the next start may report an unclean
         // previous run for a reason that is real rather than self-inflicted.
-        var message = escalatedAfterTimeout
-            ? $"Gateway killed (PID {pid}) after it ignored a shutdown request for {GracefulStopTimeout.TotalSeconds:0}s"
-            : $"Gateway stopped (PID {pid})";
-
         return new GatewayStopResult(
             Success: true,
-            Message: message,
+            Message: escalated
+                ? $"Gateway stopped (PID {pid}) after graceful timeout {_gracefulStopTimeout.TotalSeconds}s and forced kill"
+                : $"Gateway stopped (PID {pid})",
             Outcome: GatewayStopOutcome.Stopped);
     }
 
@@ -543,68 +571,41 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     }
 
     /// <summary>
-    /// Queries the current status of the gateway by reading the PID file, verifying that the recorded
-    /// process identity still matches the live process, and computing uptime. A PID that has been
-    /// recycled onto a foreign process, or a legacy PID file with no identity, reports NotRunning
-    /// rather than falsely claiming the gateway is alive (issue #2369).
+    /// Queries current gateway status without deleting or rewriting diagnostic state. A verified PID
+    /// record is preferred; otherwise a supplied binary path can positively identify a live gateway.
     /// </summary>
+    public Task<GatewayStatus> GetStatusAsync(string? homePath, CancellationToken cancellationToken) =>
+        GetStatusAsync(homePath, gatewayBinaryPath: null, healthUrl: null, cancellationToken);
+
     public async Task<GatewayStatus> GetStatusAsync(
         string? homePath = null,
         string? gatewayBinaryPath = null,
+        string? healthUrl = null,
         CancellationToken cancellationToken = default)
     {
         var pidFilePath = ResolvePidFilePath(homePath);
-        // Read-only: see the cleanupStale remarks. `status` must not destroy what `stop` needs.
-        var (process, record, staleReason) = await ResolveVerifiedProcessAsync(pidFilePath, cleanupStale: false);
+        var (process, record, staleReason) = await ResolveVerifiedProcessAsync(pidFilePath, cleanupInvalidPidFile: false);
+        var discoveredProcess = process is null ? FindProcessByBinaryPath(gatewayBinaryPath) : null;
+        var pid = process is not null ? record!.Pid : discoveredProcess?.Id;
 
-        if (process is null)
+        if (pid is null)
         {
-            // No usable PID file is NOT evidence of a dead gateway. scripts/gateway-restart.sh and
-            // the systemd unit both launch the binary directly and write no PID file at all, so
-            // this is the ORDINARY state of a healthy deployment, not an edge case. StopAsync and
-            // IsRunning have resolved it by binary-path identity since #2772; status could not,
-            // because it took no binary path to resolve it with -- so it reported a live gateway
-            // serving the portal as "not running" (#2841-family defect, one surface later).
-            var discovered = FindProcessByBinaryPath(gatewayBinaryPath);
-            if (discovered is not null)
-            {
-                var discoveredProbe = await ProbeGatewayAsync(ResolveHealthUrl(), CancellationToken.None);
-                return new GatewayStatus(
-                    State: GatewayState.Running,
-                    Pid: discovered.Id,
-                    // The handle exposes no start time, so uptime is genuinely unknown here rather
-                    // than zero. Reporting a fabricated 00:00:00 would be worse than saying so.
-                    Uptime: null,
-                    Message: record is null
-                        ? "Running (discovered by binary path; no PID file)"
-                        : $"Running (discovered by binary path; {staleReason})",
-                    ProbeResult: discoveredProbe);
-            }
-
-            if (record is null)
-            {
-                return new GatewayStatus(
-                    State: GatewayState.NotRunning,
-                    Pid: null,
-                    Uptime: null,
-                    Message: "No PID file found");
-            }
-
             return new GatewayStatus(
                 State: GatewayState.NotRunning,
                 Pid: null,
                 Uptime: null,
-                Message: staleReason ?? $"Process {record.Pid} is not the gateway");
+                Message: record is null ? "No PID file found" : staleReason ?? $"Process {record.Pid} is not the gateway");
         }
 
-        // Uptime comes from the verified identity record, which is by definition the real start time.
-        TimeSpan? uptime = record!.StartTimeUtc is null
-            ? null
-            : DateTime.UtcNow - record.StartTimeUtc.Value;
+        // Binary-path discovery proves identity but does not expose a trustworthy start timestamp.
+        TimeSpan? uptime = process is not null && record?.StartTimeUtc is not null
+            ? DateTime.UtcNow - record.StartTimeUtc.Value
+            : null;
 
-        // Probe the gateway HTTP endpoint to distinguish running+authenticated vs
-        // running+no-auth (returns 401/403) vs running+unreachable (wrong port/not bound).
-        var probeResult = await ProbeGatewayAsync(ResolveHealthUrl(), CancellationToken.None);
+        var effectiveHealthUrl = string.IsNullOrWhiteSpace(healthUrl)
+            ? ResolveHealthUrl(homePath)
+            : healthUrl;
+        var probeResult = await ProbeGatewayAsync(effectiveHealthUrl, cancellationToken);
 
         var message = probeResult switch
         {
@@ -614,13 +615,13 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
             GatewayProbeResult.ReachableNoAuth =>
                 "Running but authentication is not configured or token is invalid (HTTP 401/403)",
             GatewayProbeResult.Unreachable =>
-                "Running (process alive) but HTTP endpoint is not reachable at the default port",
+                $"Running (process alive) but HTTP endpoint is not reachable at {effectiveHealthUrl}",
             _ => "Running (probe inconclusive)"
         };
 
         return new GatewayStatus(
             State: GatewayState.Running,
-            Pid: record!.Pid,
+            Pid: pid,
             Uptime: uptime,
             Message: message,
             ProbeResult: probeResult);
@@ -636,11 +637,14 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// <c>scripts/gateway-restart.sh</c> documents, and the same resolver <c>start</c> already uses
     /// to pick its readiness target.
     /// </remarks>
-    private string ResolveHealthUrl()
+    private string ResolveHealthUrl(string? homePath)
     {
         try
         {
-            return $"{GatewayProbeUrlResolver.ResolveFromConfig(GatewayDefaults.ListenPort).TrimEnd('/')}/health";
+            var resolved = GatewayProbeUrlResolver.ResolveFromHome(
+                fallbackPort: GatewayDefaults.ListenPort,
+                homePath: homePath ?? PlatformConfigLoader.DefaultHomePath);
+            return $"{resolved.TrimEnd('/')}/health";
         }
         catch (Exception ex)
         {
@@ -664,6 +668,40 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// <see cref="GatewayProbeResult.ReachableNoAuth"/> on 401/403,
     /// and <see cref="GatewayProbeResult.Unreachable"/> on connection failure or timeout.
     /// </summary>
+    private static async Task<bool> SendPlannedShutdownRequestAsync(
+        string? homePath,
+        string gatewayUrl,
+        CancellationToken cancellationToken)
+    {
+        var resolution = GatewayClientFactory.Resolve(
+            gatewayUrl,
+            TimeSpan.FromSeconds(5),
+            explicitToken: null,
+            GatewayClientFactory.DefaultCredentialSource(homePath));
+        if (resolution.Client is null)
+        {
+            return false;
+        }
+
+        using var client = resolution.Client;
+        try
+        {
+            using var response = await client.PostAsync(
+                "api/gateway/shutdown",
+                content: null,
+                cancellationToken).ConfigureAwait(false);
+            return response.StatusCode == System.Net.HttpStatusCode.Accepted;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     internal async Task<GatewayProbeResult> ProbeGatewayAsync(string healthUrl, CancellationToken cancellationToken)
     {
         try
@@ -714,16 +752,11 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// The live, positively-identified process, the parsed record (null when there was no PID file),
     /// and a human-readable reason when the PID file was considered stale.
     /// </returns>
-    /// <param name="cleanupStale">
-    /// Whether an unusable PID file may be deleted. False for read-only callers: <c>status</c> is
-    /// the command an operator reaches for when something already looks wrong, and deleting the PID
-    /// file there removes the only record <c>stop</c> can use, turning a diagnostic into damage.
-    /// </param>
     private async Task<(Process? Process, GatewayPidRecord? Record, string? StaleReason)> ResolveVerifiedProcessAsync(
         string pidFilePath,
-        bool cleanupStale = true)
+        bool cleanupInvalidPidFile = true)
     {
-        var record = await ReadPidRecordAsync(pidFilePath, cleanupStale);
+        var record = await ReadPidRecordAsync(pidFilePath, cleanupInvalidPidFile);
         if (record is null)
             return (null, null, null);
 
@@ -736,10 +769,12 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
         }
         catch
         {
-            _logger.LogDebug("Gateway process {Pid} no longer exists", record.Pid);
-            if (cleanupStale)
+            _logger.LogDebug("Gateway process {Pid} no longer exists (cleaning stale PID)", record.Pid);
+            if (cleanupInvalidPidFile)
                 await CleanupPidFileAsync(pidFilePath);
-            return (null, record, $"process {record.Pid} no longer exists{StaleSuffix(cleanupStale)}");
+            return (null, record, cleanupInvalidPidFile
+                ? $"process {record.Pid} no longer exists (cleaned stale PID)"
+                : $"process {record.Pid} no longer exists");
         }
 
         var verification = GatewayPidFile.Verify(record, process);
@@ -753,18 +788,22 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
                 _logger.LogWarning(
                     "PID {Pid} was recycled onto a different process; refusing to signal it and cleaning the stale PID file",
                     record.Pid);
-                if (cleanupStale)
+                if (cleanupInvalidPidFile)
                     await CleanupPidFileAsync(pidFilePath);
-                return (null, record, $"PID {record.Pid} was recycled onto a different process{StaleSuffix(cleanupStale)}");
+                return (null, record, cleanupInvalidPidFile
+                    ? $"PID {record.Pid} was recycled onto a different process (cleaned stale PID)"
+                    : $"PID {record.Pid} was recycled onto a different process");
 
             default:
                 // Legacy bare-PID file, or the OS would not disclose the live process identity.
                 _logger.LogWarning(
                     "PID file for {Pid} carries no verifiable process identity; refusing to signal it and cleaning the unverifiable PID file",
                     record.Pid);
-                if (cleanupStale)
+                if (cleanupInvalidPidFile)
                     await CleanupPidFileAsync(pidFilePath);
-                return (null, record, $"PID {record.Pid} could not be verified as the gateway{StaleSuffix(cleanupStale)}");
+                return (null, record, cleanupInvalidPidFile
+                    ? $"PID {record.Pid} could not be verified as the gateway (cleaned unverifiable stale PID)"
+                    : $"PID {record.Pid} could not be verified as the gateway");
         }
     }
 
@@ -772,7 +811,7 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
     /// Reads and parses the PID file. Accepts both the identity-bearing JSON form and the legacy
     /// bare-PID form. Returns null when the file is missing or its contents are unusable.
     /// </summary>
-    private async Task<GatewayPidRecord?> ReadPidRecordAsync(string pidFilePath, bool cleanupStale = true)
+    private async Task<GatewayPidRecord?> ReadPidRecordAsync(string pidFilePath, bool cleanupInvalidPidFile = true)
     {
         if (!File.Exists(pidFilePath))
             return null;
@@ -784,7 +823,7 @@ public sealed class GatewayProcessManager : IGatewayProcessManager
                 return record;
 
             _logger.LogWarning("PID file contains invalid data: {Content}", content);
-            if (cleanupStale)
+            if (cleanupInvalidPidFile)
                 await CleanupPidFileAsync(pidFilePath);
             return null;
         }

@@ -30,8 +30,10 @@ internal sealed class AgentConfigurationHostedService(
     private readonly Lock _sync = new();
     private readonly List<IDisposable> _watchers = [];
     private readonly Dictionary<IAgentConfigurationSource, IReadOnlyList<AgentDescriptor>> _latestSourceDescriptors = [];
+    private readonly Dictionary<IAgentConfigurationSource, long> _sourceRevisions = [];
     private readonly Dictionary<string, AgentDescriptor> _appliedConfigDescriptors = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string> _codeBasedAgentIds = new(StringComparer.OrdinalIgnoreCase);
+    private bool _starting;
 
     private CancellationTokenSource? _debounceCts;
     private Task _debounceTask = Task.CompletedTask;
@@ -45,25 +47,21 @@ internal sealed class AgentConfigurationHostedService(
             .Select(descriptor => descriptor.AgentId.Value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        lock (_sync)
+            _starting = true;
+
         foreach (var source in _sources)
         {
-            // Subscribe BEFORE loading, and per source rather than in a second pass (#140).
-            //
-            // Loading everything first and only then attaching watchers left a window in which a
-            // config reload fired with no listener attached. The notification was simply dropped,
-            // and because the underlying IOptionsMonitor had already advanced its CurrentValue,
-            // the source's own change-suppression fingerprint then agreed with the NEW config
-            // while the registry still held the OLD one -- so every later notification carrying
-            // that content was suppressed as unchanged and the registry stayed stale until the
-            // process restarted. That is the intermittent "bundled agent never registers" report.
-            //
-            // Subscribing first cannot lose the notification, and the load that follows reads the
-            // already-advanced value, so both paths converge on the same descriptors. A callback
-            // that arrives mid-startup only records descriptors and schedules the debounced apply,
-            // so it is safe before the remaining sources have loaded.
             var watcher = source.Watch(descriptors => OnSourceChanged(source, descriptors));
             if (watcher is not null)
                 _watchers.Add(watcher);
+        }
+
+        foreach (var source in _sources)
+        {
+            long revisionBeforeLoad;
+            lock (_sync)
+                revisionBeforeLoad = GetSourceRevision(source);
 
             IReadOnlyList<AgentDescriptor> descriptors;
             try
@@ -80,9 +78,15 @@ internal sealed class AgentConfigurationHostedService(
 
             lock (_sync)
             {
-                _latestSourceDescriptors[source] = descriptors;
-                ApplyMergedDescriptors();
+                if (GetSourceRevision(source) == revisionBeforeLoad)
+                    _latestSourceDescriptors[source] = descriptors;
             }
+        }
+
+        lock (_sync)
+        {
+            _starting = false;
+            ApplyMergedDescriptors();
         }
     }
 
@@ -104,9 +108,14 @@ internal sealed class AgentConfigurationHostedService(
         lock (_sync)
         {
             _latestSourceDescriptors[source] = descriptors;
-            ScheduleDebouncedApply();
+            _sourceRevisions[source] = GetSourceRevision(source) + 1;
+            if (!_starting)
+                ScheduleDebouncedApply();
         }
     }
+
+    private long GetSourceRevision(IAgentConfigurationSource source)
+        => _sourceRevisions.GetValueOrDefault(source);
 
     /// <summary>
     /// Resets the debounce timer. When the timer fires after the configured quiet period,

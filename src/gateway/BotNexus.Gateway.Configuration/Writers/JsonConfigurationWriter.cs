@@ -59,6 +59,10 @@ public sealed class JsonConfigurationWriter : IConfigurationWriter
     public string Name => "json";
 
     /// <inheritdoc />
+    public IReadOnlyList<ConfigurationBackendDescriptor> Backends =>
+        [new(Name, _configPath)];
+
+    /// <inheritdoc />
     /// <remarks>
     /// Patches the document on disk rather than writing a projected object over it. A key absent from
     /// the change set is never visited, so it survives regardless of whether any CLR type models it -
@@ -78,7 +82,7 @@ public sealed class JsonConfigurationWriter : IConfigurationWriter
 
         var current = await ReadDocumentAsync(cancellationToken).ConfigureAwait(false);
         var next = current ?? [];
-        ConfigDocumentPatcher.Apply(next, changes);
+        next.Apply(changes);
         await WriteAsync(next, reason, cancellationToken).ConfigureAwait(false);
     }
 

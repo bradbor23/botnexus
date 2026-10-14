@@ -33,6 +33,20 @@ public sealed class ToolSubprocessEnvironmentFenceArchitectureTests : Architectu
     [
         "ShellTool.cs",
         "ExecTool.cs",
+    ];
+
+    /// <summary>
+    /// Spawn sites that USED to run agent-composed commands and no longer start a process at all.
+    /// </summary>
+    /// <remarks>
+    /// <c>AgentBrowserProcessRunner</c> refuses every browser command before process start, because
+    /// connection-bound destination enforcement is unavailable for that transport. Keeping it in
+    /// <see cref="MustSanitiseEnvironment"/> would fail on a file that cannot leak - but dropping it
+    /// silently would let it start spawning again unnoticed, so it is named here and asserted to
+    /// have no spawn site. If it regains one, the repository-wide sweep reports it as unclassified.
+    /// </remarks>
+    private static readonly string[] RetiredSpawnSites =
+    [
         "AgentBrowserProcessRunner.cs",
     ];
 
@@ -56,16 +70,22 @@ public sealed class ToolSubprocessEnvironmentFenceArchitectureTests : Architectu
         "StdioMcpTransport.cs",
         "ProcessGitCommandRunner.cs",
         "QmdCliBackend.cs",
-        "BuildOutputStreamer.cs",
         "InstallCommand.cs",
         "ServeCommand.cs",
         "UpdateCommand.cs",
         "GatewayProcessManager.cs",
-        "LaunchdServiceManager.cs",
         "CommandCronAction.cs",
         "KeyringSecretProvider.cs",
         "UpdateCheckService.cs",
         "PathUtils.cs",
+        // Four more fixed `git` invocations, same class as ProcessGitCommandRunner above: the
+        // executable is git and every argument is composed by this repository from release
+        // metadata, operator-configured repository URLs, or a worktree path - never from model
+        // output. Exempt is not harmless; it is recorded so the next person can revisit it.
+        "ReleaseSelector.cs",
+        "LocalReleaseHistoryService.cs",
+        "ExtensionRepositoryCloneReconciler.cs",
+        "SubAgentWorktreeSnapshotService.cs",
     ];
 
     private IReadOnlyList<string> SpawnSiteFiles() =>
@@ -86,13 +106,20 @@ public sealed class ToolSubprocessEnvironmentFenceArchitectureTests : Architectu
                 $"{fileName} should still construct a ProcessStartInfo; if it moved, this fence stopped guarding it.");
 
             var source = File.ReadAllText(path);
+            // Two accepted sanitisers, because the repository has two of them and both clear the
+            // inherited block before repopulating it from a reviewed allow-list:
+            // ToolProcessEnvironment.ApplyTo, and LocalChildEnvironment.Apply/Populate, which also
+            // applies the Windows case-insensitive name comparison. Anything else - including a
+            // policy object merely held as a field - does not count: the call has to be here.
             var sanitises = source.Contains("ToolProcessEnvironment.ApplyTo(", StringComparison.Ordinal)
+                            || source.Contains("LocalChildEnvironment.Apply(", StringComparison.Ordinal)
+                            || source.Contains("LocalChildEnvironment.Populate(", StringComparison.Ordinal)
                             || source.Contains("Environment.Clear()", StringComparison.Ordinal);
 
             sanitises.ShouldBeTrue(
                 $"{fileName} runs commands an agent composed, so it must replace the inherited "
-                + "environment (ToolProcessEnvironment.ApplyTo) rather than let the child read the "
-                + "gateway's provider keys and env: credentials.");
+                + "environment (ToolProcessEnvironment.ApplyTo or LocalChildEnvironment.Apply) "
+                + "rather than let the child read the gateway's provider keys and env: credentials.");
         }
     }
 
@@ -130,6 +157,20 @@ public sealed class ToolSubprocessEnvironmentFenceArchitectureTests : Architectu
             found.ShouldContain(
                 p => Path.GetFileName(p) == fileName,
                 $"the sweep must locate {fileName}, otherwise the guard above vacuously passes.");
+        }
+    }
+
+    [Fact]
+    public void ARetiredSpawnSite_StillDoesNotStartAProcess()
+    {
+        foreach (var fileName in RetiredSpawnSites)
+        {
+            SpawnSiteFiles().ShouldNotContain(
+                p => Path.GetFileName(p) == fileName,
+                $"{fileName} is recorded as no longer starting a process. It now constructs a "
+                + "ProcessStartInfo again, so it must be classified: move it to "
+                + "MustSanitiseEnvironment if an agent can influence the command, or to "
+                + "ExemptSpawnSites with the reason if it cannot.");
         }
     }
 }

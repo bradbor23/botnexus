@@ -158,6 +158,27 @@ Assert-Equal 0 @(Get-UnfinishedTestProjects -ExpectedProjects $expected -Complet
 #     not manufacture a phantom unfinished project.
 Assert-Equal 0 @(Get-UnfinishedTestProjects -ExpectedProjects @('BotNexus.Gateway.Tests') -CompletedAssemblies @('botnexus.gateway.tests')).Count '13: casing produced a phantom unfinished project.'
 
+# 13b. A single-project mode must name only that project when it has not emitted a TRX. The
+#      playwright lane used the repository-wide expected set and falsely accused every test project
+#      when its one E2E process timed out before closing the TRX.
+$playwrightExpected = @(Get-ExpectedProjectsForMode `
+    -Mode 'playwright' `
+    -ExpectedProjects $expected `
+    -E2EProject 'BotNexus.Integration.E2E.Tests')
+Assert-Equal 1 $playwrightExpected.Count `
+    "13b: playwright expected set is not singular: $($playwrightExpected -join ',')"
+Assert-Equal 'BotNexus.Integration.E2E.Tests' $playwrightExpected[0] `
+    '13b: playwright mode selected the wrong expected project.'
+
+# 13c. Core still expects the non-E2E set. This negative control stops the mode helper from making
+#      every timeout look like playwright merely to satisfy 13b.
+$coreExpected = @(Get-ExpectedProjectsForMode `
+    -Mode 'core' `
+    -ExpectedProjects $expected `
+    -E2EProject 'BotNexus.Integration.E2E.Tests')
+Assert-Equal 1 $coreExpected.Count "13c: core expected set is wrong: $($coreExpected -join ',')"
+Assert-Equal 'BotNexus.Gateway.Tests' $coreExpected[0] '13c: core retained an excluded E2E project.'
+
 # --- New-RunnerTimeoutRecord ---------------------------------------------------------------
 
 $record = New-RunnerTimeoutRecord -Phase 'test' -ElapsedSeconds 1110.4 -DeadlineSeconds 1110 -UnfinishedProjects @('BotNexus.Integration.E2E.Tests') -CompletedAssemblies @('BotNexus.Gateway.Tests')
@@ -206,6 +227,30 @@ $hang = Invoke-BoundedProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', 
 Assert-Equal $true $hang.TimedOut '21: an overrunning process was not reported as timed out.'
 Assert-True ($hang.ElapsedSeconds -lt 60) "21: the bound did not actually cut the run short ($($hang.ElapsedSeconds)s)"
 Assert-True ($hang.ElapsedSeconds -ge 3) "21: returned before the deadline could have expired ($($hang.ElapsedSeconds)s)"
+
+# 22. The real child process must receive a collector value containing spaces as ONE token.
+#     PowerShell's -File binder splits --collect:<value> itself, so use a probe token without
+#     the option prefix to isolate the process-launch boundary (the actual runner uses dotnet).
+#     Start-Process's string-array API flattens unquoted tokens on Windows.
+$probePath = Join-Path $root 'argv-probe.ps1'
+Set-Content -LiteralPath $probePath -Value '$args | ConvertTo-Json -Compress' -Encoding utf8
+$argvLog = Join-Path $root 'argv.log'
+$filter = 'FullyQualifiedName!~BotNexus.Integration.E2E&FullyQualifiedName!~BotNexus.E2E'
+$argvRun = Invoke-BoundedProcess -FilePath $pwshPath `
+    -ArgumentList @('-NoProfile', '-File', $probePath, 'collector:XPlat Code Coverage', '--filter', $filter) `
+    -LogPath $argvLog -TimeoutSeconds 60 -PollMilliseconds 100
+Assert-Equal 0 $argvRun.ExitCode '22: argv probe did not exit successfully.'
+try {
+    $observedArguments = @(Get-Content -LiteralPath $argvLog -Raw | ConvertFrom-Json)
+    Assert-Equal 3 $observedArguments.Count '22: collector or filter was split into multiple arguments.'
+    if ($observedArguments.Count -ge 3) {
+        Assert-Equal 'collector:XPlat Code Coverage' $observedArguments[0] '22: collector name did not survive as one argument.'
+        Assert-Equal '--filter' $observedArguments[1] '22: filter switch was lost.'
+        Assert-Equal $filter $observedArguments[2] '22: filter value changed at the child boundary.'
+    }
+} catch {
+    $script:failures += "22: argv probe did not emit parseable JSON: $($_.Exception.Message)"
+}
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 

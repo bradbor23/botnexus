@@ -86,6 +86,16 @@
       "default": "true",
       "sensitive": false,
       "description": "Allow the agent to record a completed run as a skill via skill_record, through the propose-and-confirm cycle. Requires allowSkillCreation, since recording ends in a skill being written."
+    },
+    {
+      "id": "securityAcknowledgements",
+      "type": "array",
+      "required": false,
+      "sensitive": false,
+      "description": "Hash-pinned, explicitly confirmed security finding acknowledgements with durable audit metadata."
     }
+  ],
+  "configurationScopes": [
+    "agent"
   ]
 }

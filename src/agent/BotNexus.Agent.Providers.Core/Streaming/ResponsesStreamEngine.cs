@@ -50,11 +50,25 @@ public static class ResponsesStreamEngine
         LlmModel model,
         Context context,
         StreamOptions? options)
+        => StreamAsync(profile, httpClient, logger, model, context, options, TaskScheduler.Default);
+
+    // Per-call scheduling allows cancellation before dispatch to be exercised without changing
+    // the process-wide thread pool or affecting other streams.
+    internal static LlmStream StreamAsync(
+        ResponsesTransportProfile profile,
+        HttpClient httpClient,
+        ILogger logger,
+        LlmModel model,
+        Context context,
+        StreamOptions? options,
+        TaskScheduler producerScheduler)
     {
         var stream = new LlmStream();
         var ct = options?.CancellationToken ?? CancellationToken.None;
 
-        _ = Task.Run(async () =>
+        // The producer owns terminal completion even when cancellation precedes dispatch.
+        // Only request work is cancelable; scheduling must not bypass the abort handler.
+        _ = Task.Factory.StartNew(async () =>
         {
             using var activity = ProviderDiagnostics.Source.StartActivity(profile.ActivityName, ActivityKind.Client);
             activity?.SetTag("botnexus.provider.name", model.Provider);
@@ -63,6 +77,7 @@ public static class ResponsesStreamEngine
 
             try
             {
+                ct.ThrowIfCancellationRequested();
                 await StreamCoreAsync(profile, httpClient, logger, stream, model, context, options, ct);
                 activity?.SetStatus(ActivityStatusCode.Ok);
             }
@@ -77,7 +92,7 @@ public static class ResponsesStreamEngine
                 EmitError(stream, profile.Api, model, ex.Message);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             }
-        }, ct);
+        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, producerScheduler).Unwrap();
 
         return stream;
     }
@@ -92,12 +107,16 @@ public static class ResponsesStreamEngine
         StreamOptions? options,
         CancellationToken ct)
     {
-        var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, logger);
-        var apiKey = credential.Value;
-        if (string.IsNullOrWhiteSpace(apiKey))
+        string? apiKey = null;
+        if (profile.ResolveApiKey)
         {
-            throw new InvalidOperationException(
-                $"No API key for {model.Provider}. Set credentials before using model '{model.Id}'.");
+            var credential = ProviderCredentialResolver.Resolve(model.Provider, options?.ApiKey, logger);
+            apiKey = credential.Value;
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                throw new InvalidOperationException(
+                    $"No API key for {model.Provider}. Set credentials before using model '{model.Id}'.");
+            }
         }
 
         var messages = MessageTransformer.TransformMessages(context.Messages, model);
@@ -110,10 +129,11 @@ public static class ResponsesStreamEngine
                 payload = obj;
         }
 
-        var url = $"{model.BaseUrl.TrimEnd('/')}/responses";
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        var requestUri = profile.BuildRequestUri?.Invoke(model) ?? new Uri($"{model.BaseUrl.TrimEnd('/')}/responses");
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
         request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        if (profile.AuthenticateRequest is null)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
         if (model.Headers is not null)
@@ -131,6 +151,9 @@ public static class ResponsesStreamEngine
             foreach (var (key, value) in options.Headers)
                 request.Headers.TryAddWithoutValidation(key, value);
         }
+
+        if (profile.AuthenticateRequest is not null)
+            await profile.AuthenticateRequest(request, ct).ConfigureAwait(false);
 
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         profile.OnResponseHeaders?.Invoke(response);
@@ -158,7 +181,12 @@ public static class ResponsesStreamEngine
         // Bound the untrusted SSE body before a byte reaches the parser: every byte the StreamReader
         // consumes flows through the ByteCountingStream, so an unbounded body or a never-terminating
         // data: line trips the cap regardless of buffering (#1685). Caller owns the inner stream.
-        using var boundedStream = new ByteCountingStream(responseStream, MaxResponseBytes, MaxFrameBytes, leaveOpen: true);
+        using var boundedStream = new ByteCountingStream(
+            responseStream,
+            MaxResponseBytes,
+            MaxFrameBytes,
+            leaveOpen: true,
+            idleTimeout: StreamIdleTimeout.Resolve(options));
         using var reader = new StreamReader(boundedStream, Encoding.UTF8);
         await profile.Parse(
             stream, reader, model, options, profile.Api,

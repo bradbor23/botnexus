@@ -104,30 +104,10 @@ public record PromptContribution
 - Memory systems injecting agent history
 - MCP servers adding capability descriptions
 
-**Example Contributor:**
-
-```csharp
-public class SkillPromptContributor : IPromptContributor
-{
-    public int Priority => 500;
-    public PromptSection? Target => null;  // Standalone block
-    
-    public bool ShouldInclude(PromptContext context)
-        => context.Extensions.ContainsKey("skills");
-    
-    public PromptContribution GetContribution(PromptContext context)
-    {
-        var skills = (IReadOnlyList<Skill>)context.Extensions["skills"];
-        
-        return new PromptContribution
-        {
-            SectionHeading = "Available Skills",
-            Lines = skills.Select(s => $"- **{s.Name}**: {s.Description}").ToList(),
-            Order = 600  // After tools section
-        };
-    }
-}
-```
+The repository intentionally has no built-in `IPromptContributor` implementation. The interface is
+the dynamic-extension seam; an extension registers its own implementation in DI. Only standalone
+contributors (`Target == null`) render today. See the source-backed extension example in
+[Extension Prompt Contributions](#extension-prompt-contributions).
 
 ## PromptContext
 
@@ -301,7 +281,9 @@ Injects project-specific documentation:
 
 **Context File Discovery:**
 
-Loads the agent workspace prompt files in the canonical order: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, and `MEMORY.md`. An agent-specific `systemPromptFile` replaces that default list. Owner-private files (`USER.md`, `MEMORY.md`, and daily memory notes) are withheld from shared conversations.
+Prompt-file selection normally loads the canonical workspace instruction files in this order: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, and `MEMORY.md`.
+
+When `memory.promptInjection` is `none`, `WorkspaceContextBuilder` filters memory prompt files from the selected set, including an explicitly selected `MEMORY.md` or model-specific memory variant. Daily-memory injection follows the same memory setting. Conversation scope independently withholds owner-private files (`USER.md`, `MEMORY.md`, and daily memory notes) from shared conversations.
 
 See [WorkspaceContextBuilder.cs](../../src/gateway/BotNexus.Gateway/Agents/WorkspaceContextBuilder.cs)
 
@@ -552,9 +534,9 @@ of the instruction text.
 
 | Rung | Rules |
 |---|---|
-| default (mandatory) | verify with a tool rather than recall; read a file before describing it; state uncertainty; check tool output before assuming success |
+| default (mandatory) | verify with a tool rather than recall; read a file before describing it; state uncertainty; check tool output before assuming success; progress at least every ten tool calls and at phase boundaries |
 | `claude` | prefer targeted edits over whole-file writes; keep edit match windows small; use extended thinking |
-| `gpt` | tool-schema fidelity; retry circuit breaker; narration threshold |
+| `gpt` | tool-schema fidelity; retry circuit breaker |
 | `gpt@6.*` | authorized follow-through; material clarification and approval boundaries; skill-conflict transparency; persona-aware writing; bounded delegation; proportionate verification |
 | `gemini` | absolute paths; workspace-root-relative references |
 
@@ -563,10 +545,12 @@ become the shared default. A controlled A/B evaluation of a GPT model against a 
 task, same system prompt, equivalent engineering output - showed three operational divergences that
 the default does not address: a parameter transferred from a similar tool's schema, the same edit
 retried three times because a changing match count made each attempt look locally different, and one
-assistant message across 163 tool calls. The three GPT rules name those loopholes directly, because
-the generic phrasing demonstrably failed to fire against them: the retry rule states that a changed
-match count, whitespace, or anchor is the same strategy retried, and the narration rule carries a
-count rather than "when it helps", which evaluates to false for every individually-routine call.
+assistant message across 163 tool calls. The GPT-specific rules name the tool-schema and retry
+loopholes directly: a changed match count, whitespace, or anchor is the same strategy retried.
+Subsequent #3668 behavior measurements found 20 tool calls between messages on Default and Claude
+versus 10 on GPT with the same serving model and task. The countable narration boundary therefore
+lives in the shared default (#4579), inherited once by GPT, Claude, Gemini and unknown families;
+"when it helps" cannot bound a run of individually-routine calls.
 
 `Family` and `Version` use the same lowercase token grammar as the override file suffixes
 (alphanumerics, `-` between tokens), and `Version` is parsed by `ModelFamilyVersion` - the one

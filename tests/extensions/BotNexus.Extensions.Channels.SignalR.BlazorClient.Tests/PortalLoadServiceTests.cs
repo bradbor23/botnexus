@@ -114,8 +114,10 @@ public sealed class PortalLoadServiceTests
         var cronConvId = $"cron-session:{staleCronSessionId}";
         Assert.False(agent.Conversations.ContainsKey(cronConvId),
             "Stale cron-session projection should be removed after 404 - it can never be opened.");
-        // Selection must not dangle at the conversation that was just dropped.
-        Assert.NotEqual(cronConvId, agent.ActiveConversationId);
+        // Selection must not dangle at the conversation that was just dropped. There is no
+        // per-agent conversation marker any more, so the store's displayed selection is what has
+        // to have moved off it.
+        Assert.NotEqual(cronConvId, ((IDisplayedConversation)_store).DisplayedConversationIdFor(agent.AgentId));
 
         // The history 404 must not have reached the top-level catch. LoadError is set here because
         // the offline handler refuses the hub connect, which is expected and is NOT this 404 - so
@@ -200,7 +202,7 @@ public sealed class PortalLoadServiceTests
     }
 
     [Fact]
-    public async Task InitializeAsync_RefreshesStoreFromApiInsteadOfUsingPreexistingConversationState()
+    public async Task InitializeAsync_RefreshesRosterWithoutImplicitlyLoadingConversationHistory()
     {
         _store.UpsertAgent(new AgentState
         {
@@ -244,7 +246,7 @@ public sealed class PortalLoadServiceTests
         await _service.InitializeAsync("http://localhost:5000/hub/gateway");
 
         await _restClient.Received(1).GetConversationsAsync("agent-1", Arg.Any<CancellationToken>());
-        await _restClient.Received(1).GetHistoryAsync("fresh-conv", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await _restClient.DidNotReceive().GetHistoryAsync("fresh-conv", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         var agent = _store.GetAgent("agent-1");
         Assert.NotNull(agent);

@@ -58,7 +58,9 @@ stronger of the two: it runs the *target's* descriptor verbatim, so the child ho
 tools rather than the parent's. An **Embody** spawn clones the parent's own descriptor, reaches no
 other agent, and is not subject to the policy.
 
-When `open` is set, the `ListAgents` tool shows `canConverse: true` for all agents. Under `whitelist`, the legacy `SubAgentIds` / `SubAgentRoles` restrictions apply.
+When `open` is set, the `ListAgents` tool shows `canConverse: true` for all agents. Under `whitelist`, the `SubAgentIds` / `SubAgentRoles` restrictions apply. ID and role matching is case-insensitive. A role grant requires the target's `metadata.role` to be a nonblank string; missing or malformed metadata does not grant access.
+
+The same policy applies to `spawn_subagent(targetAgentId: ...)` (Mirror mode). An ungranted target is rejected before a child descriptor, workspace, conversation, session or runtime handle is created. Built-in worker delegation (Embody mode) is unchanged. A granted Mirror still inherits the parent's tool restrictions; a peer grant does not override them.
 
 ## Budget System
 

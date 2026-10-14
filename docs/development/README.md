@@ -32,6 +32,8 @@ This directory contains detailed documentation for developers working on or exte
 These are deeper explanations, also grouped under **Architecture → Runtime and data flows** in the sidebar. Read them when you need to understand a component, not as prerequisites for your first build.
 
 - **[agent-execution.md](agent-execution.md)** — Agent lifecycle, isolation strategies, instance management
+- **[agent-core-extension-points.md](agent-core-extension-points.md)** — Naming and contract rules for agent-core policies, transformers, providers, services, observers, and events
+- **[agent-run-completion.md](agent-run-completion.md)** — Completion, continuation, parked work, and incomplete outcomes
 - **[llm-request-lifecycle.md](llm-request-lifecycle.md)** — How user messages become LLM API calls (stateless context)
 - **[message-flow.md](message-flow.md)** — Channel dispatch, routing, session lifecycle
 - **[prompt-pipeline.md](prompt-pipeline.md)** — System prompt construction and caching
@@ -42,6 +44,7 @@ These are deeper explanations, also grouped under **Architecture → Runtime and
 - **[webui-connection.md](webui-connection.md)** — SignalR hub, subscribe-all model, multi-session UI
 - **[notification-clients.md](notification-clients.md)** — Writing a notification client: REST and SignalR contracts, auth, web push, and what each platform can do
 - **[app-integration-surfaces.md](app-integration-surfaces.md)** — The four surfaces an external app attaches through, and which parts of the plugin system are wired
+- **[search-contributor-contract.md](search-contributor-contract.md)** — Extension-facing search source, result, relevance, and provenance-trust contract
 - **[portal-surface-parity.md](portal-surface-parity.md)** — Desktop vs mobile portal inventory, deliberate-difference register, and alignment plan
 - **[debugging.md](debugging.md)** - Debugging the Gateway, extensions, and WebUI
 - **[workspace-and-memory.md](workspace-and-memory.md)** — Workspace isolation, memory management, context files
@@ -59,6 +62,7 @@ These are deeper explanations, also grouped under **Architecture → Runtime and
 - **[azure-build-test-runner.md](azure-build-test-runner.md)** — Selectable strict validation and optional Azure Container Apps execution
 - **[stale-base-merges.md](stale-base-merges.md)** — #3173 base-freshness gate: why a green PR on a stale base can still redden `main`, and how inherited red is told apart from introduced red
 - **[git-worktree-config-hardening.md](git-worktree-config-hardening.md)** — #1602 core.bare guard, hooks, and worktree config hygiene
+- **[release-history-manifest.md](release-history-manifest.md)** — Canonical release-history producer, schema, consumer, and missing-artifact contract
 
 ### Security
 

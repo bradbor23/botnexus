@@ -113,3 +113,4 @@ src/extensions/BotNexus.Extensions.Channels.SignalR.BlazorClient/wwwroot/guide/
 # tracked and are not matched by these.
 /config.json
 /.botnexus/
+dirs.sln

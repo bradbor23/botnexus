@@ -1,4 +1,4 @@
-name: "CI: Base Freshness & Main Health"
+name: "CI: Base Freshness"
 
 # Why this workflow exists (issue #3173)
 # --------------------------------------
@@ -12,31 +12,15 @@ name: "CI: Base Freshness & Main Health"
 # contained the other's commit, so both were correctly green, and the first tree that
 # ever contained both was main itself.
 #
-# This workflow closes that hole from inside the repo:
-#   * base-freshness  -- re-evaluates the tree-wide rules against HEAD merged with the
-#                        CURRENT tip of main, not the PR's recorded base. A stale-base
-#                        PR that would land a tree-wide violation fails here.
-#   * main-health     -- reports the latest main run's conclusion so a red main is surfaced
-#                        promptly instead of via an unrelated PR (AC3).
+# This PR-only workflow re-evaluates tree-wide rules against the PR head merged with the
+# CURRENT tip of main, not the PR's recorded base. A stale-base PR that would land a
+# tree-wide violation fails here. It classifies a failure as probably INHERITED from a
+# red main or INTRODUCED by the PR in its step summary.
 #
-# Detection latency for main-health (measured, issue #3715)
-# ---------------------------------------------------------
-# The primary trigger is `workflow_run` on `CI: Build & Test` completing, so the probe
-# fires at the moment main's verdict exists rather than waiting for a cron tick. Over the
-# last 60 push-triggered runs on main, `CI: Build & Test` took a median of 13.1 min and a
-# maximum of 15.4 min, so the WORST-CASE detection latency is that build duration plus the
-# probe's own ~1 min: about 17 minutes from the breaking merge.
-#
-# The cron below is a BACKSTOP only, and it is deliberately hourly rather than */15.
-# Measured over 213 h of run history, the previous `*/15` schedule delivered 68 runs
-# against an expected 853 -- 8% of its declared rate, with a median gap of 149 min and a
-# worst gap of 11.4 h. GitHub queues `schedule` events on a best-effort basis and drops
-# them under load, and high-frequency crons on busy repositories are hit hardest. A `*/15`
-# expression therefore advertised a 15-minute guarantee the platform never delivered.
-# Hourly is honest about what cron can supply; the real guarantee comes from `workflow_run`.
-#
-# Both jobs write a GitHub step summary that states, in words, whether a failure was
-# INHERITED from a red main or INTRODUCED by the PR (AC4).
+# The former main-health probe duplicated the primary CI conclusion without diagnosing
+# the failure and could misreport a cancelled full-tests job as a product-test failure.
+# Main health is read directly from CI: Build & Test; no scheduled or workflow_run job
+# is needed just to repeat its status.
 
 on:
   pull_request:
@@ -59,8 +43,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.head_ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -77,7 +61,6 @@ jobs:
   # ---------------------------------------------------------------------------
   base-freshness:
     name: base freshness (tree-wide rules on merged tree)
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

@@ -27,17 +27,27 @@ This is the **first vertical slice** of the Matrix adapter. The following are im
 - Streaming responses via in-place `m.replace` edits
 - Typing indicators while a turn is running
 - Auto-join on room invite (configurable)
-- Room and user allow-lists
+- Room, user, and sender-domain federation policies
+- Bounded inbound unencrypted `m.image` and `m.file` attachments
+- Authenticated Matrix media upload and download client operations
+- Read receipts after successful inbound dispatch
 
 The following are **deliberately deferred** and are not implemented here:
 
-- **End-to-end encryption** — requires device-key management (libolm/vodozemac)
-- **Federation-specific trust decisions** — remote-homeserver verification policy
-- **Media** — image/file upload and download via the Matrix content repository
-- **Read receipts** and Matrix **Spaces** mapping
+- **End-to-end encryption**, including encrypted media descriptors - requires device-key management
+  (libolm/vodozemac)
+- **Federation identity verification** - cryptographic or remote-homeserver verification beyond
+  the configured sender-domain admission policy
+- Matrix **Spaces** mapping
 
-The `IMatrixClient` seam carries only the endpoints this slice uses, so a deferred capability is a
-missing interface member rather than a silent runtime no-op.
+Media support is deliberately bounded. The adapter downloads only validated `mxc://` references
+from unencrypted `m.image` and `m.file` events; it never follows arbitrary HTTP(S) URLs. The client
+uses the current authenticated download endpoint
+`GET /_matrix/client/v1/media/download/{serverName}/{mediaId}` and streams the body through the
+configured byte ceiling. Upload uses an authenticated raw-body
+`POST /_matrix/media/v3/upload?filename=...` and returns the homeserver's `content_uri`. The upload
+API is available at the client seam, while outbound attachment dispatch remains deferred because the
+outbound message model has no content-parts contract.
 
 ## Configuration
 
@@ -50,12 +60,16 @@ Bind under `channels:matrix`. Each entry under `agents` is one Matrix account ow
       "homeserver": "https://matrix.example.com",
       "syncTimeoutMs": 30000,
       "streamingBufferMs": 750,
+      "maxMediaBytes": 20971520,
+      "mediaDownloadTimeoutSeconds": 30,
       "agents": {
         "farnsworth": {
           "userId": "@farnsworth:example.com",
           "accessToken": "syt_...",
           "agentId": "farnsworth",
-          "autoJoin": true
+          "autoJoin": true,
+          "allowedSenderDomains": ["example.com"],
+          "deniedSenderDomains": ["blocked.example"]
         },
         "nova": {
           "userId": "@nova:example.com",
@@ -75,6 +89,8 @@ Bind under `channels:matrix`. Each entry under `agents` is one Matrix account ow
 | `homeserver` | string | — | Base URL of the homeserver shared by every account. |
 | `syncTimeoutMs` | integer | `30000` | `/sync` long-poll timeout. A non-positive value falls back to the default rather than busy-spinning. |
 | `streamingBufferMs` | integer | `750` | Minimum interval between streaming edits. `0` means edit on every delta. |
+| `maxMediaBytes` | integer | `20971520` (20 MiB) | Maximum inbound attachment size. Non-positive values fail safe to the default. |
+| `mediaDownloadTimeoutSeconds` | integer | `30` | Wall-clock budget per media download. Non-positive values fail safe to the default. |
 | `agents` | map | — | Per-agent accounts, keyed by agent name. |
 
 ### Per-account keys
@@ -87,7 +103,18 @@ Bind under `channels:matrix`. Each entry under `agents` is one Matrix account ow
 | `homeserver` | string | the shared value | Per-account homeserver override. |
 | `autoJoin` | boolean | `true` | Whether the account accepts room invites automatically. |
 | `allowedRoomIds` | string[] | empty | Room allow-list. Empty permits all joined rooms. |
-| `allowedUserIds` | string[] | empty | Sender allow-list. Empty permits all senders. |
+| `allowedUserIds` | string[] | empty | Exact sender-user allow-list. Empty permits all senders that pass the domain policy. |
+| `allowedSenderDomains` | string[] | empty | Exact sender-domain allow-list. Empty permits every domain not explicitly denied. |
+| `deniedSenderDomains` | string[] | empty | Exact sender-domain deny-list. A matching denial takes precedence over an allowance. |
+
+Sender-domain policy is evaluated at the same inbound admission seam as `allowedUserIds`; it does
+not replace or bypass the per-user gate. A sender must pass both configured policies. Domains are
+taken from a syntactically complete Matrix user ID (`@localpart:domain`), trimmed when configured,
+and compared case-insensitively as complete strings. They are not suffix patterns: `example.com`
+does not match `example.com.evil` or `notexample.com`. If either domain list is configured, a
+malformed sender ID is rejected. If both domain lists are absent or empty, the adapter preserves the
+previous user-only behavior, including leaving malformed-sender handling to the existing admission
+path. Blank configured domain entries are ignored.
 
 An account missing its homeserver, user ID or access token is **skipped with a warning** — one bad
 entry does not prevent the other accounts from starting.
@@ -109,8 +136,14 @@ logs.
 
 - **Inbound.** Each account runs its own `/sync` long poll. `m.room.message` events in joined rooms
   are translated into an `InboundMessage` and dispatched through `IChannelDispatcher`. The account's
-  own messages are suppressed (they echo back on the next sync), as are `m.replace` edits — an edit
-  is not a new user turn.
+  own messages are suppressed (they echo back on the next sync), as are `m.replace` edits - an edit
+  is not a new user turn. Unencrypted image/file events preserve their caption/body and add a
+  `BinaryContentPart`; a missing or invalid MIME type becomes `application/octet-stream`. An
+  advertised oversize attachment is rejected before any download, and timeout/download failures
+  drop only the attachment so the text still reaches the agent. After dispatch succeeds, the
+  adapter sends an `m.read` receipt for that exact room and event. Rejected, failed, or cancelled
+  dispatches are not acknowledged. Receipt delivery is best effort: its failure is logged but does
+  not fail or replay the already handled message.
 - **Outbound.** `SendAsync` decodes the room from the channel address and sends an `m.room.message`
   with a plain `body` plus an HTML `formatted_body` when the Markdown actually produced markup.
 - **Streaming.** The first delta sends a message; subsequent deltas edit that event in place via an
@@ -127,7 +160,7 @@ logs.
 | `SupportsStreaming` | `true` | Send-then-edit via `m.replace`. |
 | `SupportsThinkingDisplay` | `false` | Thinking deltas are not rendered into rooms. |
 | `SupportsToolDisplay` | `false` | Tool activity is not rendered into rooms. |
-| `SupportsInboundImages` | `false` | Media needs the content repository — deferred. |
+| `SupportsInboundImages` | `true` | Bounded unencrypted media from validated `mxc://` URIs. |
 | `StripsRuntimeContext` | `true` | Matrix rooms are a user-visible surface. |
 
 ## Failure handling
@@ -140,10 +173,15 @@ exponential backoff.
 The `since` token is advanced **only after** a batch has been fully processed, so a crash mid-batch
 replays that batch rather than skipping the events it contained.
 
+Media has independent failure containment: the sender-advertised size is used only for early
+rejection, the HTTP stream enforces `maxMediaBytes` even when `Content-Length` is absent or false,
+and a linked `mediaDownloadTimeoutSeconds` wall-clock budget prevents slow-drip responses. A media
+failure is logged and the caption/body is still dispatched.
+
 ## Sync continuity across restarts
 
 Each account's `next_batch` token is persisted durably, keyed by agent id and account name, in a
-SQLite database under the verified BotNexus home (`<data-root>/data/matrix-sync-cursor.db`). On
+SQLite database under the verified BotNexus home (`<data-root>/data/matrix-sync-cursor.sqlite`). On
 start, an account with a stored token resumes `/sync` from it; an account with no stored token
 performs a normal initial sync.
 

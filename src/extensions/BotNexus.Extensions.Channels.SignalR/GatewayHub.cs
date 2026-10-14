@@ -1,3 +1,4 @@
+using BotNexus.Gateway.Abstractions.Security;
 using BotNexus.Gateway.Abstractions.Text;
 using BotNexus.Gateway.Abstractions.Activity;
 using BotNexus.Gateway.Abstractions.Agents;
@@ -5,6 +6,7 @@ using BotNexus.Gateway.Abstractions.Channels;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Abstractions.Sessions;
 using BotNexus.Gateway.Abstractions.Conversations;
+using BotNexus.Gateway.Diagnostics;
 using BotNexus.Gateway.Dispatching;
 using BotNexus.Gateway.Abstractions.Services;
 using AgentId = BotNexus.Domain.Primitives.AgentId;
@@ -73,6 +75,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     // same UserId survives reconnects and conversation history stays keyed to a stable identity.
     private readonly IUserRegistry? _userRegistry;
     private readonly IWorldContext? _worldContext;
+    private readonly IActiveLoopTracker? _activeLoopTracker;
 
     public GatewayHub(
         IAgentSupervisor supervisor,
@@ -86,7 +89,8 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         IAskUserPromptResolver? askUserPromptResolver = null,
         IAskUserCheckpointService? askUserCheckpointService = null,
         IUserRegistry? userRegistry = null,
-        IWorldContext? worldContext = null)
+        IWorldContext? worldContext = null,
+        IActiveLoopTracker? activeLoopTracker = null)
     {
         _supervisor = supervisor;
         _registry = registry;
@@ -100,6 +104,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         _askUserCheckpointService = askUserCheckpointService;
         _userRegistry = userRegistry;
         _worldContext = worldContext;
+        _activeLoopTracker = activeLoopTracker;
     }
 
     /// <summary>
@@ -148,7 +153,29 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
             sessions.Count,
             groupKeys.Count);
 
-        return new SubscribeAllResult(sessions);
+        // Refresh after group membership exists. A durable ask_user continuation can create a
+        // replacement session while SubscribeAll is in flight. If it starts after the first read
+        // but before the group join, its RunStarted edge can be missed; deriving activity from the
+        // first list would then return a false-idle snapshot. Conversation groups survive the
+        // session replacement, so after the join either the edge is observed or this second read
+        // authoritatively sees the running continuation.
+        var activitySessions = await _app.GetAvailableSessionsAsync(Context.ConnectionAborted);
+        var activeSessionIds = _activeLoopTracker?.GetSnapshot().ActiveLoops
+            .Select(loop => loop.SessionId)
+            .Where(sessionId => !string.IsNullOrWhiteSpace(sessionId))
+            .ToHashSet(StringComparer.Ordinal);
+        var activeRuns = activitySessions
+            .Where(session => activeSessionIds?.Contains(session.SessionId) ??
+                _supervisor.GetHandle(
+                    AgentId.From(session.AgentId),
+                    SessionId.From(session.SessionId))?.IsRunning == true)
+            .Select(session => new RunActivitySnapshot(
+                session.SessionId,
+                session.AgentId,
+                session.ConversationId))
+            .ToArray();
+
+        return new SubscribeAllResult(sessions, activeRuns);
     }
 
     /// <summary>
@@ -206,6 +233,22 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     }
 
     /// <summary>
+    /// Delivers a conversation-addressed message with explicit queue, steer, or interrupt intent.
+    /// The gateway resolves that intent against authoritative run state (#3326).
+    /// </summary>
+    public Task<SendMessageResult> DeliverMessage(
+        AgentId agentId,
+        ChannelKey channelType,
+        string content,
+        string conversationId,
+        InboundDeliveryMode deliveryMode)
+    {
+        EnsureControlScope(nameof(DeliverMessage));
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+        return SendMessageCore(agentId, channelType, content, conversationId, deliveryMode: deliveryMode);
+    }
+
+    /// <summary>
     /// Injects a canvas <c>submitToAgent</c> click into a conversation as a genuine USER turn,
     /// stamped with <see cref="MessageKind.CanvasSubmission"/> so the transcript records why the
     /// message exists (#2449).
@@ -230,7 +273,9 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         return SendMessageCore(agentId, channelType, content, conversationId, MessageKind.CanvasSubmission);
     }
 
-    private async Task<SendMessageResult> SendMessageCore(AgentId agentId, ChannelKey channelType, string content, string? conversationId, MessageKind? kind = null)
+    private async Task<SendMessageResult> SendMessageCore(
+        AgentId agentId, ChannelKey channelType, string content, string? conversationId,
+        MessageKind? kind = null, InboundDeliveryMode deliveryMode = InboundDeliveryMode.Auto)
     {
         var typedAgentId = NormalizeAgentId(agentId);
         var typedChannelType = NormalizeChannelKey(channelType);
@@ -254,10 +299,16 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         _logger.LogInformation("Hub SendMessage: agent={AgentId} channel={ChannelType} session={SessionId} connection={ConnectionId} content={Content}",
             typedAgentId, typedChannelType, resolution.SessionId, connectionId, GraphemeSafeTruncation.Truncate(content, 50, "..."));
 
-        _ = SafeDispatchAsync(
-            () => DispatchMessageAsync(typedAgentId, resolution.SessionId, content, "message", connectionId, normalizedConversationId, kind),
+        var admission = await DispatchMessageAsync(
             typedAgentId,
-            resolution.SessionId);
+            resolution.SessionId,
+            content,
+            "message",
+            connectionId,
+            normalizedConversationId,
+            kind,
+            deliveryMode).ConfigureAwait(false);
+        EnsureMessageAccepted(admission);
 
         return new SendMessageResult(
             resolution.SessionId.Value,
@@ -297,6 +348,13 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         var conversation = await _conversationStore.GetAsync(normalizedConversationId, Context.ConnectionAborted);
         if (conversation is null)
             throw new HubException($"Conversation '{normalizedConversationId.Value}' not found.");
+
+        EnsureConversationWritable(conversation);
+
+        // Join before resolving either a live waiter or durable continuation. The durable path can
+        // synchronously start an internal-origin run and publish RunStarted; without this membership
+        // edge, the browser that submitted the answer can miss the continuation it just initiated.
+        await SubscribeConversationInternalAsync(normalizedConversationId);
 
         // #2654: there is deliberately NO channel-binding check here. Whether the conversation
         // carries a `signalr` binding is a ROUTING property owned by fan-out, not a statement about
@@ -358,6 +416,48 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     }
 
     /// <summary>
+    /// Delivers a conversation-addressed message with media and explicit intent (#3326).
+    /// </summary>
+    public async Task<SendMessageResult> DeliverMessageWithMedia(
+        AgentId agentId,
+        ChannelKey channelType,
+        string content,
+        IReadOnlyList<MediaContentPartDto> contentParts,
+        string conversationId,
+        InboundDeliveryMode deliveryMode)
+    {
+        EnsureControlScope(nameof(DeliverMessageWithMedia));
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+        var typedAgentId = NormalizeAgentId(agentId);
+        var typedChannelType = NormalizeChannelKey(channelType);
+        if (string.IsNullOrWhiteSpace(content) && contentParts.Count == 0)
+            throw new ArgumentException("A message must contain text or at least one attachment.", nameof(content));
+
+        var resolution = await ResolveOrCreateSessionAsync(typedAgentId, typedChannelType, conversationId);
+        await SubscribeConversationInternalAsync(resolution.ConversationId);
+        var parts = contentParts.Select(ConvertToDomainContentPart).ToList();
+        var admission = await _app.PostAsync(
+            BuildInboundMessage(
+                typedAgentId,
+                Context.ConnectionId,
+                content ?? string.Empty,
+                "message-with-media",
+                new InboundMessageRoutingHints(
+                    RequestedAgentId: typedAgentId,
+                    RequestedSessionId: resolution.SessionId,
+                    RequestedConversationId: ConversationId.From(conversationId),
+                    DeliveryMode: deliveryMode),
+                parts),
+            Context.ConnectionAborted).ConfigureAwait(false);
+        EnsureMessageAccepted(admission);
+
+        return new SendMessageResult(
+            resolution.SessionId.Value,
+            resolution.AgentId.Value,
+            resolution.ChannelType.Value);
+    }
+
+    /// <summary>
     /// Sends a message with media content parts to an agent.
     /// </summary>
     /// <param name="agentId">The target agent.</param>
@@ -389,18 +489,16 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         var connectionId = Context.ConnectionId;
         var parts = contentParts.Select(ConvertToDomainContentPart).ToList();
 
-        _ = SafeDispatchAsync(
-            () => _app.AcceptAsync(
-                BuildInboundMessage(
-                    typedAgentId, connectionId, normalizedContent, "message-with-media",
-                    new InboundMessageRoutingHints(
-                        RequestedAgentId: typedAgentId,
-                        RequestedSessionId: resolution.SessionId,
-                        RequestedConversationId: normalizedConversationId is null ? null : ConversationId.From(normalizedConversationId)),
-                    parts),
-                CancellationToken.None),
-            typedAgentId,
-            resolution.SessionId);
+        var admission = await _app.PostAsync(
+            BuildInboundMessage(
+                typedAgentId, connectionId, normalizedContent, "message-with-media",
+                new InboundMessageRoutingHints(
+                    RequestedAgentId: typedAgentId,
+                    RequestedSessionId: resolution.SessionId,
+                    RequestedConversationId: normalizedConversationId is null ? null : ConversationId.From(normalizedConversationId)),
+                parts),
+            Context.ConnectionAborted).ConfigureAwait(false);
+        EnsureMessageAccepted(admission);
 
         return new SendMessageResult(
             resolution.SessionId.Value,
@@ -408,17 +506,27 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
             resolution.ChannelType.Value);
     }
 
-    private Task DispatchMessageAsync(AgentId typedAgentId, SessionId typedSessionId, string content,
-        string messageType, string senderId, string? conversationId = null, MessageKind? kind = null)
-        => _app.AcceptAsync(
+    private Task<InboundDispatchStatus> DispatchMessageAsync(AgentId typedAgentId, SessionId typedSessionId, string content,
+        string messageType, string senderId, string? conversationId = null, MessageKind? kind = null,
+        InboundDeliveryMode deliveryMode = InboundDeliveryMode.Auto)
+        => _app.PostAsync(
             BuildInboundMessage(
                 typedAgentId, senderId, content, messageType,
                 new InboundMessageRoutingHints(
                     RequestedAgentId: typedAgentId,
                     RequestedSessionId: typedSessionId,
-                    RequestedConversationId: string.IsNullOrWhiteSpace(conversationId) ? null : ConversationId.From(conversationId)),
+                    RequestedConversationId: string.IsNullOrWhiteSpace(conversationId) ? null : ConversationId.From(conversationId),
+                    DeliveryMode: deliveryMode),
                 kind: kind),
-            CancellationToken.None);
+            Context.ConnectionAborted);
+
+    private static void EnsureMessageAccepted(InboundDispatchStatus status)
+    {
+        if (status is InboundDispatchStatus.Accepted or InboundDispatchStatus.Steered)
+            return;
+
+        throw new HubException($"Message was not accepted by the inbound queue ({status}). Retry shortly.");
+    }
 
     // Centralizes the channel-invariant InboundMessage fields shared by the SignalR hub dispatch
     // paths: signalr type, authenticated sender, stable per-agent address, and clientKind metadata.
@@ -480,7 +588,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     private static MessageContentPart ConvertToDomainContentPart(MediaContentPartDto dto)
     {
         if (dto.Text is not null)
-            return new TextContentPart { MimeType = dto.MimeType, Text = dto.Text };
+            return new TextContentPart { MimeType = dto.MimeType, Text = dto.Text, FileName = dto.FileName };
 
         if (dto.Base64Data is not null)
             return new BinaryContentPart
@@ -525,116 +633,31 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     {
         EnsureControlScope(nameof(Steer));
         var ctx = ResolveCallContext(agentId, sessionId);
-        var typedChannelType = ChannelKey.From("signalr");
+        await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
         var parts = (contentParts ?? []).Select(ConvertToDomainContentPart).ToList();
         if (string.IsNullOrWhiteSpace(content) && parts.Count == 0)
             throw new ArgumentException("A steer must contain text or at least one attachment.", nameof(content));
-        var normalizedContent = content ?? string.Empty;
 
-        // Subscribe so post-compaction streams continue to arrive. #682
+        if (!string.IsNullOrWhiteSpace(conversationId))
+            await EnsureConversationWritableAsync(ConversationId.From(conversationId), ctx.AgentId);
         await SubscribeInternalAsync(ctx.SessionId);
-
-        // Steering bypasses the per-session orchestrator queue entirely and injects
-        // directly into the agent's PendingMessageQueue via handle.SteerAsync().
-        //
-        // Uses GetOrCreateAsync instead of GetHandle to eliminate the race window
-        // between SendMessage (fire-and-forget to orchestrator) and Steer: the
-        // orchestrator may not have finished routing/registering the handle yet.
-        // GetOrCreateAsync waits for or creates the handle, avoiding a null lookup
-        // that would trigger the old fallback dispatch (which caused "Agent is
-        // already running" when the queued steer reached ProcessAsync on the same
-        // handle that was already streaming).
-        //
-        // SteerAsync works regardless of IsRunning: if running, the steer is drained
-        // at the next turn boundary; if idle, it's drained at the start of the next run.
-        //
-        // Dead-letter guard: a steer only makes sense against a RUNNING turn. Previously this
-        // always called GetOrCreateAsync, which would conjure a fresh idle handle for a session
-        // with no live run and "inject" a steer that never drains (the agent loop already ended,
-        // so its PendingMessageQueue is never read again). Combined with a client-side session
-        // mis-route, that silently swallowed the user's steer into an unrelated, idle session.
-        //
-        // First try GetHandle (no phantom creation). If there's no live handle, fall back to a
-        // single GetOrCreateAsync to win the race against an in-flight SendMessage that may still
-        // be routing/registering the handle (the original #-rationale for GetOrCreate). After that,
-        // if the resolved handle still isn't running, treat it as a non-delivery rather than
-        // dead-lettering the message.
-        IAgentHandle? handle = _supervisor.GetHandle(ctx.AgentId, ctx.SessionId);
-        if (handle is null || !handle.IsRunning)
-        {
-            try
-            {
-                handle = await _supervisor.GetOrCreateAsync(ctx.AgentId, ctx.SessionId, Context.ConnectionAborted);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to resolve agent handle for steering: agent {AgentId} session {SessionId}",
-                    ctx.AgentId.Value, ctx.SessionId.Value);
-
-                await PublishActivityAsync(
-                    ctx.AgentId,
-                    ctx.SessionId,
-                    GatewayActivityType.Error,
-                    Context.ConnectionAborted,
-                    conversationId: conversationId,
-                    message: $"Steering failed: {ex.Message}");
-
-                return new SendMessageResult(ctx.SessionId.Value, ctx.AgentId.Value, typedChannelType.Value);
-            }
-        }
-
-        // If the agent isn't running, there is no in-flight turn to steer. Do NOT persist the
-        // message into the session or inject it into an idle handle's queue (it would never drain).
-        // Surface a clear, user-visible signal so the steer isn't silently lost.
-        if (!handle.IsRunning)
-        {
-            await PublishActivityAsync(
+        var addressedConversationId = await ResolveConversationHintAsync(ctx.SessionId, conversationId);
+        var admission = await _app.PostAsync(
+            BuildInboundMessage(
                 ctx.AgentId,
-                ctx.SessionId,
-                GatewayActivityType.Error,
-                Context.ConnectionAborted,
-                conversationId: conversationId,
-                message: "Steering not applied: the agent isn't currently running in this conversation. Send the message instead to start a new turn.");
+                Context.ConnectionId,
+                content ?? string.Empty,
+                "steer",
+                new InboundMessageRoutingHints(
+                    RequestedAgentId: ctx.AgentId,
+                    RequestedSessionId: ctx.SessionId,
+                    RequestedConversationId: addressedConversationId,
+                    DeliveryMode: InboundDeliveryMode.Steer),
+                parts.Count == 0 ? null : parts),
+            Context.ConnectionAborted).ConfigureAwait(false);
+        EnsureMessageAccepted(admission);
 
-            _logger.LogInformation(
-                "Steering skipped (agent not running) for agent {AgentId} session {SessionId}",
-                ctx.AgentId.Value, ctx.SessionId.Value);
-
-            return new SendMessageResult(ctx.SessionId.Value, ctx.AgentId.Value, typedChannelType.Value);
-        }
-
-        // Record steering message in session history
-        var session = await _sessions.GetOrCreateAsync(ctx.SessionId, ctx.AgentId, Context.ConnectionAborted);
-        // #2484: persist the COMPOSED text so the transcript records the attachments too, matching
-        // what the agent actually receives.
-        var composed = AgentUserMessageComposer.Compose(normalizedContent, parts);
-        session.AddEntry(new SessionEntry
-        {
-            Role = BotNexus.Domain.Primitives.MessageRole.User,
-            Content = composed.Content
-        });
-        await _sessions.SaveAsync(session, Context.ConnectionAborted);
-
-        // Inject into agent's steering queue. With no attachments this stays on the string
-        // overload (unchanged behaviour); with attachments the composed multimodal message is
-        // injected so image parts reach the vision path instead of being dropped (#2484).
-        if (parts.Count == 0)
-            await handle.SteerAsync(normalizedContent, Context.ConnectionAborted);
-        else
-            await handle.SteerAsync(composed, Context.ConnectionAborted);
-
-        await PublishActivityAsync(
-            ctx.AgentId,
-            ctx.SessionId,
-            GatewayActivityType.SteeringInjected,
-            Context.ConnectionAborted,
-            conversationId: conversationId);
-
-        _logger.LogInformation(
-            "Steering injected for agent {AgentId} session {SessionId} (running={IsRunning})",
-            ctx.AgentId.Value, ctx.SessionId.Value, handle.IsRunning);
-
-        return new SendMessageResult(ctx.SessionId.Value, ctx.AgentId.Value, typedChannelType.Value);
+        return new SendMessageResult(ctx.SessionId.Value, ctx.AgentId.Value, SignalRChannel.Value);
     }
 
     /// <summary>
@@ -663,22 +686,28 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         IReadOnlyList<MediaContentPartDto> contentParts)
     {
         EnsureControlScope(nameof(InterruptAndSteer));
+        var ctx = ResolveCallContext(agentId, sessionId);
+        await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
         var parts = (contentParts ?? []).Select(ConvertToDomainContentPart).ToList();
         if (string.IsNullOrWhiteSpace(message) && parts.Count == 0)
             throw new ArgumentException("A redirect must contain text or at least one attachment.", nameof(message));
-        var ctx = ResolveCallContext(agentId, sessionId);
 
-        var handle = _supervisor.GetHandle(ctx.AgentId, ctx.SessionId);
-        if (handle is null)
-            return false;
+        var addressedConversationId = await ResolveConversationHintAsync(ctx.SessionId);
+        var admission = await _app.PostAsync(
+            BuildInboundMessage(
+                ctx.AgentId,
+                Context.ConnectionId,
+                message ?? string.Empty,
+                "interrupt-and-steer",
+                new InboundMessageRoutingHints(
+                    RequestedAgentId: ctx.AgentId,
+                    RequestedSessionId: ctx.SessionId,
+                    RequestedConversationId: addressedConversationId,
+                    DeliveryMode: InboundDeliveryMode.Interrupt),
+                parts.Count == 0 ? null : parts),
+            Context.ConnectionAborted).ConfigureAwait(false);
 
-        if (parts.Count == 0)
-            await handle.InterruptAndSteerAsync(message, Context.ConnectionAborted);
-        else
-            await handle.InterruptAndSteerAsync(
-                AgentUserMessageComposer.Compose(message ?? string.Empty, parts),
-                Context.ConnectionAborted);
-        return true;
+        return admission is InboundDispatchStatus.Accepted or InboundDispatchStatus.Steered;
     }
 
     /// <summary>
@@ -725,7 +754,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     /// <param name="content">The follow-up text.</param>
     /// <param name="contentParts">Draft attachments to deliver with the follow-up.</param>
     /// <returns>A task that completes once the follow-up has been accepted.</returns>
-    public Task FollowUpWithMedia(
+    public async Task FollowUpWithMedia(
         AgentId agentId,
         SessionId sessionId,
         string content,
@@ -733,6 +762,11 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     {
         EnsureControlScope(nameof(FollowUp));
         var ctx = ResolveCallContext(agentId, sessionId);
+        // Pin the stored parent that passed the fence. RequestedSessionId alone does not
+        // select a conversation in the ordinary inbound dispatcher.
+        var conversationId = await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
+        if (conversationId is null)
+            conversationId = await ResolveImplicitWritableConversationAsync(ctx.AgentId);
         var connectionId = Context.ConnectionId;
         var parts = (contentParts ?? []).Select(ConvertToDomainContentPart).ToList();
         if (string.IsNullOrWhiteSpace(content) && parts.Count == 0)
@@ -773,13 +807,12 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
                         new InboundMessageRoutingHints(
                             RequestedAgentId: ctx.AgentId,
                             RequestedSessionId: ctx.SessionId,
-                            RequestedConversationId: null),
+                            RequestedConversationId: conversationId),
                         parts.Count == 0 ? null : parts),
                     CancellationToken.None);
             },
             ctx.AgentId,
             ctx.SessionId);
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -800,6 +833,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     {
         EnsureControlScope(nameof(Abort));
         var ctx = ResolveCallContext(agentId, sessionId);
+        await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
         var instance = _supervisor.GetInstance(ctx.AgentId, ctx.SessionId);
         if (instance is null)
             return;
@@ -831,6 +865,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     {
         EnsureControlScope(nameof(ResetSession));
         var ctx = ResolveCallContext(agentId, sessionId);
+        await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
 
         var gatewaySession = await _sessions.GetAsync(ctx.SessionId, CancellationToken.None);
 
@@ -885,6 +920,7 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     {
         EnsureControlScope(nameof(CompactSession));
         var ctx = ResolveCallContext(agentId, sessionId);
+        await EnsureSessionWritableAsync(ctx.AgentId, ctx.SessionId);
         var session = await _sessions.GetAsync(ctx.SessionId, CancellationToken.None);
         if (session is null)
             throw new HubException($"Session '{ctx.SessionId.Value}' not found.");
@@ -1107,11 +1143,10 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     private static AgentId NormalizeAgentId(AgentId agentId) => agentId;
 
     /// <summary>
-    /// Resolves the authenticated user identifier from claims. The <see cref="ClaimsUserIdProvider"/>
-    /// populates <see cref="HubCallerContext.UserIdentifier"/> from the <c>oid</c> or <c>sub</c>
-    /// claim. When no authenticated identity is available (should not happen with [Authorize]),
-    /// falls back to <see cref="HubCallerContext.ConnectionId"/> for backward compatibility
-    /// during the transition period where auth may be configured but not enforced.
+    /// Resolves the server-owned reader identifier. <see cref="ClaimsUserIdProvider"/> populates
+    /// <see cref="HubCallerContext.UserIdentifier"/> from authenticated <c>oid</c>/<c>sub</c> claims
+    /// or the stable local-owner identity for an unauthenticated single-user host. The connection
+    /// fallback remains only for legacy/test hub contexts that bypass the registered provider.
     /// </summary>
     private string GetAuthenticatedUserId()
         => Context.UserIdentifier ?? Context.ConnectionId;
@@ -1316,11 +1351,67 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         }
     }
 
-    /// <summary>
-    /// Adds the connection to the conversation group for the given session, looking up the
-    /// session's conversation id if needed. Conversation-keyed groups survive session
-    /// compaction; the previous session-keyed equivalent did not (#682).
-    /// </summary>
+    /// <summary>Enforces stored client-write visibility without restricting runtime producers.</summary>
+    private void EnsureConversationWritable(Conversation? conversation, AgentId? expectedAgent = null)
+    {
+        var status = ConversationClientWritePolicy.Evaluate(conversation, expectedAgent);
+        if (conversation is not null && !IsClientAgentAllowed(conversation.AgentId))
+            status = 404;
+        if (status != 0)
+            throw new HubException(status == 403 ? "Conversation is read-only (403)." : "Conversation not found (404).");
+    }
+
+    private async Task EnsureConversationWritableAsync(ConversationId conversationId, AgentId expectedAgent)
+    {
+        var conversation = _conversationStore is null ? null :
+            await _conversationStore.GetAsync(conversationId, Context.ConnectionAborted);
+        EnsureConversationWritable(conversation, expectedAgent);
+    }
+
+    private async Task<ConversationId?> EnsureSessionWritableAsync(AgentId agentId, SessionId sessionId)
+    {
+        var session = await _sessions.GetAsync(sessionId, Context.ConnectionAborted);
+        var status = await ConversationClientWritePolicy.EvaluateSessionAsync(_conversationStore, session, agentId, Context.ConnectionAborted);
+        if (!IsClientAgentAllowed(agentId))
+            status = 404;
+        if (status != 0)
+            throw new HubException(status == 403 ? "Conversation is read-only (403)." : "Conversation not found (404).");
+        return session is not null && session.ConversationId.IsInitialized() ? session.ConversationId : null;
+    }
+
+    // Mirrors the router's active-then-newest-archived binding selection without reopening,
+    // creating a session, or changing a binding merely to discover the write destination.
+    private async Task<ConversationId?> ResolveImplicitWritableConversationAsync(AgentId agentId)
+    {
+        if (_conversationStore is null)
+            throw new HubException("Conversation not found (404).");
+
+        var channelAddress = ChannelAddress.From(agentId.Value);
+        var candidate = await _conversationStore.ResolveByBindingAsync(agentId, SignalRChannel, channelAddress, Context.ConnectionAborted);
+        if (candidate is null)
+        {
+            var conversations = await _conversationStore.ListAsync(agentId, Context.ConnectionAborted);
+            candidate = conversations.Where(c => c.Status == ConversationStatus.Archived)
+                .Where(c => c.ChannelBindings.Any(b => b.ChannelType == SignalRChannel && b.ChannelAddress == channelAddress))
+                .OrderByDescending(c => c.UpdatedAt).FirstOrDefault();
+        }
+        if (candidate is not null)
+            EnsureConversationWritable(candidate, agentId);
+        // No stored binding means the ordinary router will mint a new user-facing conversation.
+        return candidate?.ConversationId;
+    }
+
+    private bool IsClientAgentAllowed(AgentId agentId)
+    {
+        var httpContext = Context.GetHttpContext();
+        if (httpContext?.Items.TryGetValue(GatewayAuthHttpContext.CallerIdentityItemKey, out var value) != true ||
+            value is not GatewayCallerIdentity identity)
+            return true;
+        return identity.IsAdmin || identity.AllowedAgents.Count == 0 ||
+            identity.AllowedAgents.Any(allowed => string.Equals(allowed, agentId.Value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Joins the stored parent conversation group; membership survives compaction.</summary>
     private async Task SubscribeInternalAsync(SessionId sessionId)
     {
         var session = await _sessions.GetAsync(sessionId, Context.ConnectionAborted);
@@ -1334,6 +1425,19 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
     /// Adds the connection to the conversation group when the conversation id is already
     /// resolved. No-op when the conversation id is not initialised (legacy/orphan path).
     /// </summary>
+    private async Task<ConversationId?> ResolveConversationHintAsync(
+        SessionId sessionId,
+        string? conversationId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(conversationId))
+            return ConversationId.From(conversationId);
+
+        var session = await _sessions.GetAsync(sessionId, Context.ConnectionAborted);
+        return session is not null && session.ConversationId.IsInitialized()
+            ? session.ConversationId
+            : null;
+    }
+
     private async Task SubscribeConversationInternalAsync(ConversationId conversationId)
     {
         if (!conversationId.IsInitialized())
@@ -1386,6 +1490,8 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
         // identity -- doing so mints e.g. a 'telegram' or 'servicebus' binding addressed by the
         // agent id, which fan-out then sends a real, undeliverable envelope to. This hub IS the
         // SignalR transport, so the binding identity is always signalr.
+        if (!IsClientAgentAllowed(agentId))
+            throw new HubException("Conversation not found (404).");
         var bindingChannelType = SignalRChannel;
         var channelAddress = ChannelAddress.From(agentId.Value);
         var typedConversationId = string.IsNullOrWhiteSpace(conversationId)
@@ -1409,6 +1515,28 @@ public sealed class GatewayHub : Hub<IGatewayHubClient>
                 Context.ConnectionId),
             RequestedConversationId: typedConversationId,
             RequestedAgentId: agentId);
+
+        // Check the stored target BEFORE the dispatcher can reactivate, bind, or materialize a session.
+        if (typedConversationId.HasValue)
+        {
+            await EnsureConversationWritableAsync(typedConversationId.Value, agentId);
+        }
+        else
+        {
+            if (_conversationStore is null)
+                throw new HubException("Conversation not found (404).");
+
+            var candidate = await _conversationStore.ResolveByBindingAsync(agentId, bindingChannelType, channelAddress, Context.ConnectionAborted);
+            if (candidate is null)
+            {
+                var conversations = await _conversationStore.ListAsync(agentId, Context.ConnectionAborted);
+                candidate = conversations.Where(c => c.Status == ConversationStatus.Archived)
+                    .Where(c => c.ChannelBindings.Any(b => b.ChannelType == bindingChannelType && b.ChannelAddress == channelAddress))
+                    .OrderByDescending(c => c.UpdatedAt).FirstOrDefault();
+            }
+            if (candidate is not null)
+                EnsureConversationWritable(candidate, agentId);
+        }
 
         var dispatchResult = await _app.ResolveSessionAsync(context, Context.ConnectionAborted);
         return new HubInboundResolution(

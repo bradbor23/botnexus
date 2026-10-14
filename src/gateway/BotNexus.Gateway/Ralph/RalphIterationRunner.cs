@@ -107,7 +107,7 @@ public sealed class RalphIterationRunner(
             // the agent's own prose account of what it claims it did.
             foreach (var toolEntry in _toolAudit.ProjectBlockingRun(_toolAudit.CaptureBlockingRun(response)))
                 session.AddEntry(toolEntry);
-            session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = response.Content });
+            session.AddEntry(new SessionEntry { AgentRunId = response.AgentRunId, Role = MessageRole.Assistant, Content = response.Content });
             ProviderTokenUsageRecorder.Record(session, response.Usage);
             await sessions.SaveAsync(session, cancellationToken).ConfigureAwait(false);
             return true;

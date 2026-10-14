@@ -1,12 +1,61 @@
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Abstractions.Sessions;
+using BotNexus.Gateway.Sessions;
 using BotNexus.Gateway.Streaming;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace BotNexus.Gateway.Tests;
 
 public sealed class StreamingSessionHelperTests
 {
+    [Fact]
+    public async Task ProcessAndSaveAsync_MultipleTurnEnds_ReturnsCompleteRunAssistantContent()
+    {
+        var session = new GatewaySession { SessionId = BotNexus.Domain.Primitives.SessionId.From("session-multiple-turns"), AgentId = BotNexus.Domain.Primitives.AgentId.From("agent-1") };
+        var store = new Mock<ISessionStore>();
+
+        var result = await StreamingSessionHelper.ProcessAndSaveAsync(
+            ToAsyncEnumerable(
+            [
+                new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "first" },
+                new AgentStreamEvent { Type = AgentStreamEventType.MessageEnd, Usage = new AgentResponseUsage(5, 2) },
+                new AgentStreamEvent { Type = AgentStreamEventType.TurnEnd },
+                new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "second" },
+                new AgentStreamEvent { Type = AgentStreamEventType.MessageEnd, Usage = new AgentResponseUsage(4, 3) },
+                new AgentStreamEvent { Type = AgentStreamEventType.TurnEnd },
+                new AgentStreamEvent { Type = AgentStreamEventType.RunEnded }
+            ]),
+            session,
+            store.Object);
+
+        result.AssistantContent.ShouldBe($"first{Environment.NewLine}second");
+        result.Usage.ShouldBe(new AgentResponseUsage(9, 5));
+        result.TurnCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task ProcessAndSaveAsync_RunEndedCompletion_SurvivesInResultWithUsageEvidence()
+    {
+        var session = new GatewaySession { SessionId = BotNexus.Domain.Primitives.SessionId.From("session-completion"), AgentId = BotNexus.Domain.Primitives.AgentId.From("agent-1") };
+        var store = new Mock<ISessionStore>();
+        var completion = new RunCompletionSignal("Parked", ["open"], "UserInput", "detail", "evidence", "user", "reply", 1);
+
+        var result = await StreamingSessionHelper.ProcessAndSaveAsync(
+            ToAsyncEnumerable(
+            [
+                new AgentStreamEvent { Type = AgentStreamEventType.MessageEnd, Usage = new AgentResponseUsage(5, 2) },
+                new AgentStreamEvent { Type = AgentStreamEventType.RunEnded, Completion = completion }
+            ]),
+            session,
+            store.Object);
+
+        result.Completion.ShouldBe(completion);
+        result.Usage.ShouldBe(new AgentResponseUsage(5, 2));
+        result.TurnCount.ShouldBe(1);
+        result.FinalSaveOutcome.ShouldBe(SessionSaveOutcome.Persisted);
+    }
+
     /// <summary>
     /// Minimal capturing logger so the #2921 silent-stop warning can be asserted on directly
     /// rather than inferred. Records level plus the formatted message.
@@ -926,6 +975,86 @@ public sealed class StreamingSessionHelperTests
 
         // After the run completes cleanly, no sentinel may remain.
         session.History.Any(e => e.IsCrashSentinel).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ProcessAndSaveAsync_FailedFinalCompletion_RetainsSentinelAndPublishesAfterSave()
+    {
+        var session = new GatewaySession
+        {
+            SessionId = BotNexus.Domain.Primitives.SessionId.From("session-sentinel-failed"),
+            AgentId = BotNexus.Domain.Primitives.AgentId.From("agent-1")
+        };
+        session.AddEntry(NewCrashSentinel());
+        var store = new Mock<ISessionStore>();
+        var saveCompleted = false;
+        store.Setup(s => s.SaveAsync(session, It.IsAny<CancellationToken>()))
+            .Callback(() => saveCompleted = true)
+            .Returns(Task.CompletedTask);
+        var lifecycle = new SessionLifecycleEvents(NullLogger<SessionLifecycleEvents>.Instance);
+        SessionLifecycleEvent? published = null;
+        lifecycle.SessionChanged += (evt, _) =>
+        {
+            saveCompleted.ShouldBeTrue("live recovery must observe the authoritative failed transcript");
+            published = evt;
+            return Task.CompletedTask;
+        };
+
+        await StreamingSessionHelper.ProcessAndSaveAsync(
+            ToAsyncEnumerable(
+            [
+                new AgentStreamEvent
+                {
+                    Type = AgentStreamEventType.RunEnded,
+                    Completion = new RunCompletionSignal("Failed", [], null, "provider failed", null, null, null, 0)
+                }
+            ]),
+            session,
+            store.Object,
+            lifecycleEvents: lifecycle);
+
+        session.History.ShouldContain(e => e.IsCrashSentinel);
+        published.ShouldNotBeNull();
+        published.Type.ShouldBe(SessionLifecycleEventType.TerminalFailure);
+        published.Session.ShouldBeSameAs(session);
+    }
+
+    [Theory]
+    [InlineData("Completed")]
+    [InlineData("Cancelled")]
+    public async Task ProcessAndSaveAsync_NonFailedFinalCompletion_RemovesSentinelWithoutFailureSignal(string status)
+    {
+        var session = new GatewaySession
+        {
+            SessionId = BotNexus.Domain.Primitives.SessionId.From($"session-sentinel-{status.ToLowerInvariant()}"),
+            AgentId = BotNexus.Domain.Primitives.AgentId.From("agent-1")
+        };
+        session.AddEntry(NewCrashSentinel());
+        var store = new Mock<ISessionStore>();
+        var lifecycle = new SessionLifecycleEvents(NullLogger<SessionLifecycleEvents>.Instance);
+        var terminalFailures = 0;
+        lifecycle.SessionChanged += (evt, _) =>
+        {
+            if (evt.Type == SessionLifecycleEventType.TerminalFailure)
+                terminalFailures++;
+            return Task.CompletedTask;
+        };
+
+        await StreamingSessionHelper.ProcessAndSaveAsync(
+            ToAsyncEnumerable(
+            [
+                new AgentStreamEvent
+                {
+                    Type = AgentStreamEventType.RunEnded,
+                    Completion = new RunCompletionSignal(status, [], null, null, null, null, null, 0)
+                }
+            ]),
+            session,
+            store.Object,
+            lifecycleEvents: lifecycle);
+
+        session.History.ShouldNotContain(e => e.IsCrashSentinel);
+        terminalFailures.ShouldBe(0);
     }
 
     [Fact]

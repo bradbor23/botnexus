@@ -22,14 +22,39 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
     private readonly ConcurrentDictionary<string, PendingAskUserResponse> _pendingByRequestId = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _requestIdByConversation = new(StringComparer.Ordinal);
     private readonly INotificationPublisher _notificationPublisher;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>Uses system time and the no-op publisher for ordinary construction and DI.</summary>
+    public AskUserResponseRegistry() : this(TimeProvider.System)
+    {
+    }
+
+    /// <summary>Allows timeout tests to control the timer scheduler without wall-clock waits.</summary>
+    public AskUserResponseRegistry(TimeProvider timeProvider)
+        : this(timeProvider, notificationPublisher: null)
+    {
+    }
 
     /// <summary>Creates a registry.</summary>
+    /// <param name="timeProvider">Timer scheduler; required.</param>
     /// <param name="notificationPublisher">
     /// Optional publisher used to report that an agent is blocked. Defaults to the no-op, so every
     /// existing construction site and test compiles unchanged.
     /// </param>
-    public AskUserResponseRegistry(INotificationPublisher? notificationPublisher = null) =>
+    public AskUserResponseRegistry(
+        TimeProvider timeProvider,
+        INotificationPublisher? notificationPublisher)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _timeProvider = timeProvider;
         _notificationPublisher = notificationPublisher ?? NullNotificationPublisher.Instance;
+    }
+
+    /// <summary>Creates a registry on the system clock with a publisher.</summary>
+    public AskUserResponseRegistry(INotificationPublisher? notificationPublisher)
+        : this(TimeProvider.System, notificationPublisher)
+    {
+    }
 
     /// <inheritdoc />
     public (string RequestId, Task<AskUserResponse> Task) Register(
@@ -63,7 +88,7 @@ public sealed class AskUserResponseRegistry : IAskUserResponseRegistry, IDisposa
 
             if (timeout is { } timeoutValue && timeoutValue > TimeSpan.Zero)
             {
-                pending.TimeoutCts = new CancellationTokenSource(timeoutValue);
+                pending.TimeoutCts = new CancellationTokenSource(timeoutValue, _timeProvider);
                 pending.TimeoutRegistration = pending.TimeoutCts.Token.Register(() => HandleTimeout(pending));
             }
 

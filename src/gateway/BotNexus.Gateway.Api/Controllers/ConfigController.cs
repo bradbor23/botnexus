@@ -1,6 +1,8 @@
 using BotNexus.Gateway.Api.Configuration;
 using BotNexus.Gateway.Api.Models;
 using BotNexus.Gateway.Configuration;
+using BotNexus.Gateway.Abstractions.Extensions;
+using BotNexus.Gateway.Extensions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
@@ -107,6 +109,7 @@ public sealed class ConfigController : ControllerBase
     public async Task<ActionResult<ConfigPatchResponse>> PatchConfig(
         [FromBody] ConfigPatchRequest request,
         [FromServices] PlatformConfigWriter writer,
+        [FromServices] IExtensionLoader extensionLoader,
         CancellationToken ct)
     {
         if (request?.Operations is null || request.Operations.Count == 0)
@@ -126,7 +129,12 @@ public sealed class ConfigController : ControllerBase
 
         try
         {
-            var result = await writer.ApplyPatchAsync(operations, "before-config-patch", request.ExpectedRevision, ct);
+            var result = await writer.ApplyPatchAsync(
+                operations,
+                "before-config-patch",
+                request.ExpectedRevision,
+                ct,
+                ScopeValidation(extensionLoader));
             if (!result.Success)
                 return BadRequest(new ConfigPatchResponse(false, null, result.Errors));
 
@@ -178,14 +186,22 @@ public sealed class ConfigController : ControllerBase
         string section,
         [FromBody] JsonNode value,
         [FromServices] PlatformConfigWriter writer,
+        [FromServices] IExtensionLoader extensionLoader,
         CancellationToken ct)
     {
         // Prevent updating agents via this endpoint (use /api/agents instead)
         if (section.Equals("agents", StringComparison.OrdinalIgnoreCase))
             return BadRequest("Use /api/agents for agent management.");
 
-        await writer.UpdateSectionAsync(section, value, ct);
-        return Ok(new { message = $"Section '{section}' updated. Changes will be applied automatically." });
+        try
+        {
+            await writer.UpdateSectionAsync(section, value, ct, additionalValidation: ScopeValidation(extensionLoader));
+            return Ok(new { message = $"Section '{section}' updated. Changes will be applied automatically." });
+        }
+        catch (PlatformConfigSectionGuardException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     /// <summary>
@@ -197,10 +213,21 @@ public sealed class ConfigController : ControllerBase
         string key,
         [FromBody] JsonNode value,
         [FromServices] PlatformConfigWriter writer,
+        [FromServices] IExtensionLoader extensionLoader,
         CancellationToken ct)
     {
-        await writer.UpdateSectionEntryAsync(section, key, value, ct);
-        return Ok(new { message = $"Entry '{key}' in section '{section}' updated." });
+        if (section.Equals("agents", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Use /api/agents for agent management.");
+
+        try
+        {
+            await writer.UpdateSectionEntryAsync(section, key, value, ct, ScopeValidation(extensionLoader));
+            return Ok(new { message = $"Entry '{key}' in section '{section}' updated." });
+        }
+        catch (PlatformConfigSectionGuardException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     /// <summary>
@@ -211,9 +238,20 @@ public sealed class ConfigController : ControllerBase
         string section,
         string key,
         [FromServices] PlatformConfigWriter writer,
+        [FromServices] IExtensionLoader extensionLoader,
         CancellationToken ct)
     {
-        await writer.RemoveSectionEntryAsync(section, key, ct);
+        if (section.Equals("agents", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Use /api/agents for agent management.");
+
+        var result = await writer.ApplyPatchAsync(
+            [new ConfigPatchOperation($"{section}.{key}", Remove: true)],
+            $"before-{section}-remove",
+            ct: ct,
+            additionalValidation: ScopeValidation(extensionLoader));
+        if (!result.Success)
+            return BadRequest(string.Join("; ", result.Errors));
+
         return Ok(new { message = $"Entry '{key}' removed from section '{section}'." });
     }
 
@@ -446,7 +484,7 @@ public sealed class ConfigController : ControllerBase
                 .ToArray();
             return Ok(new ConfigValidationResponse(errors.Length == 0, resolvedPath, warnings, errors));
         }
-        catch (Exception ex) when (ex is JsonException or InvalidDataException or FormatException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or FormatException or OptionsValidationException)
         {
             var parseMessage = ex.GetBaseException() is JsonException jsonException
                 ? jsonException.Message
@@ -465,13 +503,16 @@ public sealed class ConfigController : ControllerBase
 
     private static PlatformConfig LoadConfigFromPath(string path)
     {
-        var fileConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(path, optional: false, reloadOnChange: false)
+        // This endpoint validates the explicitly requested document, not the host's provider graph.
+        // Use the exact-document stream provider so objects, arrays, nulls, and legacy root shape
+        // survive without introducing a second direct PlatformConfig loader in production code.
+        var bytes = System.IO.File.ReadAllBytes(path);
+        var configuration = new ConfigurationBuilder()
+            .AddAcceptedRawJsonStream(new MemoryStream(bytes))
             .Build();
-
         var config = new PlatformConfig();
-        fileConfiguration.Bind(config);
-        new PlatformConfigPostConfigure(fileConfiguration, path).PostConfigure(Options.DefaultName, config);
+        configuration.Bind(config);
+        PlatformConfigPostConfigure.ApplyAuthoritativeRawShape(configuration, config);
         return config;
     }
 
@@ -487,8 +528,112 @@ public sealed class ConfigController : ControllerBase
     private static JsonObject SerializeConfig(PlatformConfig config)
         => JsonSerializer.SerializeToNode(config, WriteOptions)?.AsObject() ?? new JsonObject();
 
+    private static Func<JsonObject, JsonObject, IReadOnlyList<string>> ScopeValidation(IExtensionLoader extensionLoader)
+    {
+        ArgumentNullException.ThrowIfNull(extensionLoader);
+        var loadedExtensions = extensionLoader.GetLoaded();
+        return (before, candidate) =>
+        [
+            .. ExtensionConfigurationScopeValidator.ValidateChanges(before, candidate, loadedExtensions),
+            .. ValidateProviderAssignmentChanges(before, candidate)
+        ];
+    }
+
+    private static IReadOnlyList<string> ValidateProviderAssignmentChanges(JsonObject before, JsonObject candidate)
+    {
+        if (TryGetObject(before, "providers") is not { } previousProviders)
+            return [];
+
+        var candidateProviders = TryGetObject(candidate, "providers");
+        var affectedProviders = previousProviders
+            .Where(entry => entry.Value is JsonObject previous && IsEnabled(previous))
+            .Where(entry =>
+                !TryGetProperty(candidateProviders, entry.Key, out var current) ||
+                current is not JsonObject currentProvider ||
+                !IsEnabled(currentProvider))
+            .Select(entry => entry.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (affectedProviders.Count == 0)
+            return [];
+
+        var dependencies = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (TryGetObject(candidate, "agents") is { } agents)
+        {
+            foreach (var (agentId, agentNode) in agents)
+            {
+                if (agentNode is not JsonObject agent ||
+                    !TryGetString(agent, "provider", out var provider))
+                {
+                    continue;
+                }
+
+                var affectedProvider = affectedProviders.FirstOrDefault(candidateProvider =>
+                    string.Equals(candidateProvider, provider, StringComparison.OrdinalIgnoreCase));
+                if (affectedProvider is null)
+                    continue;
+
+                if (!dependencies.TryGetValue(affectedProvider, out var agentIds))
+                {
+                    agentIds = [];
+                    dependencies[affectedProvider] = agentIds;
+                }
+                agentIds.Add(agentId);
+            }
+        }
+
+        return dependencies
+            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(entry =>
+            {
+                entry.Value.Sort(StringComparer.OrdinalIgnoreCase);
+                var noun = entry.Value.Count == 1 ? "dependent agent" : "dependent agents";
+                return $"Provider '{entry.Key}' cannot be removed or disabled while assigned to {entry.Value.Count} {noun}: " +
+                    $"{string.Join(", ", entry.Value)}. Reassign the agents before changing the provider.";
+            })
+            .ToList();
+    }
+
+    private static bool IsEnabled(JsonObject provider) =>
+        !TryGetProperty(provider, "enabled", out var enabledNode) ||
+        enabledNode is not JsonValue enabledValue ||
+        !enabledValue.TryGetValue<bool>(out var enabled) ||
+        enabled;
+
+    private static JsonObject? TryGetObject(JsonObject root, string name) =>
+        TryGetProperty(root, name, out var node) ? node as JsonObject : null;
+
+    private static bool TryGetString(JsonObject root, string name, out string value)
+    {
+        value = string.Empty;
+        if (!TryGetProperty(root, name, out var node) || node is not JsonValue jsonValue ||
+            !jsonValue.TryGetValue<string>(out var resolved) || string.IsNullOrWhiteSpace(resolved))
+        {
+            return false;
+        }
+
+        value = resolved;
+        return true;
+    }
+
+    private static bool TryGetProperty(JsonObject? root, string name, out JsonNode? value)
+    {
+        value = null;
+        if (root is null)
+            return false;
+
+        foreach (var property in root)
+        {
+            if (!string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            value = property.Value;
+            return true;
+        }
+
+        return false;
+    }
+
     private static void RedactSecrets(JsonObject config)
-        => ConfigSecretMerge.Redact(config);
+        => config.Redact();
 }
 
 /// <summary>

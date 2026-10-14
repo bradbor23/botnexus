@@ -16,8 +16,22 @@ namespace BotNexus.Extensions.GitHub;
 /// </remarks>
 internal static class GitHubProjections
 {
+    /// <summary>The bounded field catalogue accepted by issue census projections.</summary>
+    internal static readonly string[] IssueListFields =
+    [
+        "itemKey", "number", "title", "state", "author", "body", "labels", "commentCount",
+        "createdAt", "updatedAt", "url", "isPullRequest",
+    ];
+
+    /// <summary>The compact field set returned by issue census operations unless explicitly overridden.</summary>
+    internal static readonly string[] DefaultIssueListFields =
+    [
+        "itemKey", "number", "title", "state", "author", "labels", "commentCount",
+        "createdAt", "updatedAt", "url", "isPullRequest",
+    ];
+
     /// <summary>Projects an issue or pull-request object.</summary>
-    internal static Dictionary<string, object?> Issue(JsonElement element) => new(StringComparer.Ordinal)
+    internal static Dictionary<string, object?> Issue(this JsonElement element) => new(StringComparer.Ordinal)
     {
         ["number"] = Int(element, "number"),
         ["title"] = Str(element, "title"),
@@ -35,8 +49,33 @@ internal static class GitHubProjections
             && element.TryGetProperty("pull_request", out _),
     };
 
+    /// <summary>Projects only the selected fields for an issue census row.</summary>
+    internal static Dictionary<string, object?> IssueListItem(this JsonElement element, IReadOnlyList<string> fields)
+    {
+        var number = Int(element, "number");
+        var isPullRequest = element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty("pull_request", out _);
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["itemKey"] = number is null ? null : $"{(isPullRequest ? "pull-request" : "issue")}:{number}",
+            ["number"] = number,
+            ["title"] = Str(element, "title"),
+            ["state"] = Str(element, "state"),
+            ["author"] = Str(Obj(element, "user"), "login"),
+            ["body"] = Str(element, "body"),
+            ["labels"] = Labels(element),
+            ["commentCount"] = Int(element, "comments"),
+            ["createdAt"] = Str(element, "created_at"),
+            ["updatedAt"] = Str(element, "updated_at"),
+            ["url"] = Str(element, "html_url"),
+            ["isPullRequest"] = isPullRequest,
+        };
+
+        return fields.ToDictionary(field => field, field => values[field], StringComparer.Ordinal);
+    }
+
     /// <summary>Projects the pull-request-specific fields on top of the shared issue shape.</summary>
-    internal static Dictionary<string, object?> PullRequest(JsonElement element)
+    internal static Dictionary<string, object?> PullRequest(this JsonElement element)
     {
         var projected = Issue(element);
         projected["draft"] = Bool(element, "draft");
@@ -52,7 +91,7 @@ internal static class GitHubProjections
     }
 
     /// <summary>Projects a comment object.</summary>
-    internal static Dictionary<string, object?> Comment(JsonElement element) => new(StringComparer.Ordinal)
+    internal static Dictionary<string, object?> Comment(this JsonElement element) => new(StringComparer.Ordinal)
     {
         ["id"] = Int(element, "id"),
         ["author"] = Str(Obj(element, "user"), "login"),
@@ -61,13 +100,24 @@ internal static class GitHubProjections
         ["url"] = Str(element, "html_url"),
     };
 
+    /// <summary>Projects a repository label.</summary>
+    internal static Dictionary<string, object?> Label(this JsonElement element) => new(StringComparer.Ordinal)
+    {
+        ["id"] = Int(element, "id"),
+        ["name"] = Str(element, "name"),
+        ["color"] = Str(element, "color"),
+        ["description"] = Str(element, "description"),
+        ["default"] = Bool(element, "default"),
+        ["url"] = Str(element, "url"),
+    };
+
     /// <summary>Projects a single check run from the check-runs endpoint.</summary>
     /// <remarks>
     /// <c>conclusion</c> is null while a run is still in flight. Keeping it null rather than
     /// substituting "pending" preserves the distinction between "not finished" and "finished with an
     /// unknown outcome" - collapsing them is how a caller concludes a red PR is merely slow.
     /// </remarks>
-    internal static Dictionary<string, object?> CheckRun(JsonElement element) => new(StringComparer.Ordinal)
+    internal static Dictionary<string, object?> CheckRun(this JsonElement element) => new(StringComparer.Ordinal)
     {
         ["id"] = Int(element, "id"),
         ["name"] = Str(element, "name"),
@@ -84,7 +134,7 @@ internal static class GitHubProjections
     /// text and a large PR would otherwise spend the whole transcript budget on a diff the agent
     /// only wanted the file list from.
     /// </remarks>
-    internal static Dictionary<string, object?> PullRequestFile(JsonElement element, bool includePatch)
+    internal static Dictionary<string, object?> PullRequestFile(this JsonElement element, bool includePatch)
     {
         var projected = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
@@ -103,7 +153,7 @@ internal static class GitHubProjections
     }
 
     /// <summary>Projects one workflow run.</summary>
-    internal static Dictionary<string, object?> WorkflowRun(JsonElement element) => new(StringComparer.Ordinal)
+    internal static Dictionary<string, object?> WorkflowRun(this JsonElement element) => new(StringComparer.Ordinal)
     {
         ["id"] = Int(element, "id"),
         ["name"] = Str(element, "name"),

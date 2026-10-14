@@ -128,6 +128,7 @@ this exception — they go through the normal API-key check.
 | Conversations | `api/conversations` | [conversations.md](conversations.md) |
 | Cron | `api/cron` | [cron.md](cron.md) |
 | Exchanges (agent-to-agent budget diagnostics) | `api/exchanges` | [exchanges.md](exchanges.md) |
+| Search | `api/search` | [Search contributor contract](../development/search-contributor-contract.md#query-the-aggregated-endpoint) |
 | Satellites | `api/satellites` | [satellites.md](satellites.md) |
 | Sessions + Sub-agents | `api/sessions`, `api/subagents` | [sessions.md](sessions.md) |
 | Webhooks (management + inbound delivery) | `api/webhooks` | [webhooks.md](webhooks.md) |
@@ -177,3 +178,7 @@ follow-up work under [#219](https://github.com/Sytone/botnexus/issues/219):
 - **.NET public API reference** — generated from XML doc comments (e.g. DocFX).
 - **Remaining REST controllers** - channels, models, providers, memory, reports,
   diagnostics, stats, and the rest of the `Controllers/` set.
+
+## Provider usage
+
+The [provider Usage and Copilot quota reference](provider-usage.md) documents the additive admin-only companion read, bounded account refresh, separate header observations and gateway-wide scheduled activity. Existing observed-request Usage callers remain supported.

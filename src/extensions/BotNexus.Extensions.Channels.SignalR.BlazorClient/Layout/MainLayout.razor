@@ -17,7 +17,7 @@
 @implements IDisposable
 @implements IAsyncDisposable
 
-<div class="app-shell" data-density="@DensityAttribute">
+<div class="app-shell" data-density="@DensityAttribute" data-shell="@ShellAttribute">
     @* Top bar with burger + logo *@
     <header class="app-banner">
         <div class="banner-header">
@@ -77,7 +77,7 @@
             {
                 <div class="announcement-item @ann.Type">
                     <span class="announcement-content">@ann.Text</span>
-                    <button class="announcement-dismiss" @onclick="() => DismissAnnouncement(ann.Id)"><Icon Name="close" Size="14" Class="bn-icon-inherit" /></button>
+                    <button class="announcement-dismiss" aria-label="@($"Dismiss announcement: {ann.Text}")" @onclick="() => DismissAnnouncement(ann.Id)"><Icon Name="close" Size="14" Class="bn-icon-inherit" /></button>
                 </div>
             }
         </div>
@@ -161,6 +161,8 @@
 
             @* Build info at bottom *@
             <div class="sidebar-footer">
+                <a class="client-view-link" href="/mobile" data-testid="mobile-view-link">Mobile view</a>
+                <span class="client-build-info" data-testid="client-build-info">@GatewayInfoService.FormatBuildIdentity(GatewayInfo.Info)</span>
                 @* Restart Gateway button removed -- no process supervisor present; button killed the gateway with no recovery (#794) *@
                 @if (GatewayInfo.Info is not null)
                 {
@@ -266,6 +268,17 @@
     /// </summary>
     private string DensityAttribute => PortalDensity.Normalize(Prefs.Current.Density);
 
+    /// <summary>
+    /// Shell variant emitted as <c>data-shell</c>. The default is classic, so adding the preference
+    /// is behavior-neutral until a user explicitly opts into simplified slices.
+    /// </summary>
+    private string ShellAttribute => PortalShell.Normalize(Prefs.Current.Shell);
+
+    /// <summary>
+    /// Whether this is the narrow viewport. Read once after first render from the same JS probe the
+    /// chat scroller uses, so the sidebar's auto-close and the mobile-shell redirect agree about it.
+    /// </summary>
+    private bool _isMobile;
 
     /// <summary>True when the light theme is active, driving the toggle's icon and label.</summary>
     private bool IsLightTheme => PortalTheme.Normalize(Prefs.Current.Theme) == PortalTheme.Light;
@@ -298,7 +311,6 @@
     private ElementReference _usageBtnRef;
     private bool _showDebugPanel = false;
     private bool _sidebarOpen = false;
-    private bool _isMobile = false;
     private const string SidebarKey = "botnexus-sidebar-open";
 
     /// <summary>
@@ -373,6 +385,33 @@
     }
 
     /// <summary>
+    /// #2973: THE single emission point for every top-level sidebar nav anchor.
+    ///
+    /// Why a helper rather than eight hand-written anchors: <c>data-testid</c> used to be typed
+    /// literally into four of the eight render fragments and forgotten in the other four, so being
+    /// addressable by a stable selector depended on author recall. The observable failure was not a
+    /// missing element but a SILENTLY WRONG one - testid-first automation that could not find
+    /// <c>nav-skills</c> retargeted onto the nearest anchor that did have a testid and asserted
+    /// against Cron Jobs while claiming to be on Skills. Deriving the attribute from the route means
+    /// a nav entry added tomorrow cannot ship without one.
+    /// </summary>
+    /// <param name="route">The anchor's href, relative to the base path. Empty string is Home's root route.</param>
+    /// <param name="label">The anchor's rendered content (glyph + text).</param>
+    /// <param name="testIdOverride">
+    /// Only for an anchor whose historical testid does not match its route. Cron Jobs is the sole
+    /// case: its id tracks the label (nav-cron-jobs) rather than the route (cron), and it has in-repo
+    /// and unknown external consumers, so it is preserved rather than renamed. Such an anchor
+    /// additionally carries <c>data-testid-alias</c> with the route-derived id, so both keys select it.
+    /// </param>
+    private RenderFragment NavAnchor(string route, RenderFragment label, string? testIdOverride = null) => __builder =>
+    {
+        <a href="@route"
+           class="sidebar-nav-item @NavClass(NavKeyForRoute(route))"
+           data-testid="@(testIdOverride ?? NavTestId(route))"
+           data-testid-alias="@(testIdOverride is null ? null : NavTestId(route))">@label</a>
+    };
+
+    /// <summary>
     /// Maps a nav route to its canonical test id. Home's route is the empty string, which would
     /// otherwise produce the meaningless <c>nav-</c>, so it is mapped explicitly.
     /// </summary>
@@ -411,8 +450,7 @@
         <a href="@route"
            class="sidebar-subnav-item @extraClass"
            data-testid="@(legacyTestId ?? SubNavTestId(route))"
-           data-testid-alias="@(legacyTestId is null ? null : SubNavTestId(route))"
-           @onclick="CloseSidebar">@label</a>
+           data-testid-alias="@(legacyTestId is null ? null : SubNavTestId(route))">@label</a>
     };
 
     /// <summary>
@@ -1090,7 +1128,6 @@
                 // A splitter that fails to initialise leaves a fixed-width sidebar, which is what
                 // the portal had before. Never worth failing first render over.
             }
-            // Re-render immediately after mobile detection so layout responds without waiting for gateway load.
             StateHasChanged();
 
             // Load gateway info once portal is ready
@@ -1284,23 +1321,13 @@
         {
             await Interaction.RefreshConversationsAsync(agentId);
             Store.SelectView(agentId, string.Empty, SelectionSource.UserClick);
-            if (Store.GetAgent(agentId) is { } agent)
-            {
-                if (agent.UnreadCount > 0)
-                    agent.UnreadCount = 0;
+            if (Store.GetAgent(agentId) is { } agent && agent.UnreadCount > 0)
+                agent.UnreadCount = 0;
 
-                // SeedConversations auto-selects a default conversation, but its
-                // history is only loaded for the very first agent during portal init.
-                // Trigger history loading now so the user sees messages immediately.
-                if (agent.ActiveConversationId is not null)
-                    await Interaction.SelectConversationAsync(agentId, agent.ActiveConversationId);
-            }
-
-            NavigateToChat(agentId, Store.GetAgent(agentId)?.ActiveConversationId);
+            // Agent-only navigation is intentional: Home owns MRU/cold-start resolution and
+            // canonicalizes the URL to one explicit conversation route.
+            NavigateToChat(agentId, null);
             Store.NotifyChanged();
-
-            if (_isMobile)
-                _sidebarOpen = false;
         }
     }
 
@@ -1399,33 +1426,18 @@
     private RenderFragment RenderConversationItem(AgentState agent, ConversationState conversation) => __builder =>
     {
         <div class="conversation-list-item" data-testid="conversation-list-item" data-conversation-id="@conversation.ConversationId">
-            <a class="conversation-list-item-btn @(conversation.ConversationId == agent.ActiveConversationId ? "active" : "")"
+            <a class="conversation-list-item-btn @(Store is IDisplayedConversation displayed && displayed.IsConversationDisplayed(agent.AgentId, conversation.ConversationId) ? "active" : "")"
                href="agent/@Uri.EscapeDataString(agent.AgentId)/conversation/@Uri.EscapeDataString(conversation.ConversationId)"
                @onclick="() => SelectConversationAsync(agent.AgentId, conversation.ConversationId)"
                @onclick:preventDefault="true">
                 <span class="conversation-list-item-main">
                     <span class="conversation-list-item-title" title="@PortalText.SingleLine(conversation.Title)">@PortalText.SingleLine(conversation.Title)</span>
-
-                    @if (conversation.IsDefault)
-                    {
-                        <span class="conversation-default-badge">Default</span>
-                    }
-                    @if (GetVirtualConversationBadge(conversation) is { } badge)
-                    {
-                        <span class="conversation-default-badge">@badge</span>
-                    }
+                    @if (conversation.IsDefault) { <span class="conversation-default-badge">Default</span> }
+                    @if (GetVirtualConversationBadge(conversation) is { } badge) { <span class="conversation-default-badge">@badge</span> }
                 </span>
-
                 <span class="conversation-list-item-meta">
-                    @if (conversation.UnreadCount > 0)
-                    {
-                        <span class="conversation-unread-dot"
-                              aria-label="Unread messages"></span>
-                    }
-
-                    <span class="conversation-updated-at">
-                        @FormatConversationTimestamp(conversation.UpdatedAt)
-                    </span>
+                    @if (conversation.UnreadCount > 0) { <span class="conversation-unread-dot" aria-label="Unread messages"></span> }
+                    <span class="conversation-updated-at">@FormatConversationTimestamp(conversation.UpdatedAt)</span>
                 </span>
             </a>
             @if (!conversation.IsDefault && !agent.IsReadOnly)
@@ -1444,7 +1456,7 @@
                         <Icon Name="pin" Size="16" />
                     </button>
                     <button class="conversation-archive-btn" data-testid="conversation-archive-btn"
-                            title="@(IsUnattendedConversation(conversation) ? "Close conversation \u2014 reopens on next trigger" : "Archive conversation")"
+                            title="@(IsUnattendedConversation(conversation) ? "Close conversation — reopens on next trigger" : "Archive conversation")"
                             @onclick:stopPropagation="true"
                             @onclick="() => ArchiveConversationAsync(agent.AgentId, conversation.ConversationId, conversation.Title, IsUnattendedConversation(conversation))">
                         @* An unattended conversation reopens on its next trigger, so closing it
@@ -1456,16 +1468,6 @@
             }
         </div>
     };
-
-
-
-    // The menu is a sibling of the actions strip, not a child of it: it positions against
-    // .conversation-list-item, and nesting it inside an absolutely positioned strip would
-    // re-anchor it to the strip instead.
-
-
-
-
 
     // #2441: agent display names and emoji come from user-editable config and may contain embedded
     // control characters; normalise to a single line so the dropdown row cannot grow.
@@ -1487,12 +1489,7 @@
     private static bool IsUnattendedConversation(ConversationState conversation) =>
         conversation.Project(SelectionSource.UserClick).IsUnattended;
 
-    private async Task ViewSubAgentAsync(SubAgentInfo sub)
-    {
-        await Interaction.ViewSubAgentAsync(sub);
-        if (_isMobile)
-            _sidebarOpen = false;
-    }
+    private Task ViewSubAgentAsync(SubAgentInfo sub) => Interaction.ViewSubAgentAsync(sub);
 
     private bool IsSubAgentActive(SubAgentInfo sub)
     {
@@ -1503,16 +1500,12 @@
     {
         await Interaction.SelectConversationAsync(agentId, conversationId);
         NavigateToChat(agentId, conversationId);
-        if (_isMobile)
-            _sidebarOpen = false;
     }
 
     private async Task CreateConversationAsync(string agentId)
     {
         var conversationId = await Interaction.CreateConversationAsync(agentId);
         NavigateToChat(agentId, conversationId);
-        if (_isMobile)
-            _sidebarOpen = false;
     }
 
     // #2247: the canonical, route-owned shape for the active view is
@@ -1525,8 +1518,8 @@
             ? $"agent/{encodedAgentId}"
             : $"agent/{encodedAgentId}/conversation/{Uri.EscapeDataString(conversationId)}";
 
-        // On mobile, navigate to the mobile app path (/mobile/chat/...).
-        // The desktop and mobile portals are separate apps served at "/" and "/mobile/".
+        // On mobile, navigate to the mobile app path (/mobile/agent/...). The desktop and mobile
+        // portals are separate apps served at "/" and "/mobile/", so this needs a full load.
         var target = _isMobile ? "/mobile/" + relPath : relPath;
 
         var current = Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/');
@@ -1594,7 +1587,10 @@
     {
         if (Store.ActiveAgentId is not { Length: > 0 } agentId)
             return null;
-        return Store.GetAgent(agentId)?.ActiveConversationSessionId;
+        if (Store is not IDisplayedConversation displayed
+            || displayed.DisplayedConversationIdFor(agentId) is not { } conversationId)
+            return null;
+        return Store.GetAgent(agentId)?.Conversations.GetValueOrDefault(conversationId)?.ActiveSessionId;
     }
 
     private void OpenSettings() => _settingsPanel?.Open();

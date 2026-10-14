@@ -66,18 +66,31 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
         store.LastHistoryWriteReconciled.ShouldBeFalse();
     }
 
-    [Fact]
-    public async Task SaveAsync_WithLargePersistedHistory_WritesOnlyDelta()
+    [Theory]
+    [InlineData(10)]
+    [InlineData(20_000)]
+    public async Task SaveAsync_WithPersistedHistory_ExecutesOneInsertAndNoRewrite(int persistedEntryCount)
     {
         var store = CreateStore();
-        var session = await CreateSavedSessionAsync(store, "large-delta", entryCount: 2_000);
+        var session = await CreateSavedSessionAsync(
+            store,
+            $"delta-{persistedEntryCount}",
+            entryCount: persistedEntryCount);
+        await InstallHistoryMutationAuditAsync();
 
         session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "delta" });
         await store.SaveAsync(session);
 
+        var mutations = await ReadHistoryMutationAuditAsync();
+        mutations.Inserts.ShouldBe(1,
+            "ordinary save must issue one history insert regardless of persisted prefix length");
+        mutations.Updates.ShouldBe(0,
+            "ordinary save must not update an unchanged persisted history row");
+        mutations.Deletes.ShouldBe(0,
+            "ordinary save must not delete and recreate persisted history");
         store.LastHistoryRowsMutated.ShouldBe(1, "work must be proportional to the delta, not total history");
         store.LastHistoryWriteReconciled.ShouldBeFalse();
-        (await ReadHistoryRowsAsync(session.SessionId)).Count.ShouldBe(2_001);
+        (await ReadHistoryRowsAsync(session.SessionId)).Count.ShouldBe(persistedEntryCount + 1);
     }
 
     [Fact]
@@ -98,20 +111,11 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
     public async Task SaveAsync_RecordsBoundedHistoryMutationTagsOnExistingActivity()
     {
         DiagnosticActivity? stopped = null;
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BotNexus.Gateway",
-            Sample = (ref ActivityCreationOptions _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity =>
-            {
-                if (activity.OperationName == "session.save")
-                    stopped = activity;
-            }
-        };
-        ActivitySource.AddActivityListener(listener);
+        var sessionId = SessionId.From("telemetry");
+        using var listener = ListenForSave(sessionId, activity => stopped = activity);
 
         var store = CreateStore();
-        var session = await CreateSavedSessionAsync(store, "telemetry");
+        var session = await CreateSavedSessionAsync(store, sessionId.Value);
         session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "delta" });
         await store.SaveAsync(session);
 
@@ -129,10 +133,13 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
     }
 
     [Fact]
-    public async Task SaveAsync_RepeatedCapturedDelta_IsIdempotentByPersistenceKey()
+    public async Task SaveAsync_RepeatedCapturedDelta_AcknowledgesIdentityWithoutReportingMutation()
     {
+        DiagnosticActivity? stopped = null;
+        var sessionId = SessionId.From("idempotent");
+        using var listener = ListenForSave(sessionId, activity => stopped = activity);
         var store = CreateStore();
-        var session = await CreateSavedSessionAsync(store, "idempotent");
+        var session = await CreateSavedSessionAsync(store, sessionId.Value);
         session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "once" });
         var snapshot = session.CaptureHistoryForPersistence();
         snapshot.Entries.ShouldHaveSingleItem();
@@ -146,6 +153,43 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
         var rows = await ReadHistoryRowsAsync(session.SessionId);
         rows.Count.ShouldBe(firstRows.Count, "replaying a committed delta with the same persistence key must not duplicate it");
         rows.Count(row => row.Content == "once").ShouldBe(1);
+        session.GetHistorySnapshot()[^1].PersistenceId.ShouldBe(firstRows[^1].Id,
+            "a deduplicated replay must still acknowledge the existing durable identity");
+        store.LastHistoryRowsMutated.ShouldBe(0);
+        stopped.ShouldNotBeNull();
+        stopped.GetTagItem("botnexus.session.history.rows.inserted").ShouldBe(0);
+        stopped.GetTagItem("botnexus.session.history.rows.updated").ShouldBe(0,
+            "the persistence-key conflict writes no changed column and is a no-op, not an update");
+        stopped.GetTagItem("botnexus.session.history.rows.deleted").ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task SaveAsync_MixedNewAndRepeatedEntries_ReportsOnlyTheNewInsertion()
+    {
+        DiagnosticActivity? stopped = null;
+        var sessionId = SessionId.From("mixed-retry");
+        using var listener = ListenForSave(sessionId, activity => stopped = activity);
+        var store = CreateStore();
+        var session = await CreateSavedSessionAsync(store, sessionId.Value);
+        session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "replayed" });
+        var replaySnapshot = session.CaptureHistoryForPersistence();
+        await store.SaveAsync(session);
+        var replayedRowId = (await ReadHistoryRowsAsync(session.SessionId)).Single(row => row.Content == "replayed").Id;
+
+        session.AddEntry(replaySnapshot.Entries.Single() with { PersistenceId = null });
+        session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "new" });
+        await store.SaveAsync(session);
+
+        var rows = await ReadHistoryRowsAsync(session.SessionId);
+        rows.Count.ShouldBe(3);
+        rows.Count(row => row.Content == "replayed").ShouldBe(1);
+        session.GetHistorySnapshot()[^2].PersistenceId.ShouldBe(replayedRowId);
+        session.GetHistorySnapshot()[^1].PersistenceId.ShouldBe(rows.Single(row => row.Content == "new").Id);
+        store.LastHistoryRowsMutated.ShouldBe(1);
+        stopped.ShouldNotBeNull();
+        stopped.GetTagItem("botnexus.session.history.rows.inserted").ShouldBe(1);
+        stopped.GetTagItem("botnexus.session.history.rows.updated").ShouldBe(0);
+        stopped.GetTagItem("botnexus.session.history.rows.deleted").ShouldBe(0);
     }
 
     [Fact]
@@ -221,6 +265,101 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveAsync_AfterNarrowAppend_DoesNotCacheStaleAggregate()
+    {
+        var store = CreateStore();
+        var stale = await CreateSavedSessionAsync(store, "stale-cache");
+
+        (await store.AppendEntriesAsync(stale.SessionId,
+            [new SessionEntry { Role = MessageRole.Assistant, Content = "narrow" }]))
+            .Outcome.ShouldBe(SessionMutationOutcome.Applied);
+
+        await store.SaveAsync(stale);
+
+        store.LastHistoryRowsMutated.ShouldBe(0, "a stale aggregate with no local delta must not rewrite history");
+        var warm = await store.GetAsync(stale.SessionId);
+        warm.ShouldNotBeNull();
+        warm.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(["entry-0", "narrow"]);
+        var cold = await CreateStore().GetAsync(stale.SessionId);
+        cold.ShouldNotBeNull();
+        cold.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(["entry-0", "narrow"]);
+    }
+
+    [Fact]
+    public async Task SaveAsync_AfterNarrowAppend_PreservesConcurrentAndPendingEntriesExactlyOnce()
+    {
+        var store = CreateStore();
+        var stale = await CreateSavedSessionAsync(store, "stale-cache-pending");
+
+        (await store.AppendEntriesAsync(stale.SessionId,
+            [new SessionEntry { Role = MessageRole.Assistant, Content = "narrow" }]))
+            .Outcome.ShouldBe(SessionMutationOutcome.Applied);
+        stale.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "pending" });
+
+        await store.SaveAsync(stale);
+
+        store.LastHistoryRowsMutated.ShouldBe(1, "ordinary save must remain proportional to its local delta");
+        var expected = new[] { "entry-0", "narrow", "pending" };
+        var warm = await store.GetAsync(stale.SessionId);
+        warm.ShouldNotBeNull();
+        warm.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+        var cold = await CreateStore().GetAsync(stale.SessionId);
+        cold.ShouldNotBeNull();
+        cold.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task FencedSave_AfterNarrowAppend_DoesNotCacheStaleAggregate()
+    {
+        var store = CreateStore();
+        var stale = await CreateSavedSessionAsync(store, "stale-cache-fenced");
+        var fence = SessionWriteFence.Capture(stale);
+
+        (await store.AppendEntriesAsync(stale.SessionId,
+            [new SessionEntry { Role = MessageRole.Assistant, Content = "narrow" }]))
+            .Outcome.ShouldBe(SessionMutationOutcome.Applied);
+        stale.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "pending" });
+
+        (await store.SaveAsync(stale, fence)).ShouldBe(SessionSaveOutcome.Persisted);
+
+        store.LastHistoryRowsMutated.ShouldBe(1, "fenced save must remain proportional to its local delta");
+        var expected = new[] { "entry-0", "narrow", "pending" };
+        var warm = await store.GetAsync(stale.SessionId);
+        warm.ShouldNotBeNull();
+        warm.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+        var cold = await CreateStore().GetAsync(stale.SessionId);
+        cold.ShouldNotBeNull();
+        cold.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task SaveAsync_DestructiveMutationAfterNarrowAppend_PreservesUnknownRowAndLocalChanges()
+    {
+        var store = CreateStore();
+        var stale = await CreateSavedSessionAsync(store, "stale-cache-destructive", entryCount: 2);
+
+        (await store.AppendEntriesAsync(stale.SessionId,
+            [new SessionEntry { Role = MessageRole.Assistant, Content = "narrow" }]))
+            .Outcome.ShouldBe(SessionMutationOutcome.Applied);
+        stale.ReplaceHistory(stale.GetHistorySnapshot()
+            .Where(entry => entry.Content != "entry-0")
+            .Append(new SessionEntry { Role = MessageRole.Assistant, Content = "pending" })
+            .ToArray());
+
+        await store.SaveAsync(stale);
+
+        store.LastHistoryWriteReconciled.ShouldBeTrue();
+        store.LastHistoryRowsMutated.ShouldBe(2, "only the explicit removal and local addition may mutate rows");
+        var expected = new[] { "entry-1", "narrow", "pending" };
+        var warm = await store.GetAsync(stale.SessionId);
+        warm.ShouldNotBeNull();
+        warm.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+        var cold = await CreateStore().GetAsync(stale.SessionId);
+        cold.ShouldNotBeNull();
+        cold.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(expected);
+    }
+
+    [Fact]
     public async Task SaveAsync_ConcurrentDestructiveChangeAfterSnapshot_ReconcilesWithoutLossOrDuplicates()
     {
         var store = CreateStore();
@@ -254,6 +393,51 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveAsync_AfterCommittedInsertLosesAcknowledgement_RemovesOwnedRow()
+    {
+        var store = CreateStore();
+        var session = await CreateSavedSessionAsync(store, "lost-ack-remove");
+        session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "pending" });
+        var unacknowledged = session.CaptureHistoryForPersistence().Entries.ShouldHaveSingleItem();
+        unacknowledged.PersistenceKey.ShouldNotBeNullOrWhiteSpace();
+        await InsertHistoryRowAsync(session.SessionId, unacknowledged);
+
+        session.ReplaceHistory(session.GetHistorySnapshot()
+            .Where(entry => entry.Content != "pending")
+            .ToArray());
+        await store.SaveAsync(session);
+
+        var reloaded = await CreateStore().GetAsync(session.SessionId);
+        reloaded.ShouldNotBeNull();
+        reloaded.GetHistorySnapshot().Select(entry => entry.Content).ShouldBe(["entry-0"]);
+    }
+
+    [Fact]
+    public async Task SaveAsync_AfterCommittedInsertLosesAcknowledgement_UpdatesOwnedRowExactlyOnce()
+    {
+        var store = CreateStore();
+        var session = await CreateSavedSessionAsync(store, "lost-ack-update");
+        session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = "stale" });
+        var unacknowledged = session.CaptureHistoryForPersistence().Entries.ShouldHaveSingleItem();
+        unacknowledged.PersistenceKey.ShouldNotBeNullOrWhiteSpace();
+        await InsertHistoryRowAsync(session.SessionId, unacknowledged);
+
+        session.ReplaceHistory(session.GetHistorySnapshot()
+            .Select(entry => entry.Content == "stale"
+                ? entry with { Content = "current", IsHistory = true }
+                : entry)
+            .ToArray());
+        await store.SaveAsync(session);
+
+        var reloaded = await CreateStore().GetAsync(session.SessionId);
+        reloaded.ShouldNotBeNull();
+        var rows = reloaded.GetHistorySnapshot();
+        rows.Select(entry => entry.Content).ShouldBe(["entry-0", "current"]);
+        rows.Count(entry => entry.PersistenceKey == unacknowledged.PersistenceKey).ShouldBe(1);
+        rows.Single(entry => entry.Content == "current").IsHistory.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task SaveAsync_DestructiveReconciliation_PreservesUnknownConcurrentDatabaseRows()
     {
         var store = CreateStore();
@@ -264,7 +448,7 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
             .ToArray();
         session.ReplaceHistory(replacement);
 
-        await InsertExternalHistoryRowAsync(session.SessionId, "external");
+        await InsertExternalHistoryRowAsync(session.SessionId, "external", "foreign-owned-key");
         await store.SaveAsync(session);
 
         var rows = await ReadHistoryRowsAsync(session.SessionId);
@@ -303,6 +487,48 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
         contents.Count(content => content == "raced").ShouldBe(1);
     }
 
+    [Fact]
+    public void ListenForSave_OverlappingUnrelatedSave_CapturesOnlyOwnedSession()
+    {
+        var ownedSessionId = SessionId.From("owned");
+        DiagnosticActivity? stopped = null;
+        using var listener = ListenForSave(ownedSessionId, activity => stopped = activity);
+        using var source = new ActivitySource("BotNexus.Gateway");
+        using var owned = source.StartActivity("session.save");
+        owned.ShouldNotBeNull();
+        owned.SetTag("botnexus.session.id", ownedSessionId);
+        owned.SetTag("botnexus.session.history.rows.inserted", 0);
+
+        using (var unrelated = source.StartActivity("session.save"))
+        {
+            unrelated.ShouldNotBeNull();
+            unrelated.SetTag("botnexus.session.id", SessionId.From("unrelated"));
+            owned.Stop();
+        }
+
+        stopped.ShouldBeSameAs(owned);
+        if (stopped is null)
+            throw new InvalidOperationException("The owned save activity was not captured.");
+        stopped.GetTagItem("botnexus.session.history.rows.inserted").ShouldBe(0);
+    }
+
+    private static ActivityListener ListenForSave(SessionId sessionId, Action<DiagnosticActivity> onStopped)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BotNexus.Gateway",
+            Sample = (ref ActivityCreationOptions _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.OperationName == "session.save"
+                    && Equals(activity.GetTagItem("botnexus.session.id"), sessionId))
+                    onStopped(activity);
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
     private static long MeasureCaptureAllocation(int persistedEntryCount)
     {
         var session = new GatewaySession
@@ -328,19 +554,77 @@ public sealed class SqliteSessionStoreAppendSaveTests : IDisposable
         return allocated;
     }
 
-    private async Task InsertExternalHistoryRowAsync(SessionId sessionId, string content)
+    private async Task InsertExternalHistoryRowAsync(SessionId sessionId, string content, string? persistenceKey = null)
+    {
+        await InsertHistoryRowAsync(sessionId, new SessionEntry
+        {
+            Role = MessageRole.Assistant,
+            Content = content,
+            PersistenceKey = persistenceKey
+        });
+    }
+
+    private async Task InsertHistoryRowAsync(SessionId sessionId, SessionEntry entry)
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO session_history (session_id, role, content, timestamp)
-            VALUES ($sessionId, 'assistant', $content, $timestamp)
+            INSERT INTO session_history (session_id, role, content, timestamp, is_history, persistence_key)
+            VALUES ($sessionId, $role, $content, $timestamp, $isHistory, $persistenceKey)
             """;
         command.Parameters.AddWithValue("$sessionId", sessionId.Value);
-        command.Parameters.AddWithValue("$content", content);
-        command.Parameters.AddWithValue("$timestamp", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$role", entry.Role.Value);
+        command.Parameters.AddWithValue("$content", entry.Content);
+        command.Parameters.AddWithValue("$timestamp", entry.Timestamp.ToString("O"));
+        command.Parameters.AddWithValue("$isHistory", entry.IsHistory ? 1 : 0);
+        command.Parameters.AddWithValue("$persistenceKey", (object?)entry.PersistenceKey ?? DBNull.Value);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task InstallHistoryMutationAuditAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE history_mutation_audit (
+                operation TEXT NOT NULL
+            );
+            CREATE TRIGGER audit_history_insert AFTER INSERT ON session_history
+            BEGIN
+                INSERT INTO history_mutation_audit(operation) VALUES ('insert');
+            END;
+            CREATE TRIGGER audit_history_update AFTER UPDATE ON session_history
+            BEGIN
+                INSERT INTO history_mutation_audit(operation) VALUES ('update');
+            END;
+            CREATE TRIGGER audit_history_delete AFTER DELETE ON session_history
+            BEGIN
+                INSERT INTO history_mutation_audit(operation) VALUES ('delete');
+            END;
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<(int Inserts, int Updates, int Deletes)> ReadHistoryMutationAuditAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                SUM(CASE WHEN operation = 'insert' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN operation = 'update' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN operation = 'delete' THEN 1 ELSE 0 END)
+            FROM history_mutation_audit
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+        (await reader.ReadAsync()).ShouldBeTrue();
+        return (
+            reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+            reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+            reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
     }
 
     private async Task<List<(long Id, string Content, bool IsHistory)>> ReadHistoryRowsAsync(SessionId sessionId)

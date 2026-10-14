@@ -5,6 +5,7 @@ using BotNexus.Gateway.Audit;
 using BotNexus.Gateway.Conversations;
 using BotNexus.Gateway.Security;
 using BotNexus.Gateway.Sessions;
+using BotNexus.Gateway.Streaming;
 using BotNexus.Domain.World;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -63,11 +64,13 @@ public sealed class ToolAuditWriteAheadTests
         var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = Session("s1");
         var store = StoreFor(session);
-        store.Setup(s => s.SaveAsync(session, It.IsAny<CancellationToken>()))
-            .Returns(async () =>
+        store.Setup(s => s.AppendEntriesAsync(session.SessionId, It.IsAny<IReadOnlyList<SessionEntry>>(), It.IsAny<CancellationToken>()))
+            .Returns(async (SessionId _, IReadOnlyList<SessionEntry> entries, CancellationToken _) =>
             {
                 saveStarted.SetResult();
                 await releaseSave.Task;
+                session.AddEntries(entries);
+                return new SessionAppendMutationResult(SessionMutationOutcome.Applied, entries.Count);
             });
 
         var persistence = Create(store.Object, "s1").PersistStartAsync("call-1", "exec", Args("command", "git status"), default);
@@ -114,7 +117,7 @@ public sealed class ToolAuditWriteAheadTests
     {
         var session = Session("s1");
         var store = StoreFor(session);
-        store.Setup(s => s.SaveAsync(session, It.IsAny<CancellationToken>()))
+        store.Setup(s => s.AppendEntriesAsync(session.SessionId, It.IsAny<IReadOnlyList<SessionEntry>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new IOException("disk full"));
 
         var error = await Should.ThrowAsync<InvalidOperationException>(
@@ -144,7 +147,7 @@ public sealed class ToolAuditWriteAheadTests
         // side-effecting case, and widening it silently would be a different, unreviewed decision.
         var session = Session("s1");
         var store = StoreFor(session);
-        store.Setup(s => s.SaveAsync(session, It.IsAny<CancellationToken>()))
+        store.Setup(s => s.AppendEntriesAsync(session.SessionId, It.IsAny<IReadOnlyList<SessionEntry>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new IOException("disk full"));
 
         await Should.NotThrowAsync(
@@ -281,6 +284,75 @@ public sealed class ToolAuditWriteAheadTests
     }
 
     [Fact]
+    public async Task PersistStartAsync_ThenDuplicateStreamingStarts_WithStaleSession_PersistsOneStartAndOneResult()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "ToolAuditWriteAheadTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var connectionString = $"Data Source={Path.Combine(directory, "sessions.db")};Pooling=False";
+            var conversations = new InMemoryConversationStore();
+            await conversations.CreateAsync(new Conversation
+            {
+                ConversationId = ConversationId.From("conv"),
+                AgentId = AgentId.From("agent-a")
+            });
+            var store = new SqliteSessionStore(connectionString, NullLogger<SqliteSessionStore>.Instance, conversations);
+            var staleSession = await store.GetOrCreateAsync(SessionId.From("streamed"), AgentId.From("agent-a"));
+            staleSession.ConversationId = ConversationId.From("conv");
+            await store.SaveAsync(staleSession);
+
+            await Create(store, "streamed").PersistStartAsync(
+                "call-streamed",
+                "exec",
+                Args("command", "git status"),
+                default);
+
+            await StreamingSessionHelper.ProcessAndSaveAsync(
+                ToAsyncEnumerable(
+                [
+                    new AgentStreamEvent
+                    {
+                        Type = AgentStreamEventType.ToolStart,
+                        ToolCallId = "call-streamed",
+                        ToolName = "exec",
+                        ToolArgs = new Dictionary<string, object?> { ["command"] = "git status" }
+                    },
+                    new AgentStreamEvent
+                    {
+                        Type = AgentStreamEventType.ToolStart,
+                        ToolCallId = "call-streamed",
+                        ToolName = "exec",
+                        ToolArgs = new Dictionary<string, object?> { ["command"] = "git status" }
+                    },
+                    new AgentStreamEvent
+                    {
+                        Type = AgentStreamEventType.ToolEnd,
+                        ToolCallId = "call-streamed",
+                        ToolName = "exec",
+                        ToolResult = "clean"
+                    }
+                ]),
+                staleSession,
+                store);
+
+            var reloaded = await new SqliteSessionStore(connectionString, NullLogger<SqliteSessionStore>.Instance, conversations)
+                .GetAsync(SessionId.From("streamed"));
+            var rows = reloaded.ShouldNotBeNull().GetHistorySnapshot()
+                .Where(entry => entry.ToolCallId == "call-streamed")
+                .ToArray();
+            rows.Count(entry => entry.IsToolStartRow()).ShouldBe(1);
+            rows.Single(entry => entry.IsToolStartRow()).PersistenceKey.ShouldBe("tool-start:call-streamed");
+            rows.Count(entry => entry.Kind == MessageKind.ToolResult).ShouldBe(1);
+            rows.ShouldAllBe(entry => entry.ToolArgs.ShouldNotBeNull().Contains("git status", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PersistStartAsync_ParallelCallsRetainTheirOwnRedactedArguments()
     {
         var session = Session("s1");
@@ -306,9 +378,12 @@ public sealed class ToolAuditWriteAheadTests
         var other = Session("other");
         var mine = Session("s1");
         var store = new Mock<ISessionStore>();
-        store.Setup(s => s.GetAsync(SessionId.From("s1"), It.IsAny<CancellationToken>())).ReturnsAsync(mine);
-        store.Setup(s => s.GetAsync(SessionId.From("other"), It.IsAny<CancellationToken>())).ReturnsAsync(other);
-        store.Setup(s => s.SaveAsync(It.IsAny<GatewaySession>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        store.Setup(s => s.AppendEntriesAsync(SessionId.From("s1"), It.IsAny<IReadOnlyList<SessionEntry>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SessionId _, IReadOnlyList<SessionEntry> entries, CancellationToken _) =>
+            {
+                mine.AddEntries(entries);
+                return new SessionAppendMutationResult(SessionMutationOutcome.Applied, entries.Count);
+            });
 
         await Create(store.Object, "s1").PersistStartAsync("call-mine", "exec", Args("command", "mine"), default);
 
@@ -317,13 +392,19 @@ public sealed class ToolAuditWriteAheadTests
     }
 
     private static ToolAuditWriteAhead Create(ISessionStore? store, string sessionId) =>
-        new(store, DefaultToolAuditSink.Instance, new SecretRedactor(), SessionId.From(sessionId), NullLogger.Instance);
+        new(store, DefaultToolAuditSink.Instance, new SecretRedactor(), AgentId.From("test-agent"), SessionId.From(sessionId), NullLogger.Instance);
 
     private static Mock<ISessionStore> StoreFor(GatewaySession session)
     {
         var store = new Mock<ISessionStore>();
         store.Setup(s => s.GetAsync(session.SessionId, It.IsAny<CancellationToken>())).ReturnsAsync(session);
         store.Setup(s => s.SaveAsync(session, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        store.Setup(s => s.AppendEntriesAsync(session.SessionId, It.IsAny<IReadOnlyList<SessionEntry>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SessionId _, IReadOnlyList<SessionEntry> entries, CancellationToken _) =>
+            {
+                session.AddEntries(entries);
+                return new SessionAppendMutationResult(SessionMutationOutcome.Applied, entries.Count);
+            });
         return store;
     }
 
@@ -333,6 +414,15 @@ public sealed class ToolAuditWriteAheadTests
         AgentId = AgentId.From($"{id}-agent"),
         ConversationId = ConversationId.From("conv")
     };
+
+    private static async IAsyncEnumerable<AgentStreamEvent> ToAsyncEnumerable(IEnumerable<AgentStreamEvent> events)
+    {
+        foreach (var evt in events)
+        {
+            yield return evt;
+            await Task.Yield();
+        }
+    }
 
     private static IReadOnlyDictionary<string, object?> Args(string name, string value) =>
         new Dictionary<string, object?> { [name] = value };

@@ -13,11 +13,10 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 /// only safe repair for a hole is an insert.
 /// </para>
 /// <para>
-/// <b>Identity.</b> <see cref="ChatMessage.Id"/> is client-minted per row (a fresh GUID on every
-/// deserialisation), so it cannot identify the same logical message across two fetches. A tool row
-/// is keyed by its server-assigned <see cref="ChatMessage.ToolCallId"/>; everything else is keyed by
-/// its (kind, timestamp, role, content) tuple, which is stable across fetches while still keeping
-/// two genuinely distinct rows that happen to share a timestamp apart.
+/// <b>Identity.</b> Persisted rows use <see cref="ChatMessage.ServerEntryId"/> and tool rows use
+/// <see cref="ChatMessage.ToolCallId"/>. A live non-tool row has neither until refresh; it is paired
+/// once, in order, with a compatible persisted row by kind, role, boundary session and content.
+/// Server multiplicity is retained, so two genuinely distinct identical messages remain two rows.
 /// </para>
 /// <para>
 /// Shared by mobile and desktop through <c>PortalLoadService.RefreshAsync</c> - there is deliberately
@@ -39,21 +38,18 @@ public static class TranscriptReconciler
         IReadOnlyList<ChatMessage> server)
     {
         var merged = new List<ChatMessage>(local);
-        if (server.Count == 0)
-            return merged;
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var message in merged)
-            seen.Add(KeyOf(message));
-
-        foreach (var candidate in server)
+        var aligned = AlignServerRows(local, server);
+        for (var serverIndex = 0; serverIndex < aligned.Count; serverIndex++)
         {
-            if (!seen.Add(KeyOf(candidate)))
+            var row = aligned[serverIndex];
+            if (row.LocalRow is not null)
                 continue;
 
-            merged.Insert(InsertionIndexFor(merged, candidate.Timestamp), candidate);
+            merged.Insert(InsertionIndexFor(merged, aligned, serverIndex), row.ServerRow);
+            aligned[serverIndex] = row with { LocalRow = row.ServerRow };
         }
 
+        ApplyAuthoritativeToolCompletions(merged, server);
         return merged;
     }
 
@@ -62,16 +58,102 @@ public static class TranscriptReconciler
     /// using the same identity the merge uses. Lets a caller advance its paging counters by exactly
     /// the number of rows a reconcile inserted without diffing the two lists itself.
     /// </summary>
-    public static int CountMissing(IReadOnlyList<ChatMessage> local, IReadOnlyList<ChatMessage> server)
+    public static int CountMissing(IReadOnlyList<ChatMessage> local, IReadOnlyList<ChatMessage> server) =>
+        AlignServerRows(local, server).Count(row => row.LocalRow is null);
+
+    private static List<AlignedServerRow> AlignServerRows(
+        IReadOnlyList<ChatMessage> local,
+        IReadOnlyList<ChatMessage> server)
     {
-        var seen = new HashSet<string>(local.Select(KeyOf), StringComparer.Ordinal);
-        return server.Count(m => !seen.Contains(KeyOf(m)));
+        var unmatchedLocal = new List<ChatMessage>(local);
+        var seenServerKeys = new HashSet<string>(StringComparer.Ordinal);
+        var aligned = new List<AlignedServerRow>(server.Count);
+
+        foreach (var candidate in server)
+        {
+            var serverKey = StableKeyOf(candidate);
+            if (serverKey is not null && !seenServerKeys.Add(serverKey))
+                continue;
+
+            var match = unmatchedLocal.FindIndex(localRow => RowsMatch(localRow, candidate));
+            var localRow = match >= 0 ? unmatchedLocal[match] : null;
+            if (match >= 0)
+                unmatchedLocal.RemoveAt(match);
+
+            aligned.Add(new AlignedServerRow(candidate, localRow));
+        }
+
+        return aligned;
     }
 
-    // The first position whose timestamp is strictly LATER than the candidate's. Rows sharing a
-    // timestamp therefore land after the ones already present, preserving burst order.
-    private static int InsertionIndexFor(List<ChatMessage> merged, DateTimeOffset timestamp)
+    private static bool RowsMatch(ChatMessage local, ChatMessage server)
     {
+        var localStableKey = StableKeyOf(local);
+        var serverStableKey = StableKeyOf(server);
+        if (localStableKey is not null && serverStableKey is not null)
+            return string.Equals(localStableKey, serverStableKey, StringComparison.Ordinal);
+
+        return CompatibleKeyOf(local) == CompatibleKeyOf(server);
+    }
+
+    private static void ApplyAuthoritativeToolCompletions(
+        List<ChatMessage> merged,
+        IReadOnlyList<ChatMessage> server)
+    {
+        var seenToolCalls = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in server)
+        {
+            if (string.IsNullOrEmpty(candidate.ToolCallId)
+                || candidate.ToolResult is null
+                || !seenToolCalls.Add(candidate.ToolCallId))
+            {
+                continue;
+            }
+
+            var index = merged.FindIndex(message =>
+                string.Equals(message.ToolCallId, candidate.ToolCallId, StringComparison.Ordinal));
+            if (index < 0 || merged[index].ToolResult is not null)
+                continue;
+
+            // Keep the client row identity so render caches and ToolStart bookkeeping remain stable,
+            // while the persisted row supplies the authoritative terminal payload and server identity.
+            merged[index] = candidate with { Id = merged[index].Id };
+        }
+    }
+
+    private static int InsertionIndexFor(
+        List<ChatMessage> merged,
+        IReadOnlyList<AlignedServerRow> aligned,
+        int serverIndex)
+    {
+        var timestamp = aligned[serverIndex].ServerRow.Timestamp;
+
+        // A represented successor at the same timestamp is authoritative evidence that this hole
+        // belongs before it. Prefer that anchor over timestamp-only insertion so [B] reconciled
+        // against server [A, B] becomes [A, B], not [B, A].
+        for (var i = serverIndex + 1; i < aligned.Count; i++)
+        {
+            if (aligned[i].ServerRow.Timestamp != timestamp)
+                break;
+
+            var successor = aligned[i].LocalRow;
+            if (successor is not null)
+                return ReferenceIndexOf(merged, successor);
+        }
+
+        // With no represented successor, append after the nearest represented server predecessor
+        // in the same timestamp burst. This retains the server's suffix order while leaving local
+        // rows outside the fetched page untouched.
+        for (var i = serverIndex - 1; i >= 0; i--)
+        {
+            if (aligned[i].ServerRow.Timestamp != timestamp)
+                break;
+
+            var predecessor = aligned[i].LocalRow;
+            if (predecessor is not null)
+                return ReferenceIndexOf(merged, predecessor) + 1;
+        }
+
         for (var i = 0; i < merged.Count; i++)
         {
             if (merged[i].Timestamp > timestamp)
@@ -81,20 +163,36 @@ public static class TranscriptReconciler
         return merged.Count;
     }
 
-    private static string KeyOf(ChatMessage message)
+    private static int ReferenceIndexOf(List<ChatMessage> rows, ChatMessage target)
     {
-        // A tool row's server-assigned call id is the only stable identity across the live
-        // SignalR rendering and the REST re-fetch, whose Content differs (live streamed text vs
-        // the stripped stored result).
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (ReferenceEquals(rows[i], target))
+                return i;
+        }
+
+        throw new InvalidOperationException("An aligned transcript row was not present in the merged timeline.");
+    }
+
+    private static string? StableKeyOf(ChatMessage message)
+    {
+        // Tool calls already have a stable identity shared by live and REST rows; prefer it even
+        // after the REST projection also supplies a transcript entry id.
         if (!string.IsNullOrEmpty(message.ToolCallId))
             return $"tool\u001f{message.ToolCallId}";
 
-        return string.Join(
-            '\u001f',
-            message.Kind,
-            message.Timestamp.UtcDateTime.ToString("O"),
-            message.Role,
-            message.BoundarySessionId ?? string.Empty,
-            message.Content);
+        if (!string.IsNullOrEmpty(message.ServerEntryId))
+            return $"entry\u001f{message.ServerEntryId}";
+
+        return null;
     }
+
+    private static string CompatibleKeyOf(ChatMessage message) => string.Join(
+        '\u001f',
+        message.Kind,
+        message.Role,
+        message.BoundarySessionId ?? string.Empty,
+        message.Content);
+
+    private sealed record AlignedServerRow(ChatMessage ServerRow, ChatMessage? LocalRow);
 }

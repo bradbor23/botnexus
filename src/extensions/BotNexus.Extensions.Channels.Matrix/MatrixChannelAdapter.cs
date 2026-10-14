@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.World;
 using BotNexus.Gateway.Abstractions.Channels;
+using BotNexus.Gateway.Abstractions.Events;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Channels;
 using BotNexus.Gateway.Channels.Startup;
@@ -18,18 +19,18 @@ namespace BotNexus.Extensions.Channels.Matrix;
 /// <remarks>
 /// <para>
 /// First vertical slice of #1201. In scope: per-agent account configuration, <c>/sync</c> long
-/// polling with since-token continuity, <c>m.room.message</c> send and receive, Markdown to
-/// <c>org.matrix.custom.html</c> formatting, streaming via <c>m.replace</c> edits, typing
-/// indicators, and auto-join on invite.
+/// polling with since-token continuity, <c>m.room.message</c> send and receive, bounded
+/// unencrypted image/file downloads, Markdown to <c>org.matrix.custom.html</c> formatting,
+/// streaming via <c>m.replace</c> edits, typing indicators, and auto-join on invite.
 /// </para>
 /// <para>
-/// Explicitly deferred: end-to-end encryption (needs device-key management), federation-specific
-/// trust decisions, media upload via the content repository, read receipts, and Spaces mapping.
-/// The <see cref="IMatrixClient"/> seam carries only the endpoints this slice uses, so a deferred
-/// capability is a missing member rather than a silent no-op.
+/// Explicitly deferred: end-to-end encryption (including encrypted file descriptors),
+/// federation-specific trust decisions, and Spaces mapping. The client seam also
+/// exposes authenticated media upload for callers even though the outbound message model does not
+/// yet carry content parts.
 /// </para>
 /// </remarks>
-public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChannelAdapter
+public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChannelAdapter, IConversationEventSink
 {
     /// <summary>
     /// Configuration section this adapter self-binds from when loaded as a dynamic extension after
@@ -124,11 +125,8 @@ public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChann
     /// <inheritdoc />
     public override bool SupportsToolDisplay => false;
 
-    /// <summary>
-    /// Inbound image handling requires the Matrix content repository download path, deferred out of
-    /// this slice, so the adapter must not advertise a capability it cannot honour.
-    /// </summary>
-    public override bool SupportsInboundImages => false;
+    /// <summary>Inbound unencrypted Matrix images are downloaded into bounded binary parts.</summary>
+    public override bool SupportsInboundImages => true;
 
     /// <summary>
     /// Matrix rooms are a user-visible surface, so the delimited internal runtime-context envelope
@@ -654,18 +652,21 @@ public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChann
         if (string.Equals(content.RelatesTo?.RelType, "m.replace", StringComparison.Ordinal))
             return;
 
-        // This slice handles text-shaped messages only; media requires the content repository,
-        // which is deferred. Anything else is skipped rather than dispatched as an empty turn.
-        if (!string.Equals(content.MsgType, "m.text", StringComparison.Ordinal)
-            && !string.Equals(content.MsgType, "m.notice", StringComparison.Ordinal)
-            && !string.Equals(content.MsgType, "m.emote", StringComparison.Ordinal))
-        {
+        var isMedia = string.Equals(content.MsgType, "m.image", StringComparison.Ordinal)
+            || string.Equals(content.MsgType, "m.file", StringComparison.Ordinal);
+        var isText = string.Equals(content.MsgType, "m.text", StringComparison.Ordinal)
+            || string.Equals(content.MsgType, "m.notice", StringComparison.Ordinal)
+            || string.Equals(content.MsgType, "m.emote", StringComparison.Ordinal);
+        if (!isText && !isMedia)
             return;
-        }
 
         var body = content.Body;
-        if (string.IsNullOrWhiteSpace(body))
+        if (string.IsNullOrWhiteSpace(body) && !isMedia)
             return;
+
+        IReadOnlyList<MessageContentPart>? contentParts = isMedia
+            ? await TryDownloadMediaAsync(runtime, roomId, evt, content, cancellationToken)
+            : null;
 
         var threadRootEventId = string.Equals(content.RelatesTo?.RelType, "m.thread", StringComparison.Ordinal)
             ? content.RelatesTo!.EventId
@@ -675,14 +676,15 @@ public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChann
         // message reaching the agent.
         await TrySetTypingAsync(runtime, roomId, typing: true, cancellationToken);
 
-        await DispatchInboundAsync(
+        var outcome = await DispatchInboundAsync(
             new InboundMessage
             {
                 ChannelType = ChannelType,
                 SenderId = sender,
                 Sender = CitizenId.Of(UserId.From(sender)),
                 ChannelAddress = MatrixChannelAddress.Encode(roomId, threadRootEventId),
-                Content = body,
+                Content = body ?? string.Empty,
+                ContentParts = contentParts,
                 Timestamp = evt.OriginServerTs is { } ts
                     ? DateTimeOffset.FromUnixTimeMilliseconds(ts)
                     : DateTimeOffset.UtcNow,
@@ -699,6 +701,118 @@ public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChann
                 },
             },
             cancellationToken);
+
+        if (outcome == ChannelDispatchOutcome.Dispatched && !string.IsNullOrWhiteSpace(evt.EventId))
+            await TrySendReadReceiptAsync(runtime, roomId, evt.EventId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Downloads one unencrypted MXC attachment without allowing malformed/arbitrary URLs,
+    /// advertised oversize bodies, streaming oversize bodies, or slow responses to fail the text
+    /// turn that carries it.
+    /// </summary>
+    private async Task<IReadOnlyList<MessageContentPart>?> TryDownloadMediaAsync(
+        MatrixAccountRuntime runtime,
+        string roomId,
+        MatrixEvent evt,
+        MatrixMessageContent content,
+        CancellationToken cancellationToken)
+    {
+        if (!MatrixContentUri.TryParse(content.Url, out var mediaUri))
+        {
+            _logger.LogWarning(
+                "{DisplayName} account '{AccountName}' skipped attachment in room '{RoomId}' event '{EventId}': the URL is not a valid unencrypted mxc:// URI; proceeding with text only",
+                DisplayName,
+                runtime.AccountName,
+                roomId,
+                evt.EventId);
+            return null;
+        }
+
+        var maxBytes = Options.ResolveMaxMediaBytes();
+        if (content.Info?.Size is { } advertisedSize && advertisedSize > maxBytes)
+        {
+            _logger.LogWarning(
+                "{DisplayName} account '{AccountName}' skipped attachment in room '{RoomId}' event '{EventId}': advertised size {AdvertisedBytes} exceeds the {MaxMediaBytes}-byte cap; proceeding with text only",
+                DisplayName,
+                runtime.AccountName,
+                roomId,
+                evt.EventId,
+                advertisedSize,
+                maxBytes);
+            return null;
+        }
+
+        var timeoutSeconds = Options.ResolveMediaDownloadTimeoutSeconds();
+        using var mediaCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        mediaCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+        try
+        {
+            var data = await runtime.Client.DownloadMediaAsync(
+                mediaUri.ServerName,
+                mediaUri.MediaId,
+                maxBytes,
+                mediaCts.Token);
+            return
+            [
+                new BinaryContentPart
+                {
+                    MimeType = MatrixMediaContentType.Resolve(content.Info?.MimeType),
+                    Data = data,
+                    FileName = string.IsNullOrWhiteSpace(content.FileName) ? null : content.FileName,
+                },
+            ];
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "{DisplayName} account '{AccountName}' attachment download in room '{RoomId}' event '{EventId}' exceeded the {TimeoutSeconds}s budget; proceeding with text only",
+                DisplayName,
+                runtime.AccountName,
+                roomId,
+                evt.EventId,
+                timeoutSeconds);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "{DisplayName} account '{AccountName}' failed to download attachment in room '{RoomId}' event '{EventId}'; proceeding with text only",
+                DisplayName,
+                runtime.AccountName,
+                roomId,
+                evt.EventId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Acknowledges a successfully dispatched event as read without making receipt delivery part of
+    /// inbound settlement. Once dispatch succeeds, a homeserver receipt failure must not throw and
+    /// cause the sync batch to replay an already handled user turn.
+    /// </summary>
+    private async Task TrySendReadReceiptAsync(
+        MatrixAccountRuntime runtime,
+        string roomId,
+        string eventId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await runtime.Client.SendReadReceiptAsync(roomId, eventId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "{DisplayName} account '{AccountName}' dispatched event '{EventId}' in room '{RoomId}' but failed to send its read receipt; the handled event will not be replayed for receipt delivery",
+                DisplayName,
+                runtime.AccountName,
+                eventId,
+                roomId);
+        }
     }
 
     /// <summary>
@@ -838,4 +952,23 @@ public sealed class MatrixChannelAdapter : ChannelAdapterBase, IStreamEventChann
         EnsureAccountsInitialized();
         return _accounts.TryGetValue(accountName, out var runtime) ? runtime : null;
     }
+    /// <inheritdoc />
+    public async Task OnConversationEventAsync(
+        ConversationEvent conversationEvent,
+        CancellationToken cancellationToken = default)
+    {
+        if (conversationEvent is not ConversationAgentEvent agentEvent)
+            return;
+
+        foreach (var target in ConversationEventStreamRouting.GetTargets(
+                     conversationEvent, ChannelType, ((IChannelAdapter)this).AdapterId))
+        {
+            if (((IStreamEventChannelAdapter)this).CanSendStreamEvent(target))
+            {
+                await SendStreamEventAsync(target, agentEvent.StreamEvent, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
 }

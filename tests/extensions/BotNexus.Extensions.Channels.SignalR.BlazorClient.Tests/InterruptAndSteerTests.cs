@@ -23,27 +23,14 @@ public sealed class InterruptAndSteerTests
     }
 
     [Fact]
-    public void IAgentInteractionService_HasInterruptAndSteerAsync_Method()
+    public void IAgentInteractionService_ExposesInterruptIntentOnTheUnifiedDeliveryMethod()
     {
-        // Assert the method exists on the interface (contract guard). #2484 added an
-        // attachments-carrying overload and #3211 inserted the required conversationId, so the
-        // shape must be selected by parameter types - GetMethod(name) alone is ambiguous.
-        var method = typeof(IAgentInteractionService).GetMethod(
-            "InterruptAndSteerAsync",
-            [typeof(string), typeof(string), typeof(string)]);
+        var method = typeof(IAgentInteractionService).GetMethod(nameof(IAgentInteractionService.DeliverMessageAsync));
         Assert.NotNull(method);
         var parameters = method!.GetParameters();
-        Assert.Equal(3, parameters.Length);
-        Assert.Equal("agentId", parameters[0].Name);
-        // #3211 AC1: conversation identity is an explicit argument, never ambient state.
-        Assert.Equal("conversationId", parameters[1].Name);
-        Assert.Equal("message", parameters[2].Name);
-
-        // #2484: the attachments overload must exist too, so the contract guard covers both.
-        var mediaOverload = typeof(IAgentInteractionService).GetMethod(
-            "InterruptAndSteerAsync",
-            [typeof(string), typeof(string), typeof(string), typeof(IReadOnlyList<DraftAttachment>)]);
-        Assert.NotNull(mediaOverload);
+        Assert.Contains(parameters, parameter => parameter.Name == "conversationId");
+        Assert.Contains(parameters, parameter => parameter.ParameterType == typeof(InboundDeliveryMode));
+        Assert.Contains(parameters, parameter => parameter.ParameterType == typeof(IReadOnlyList<DraftAttachment>));
     }
 
     [Theory]
@@ -54,7 +41,7 @@ public sealed class InterruptAndSteerTests
     {
         // Arrange - wire up session so we know the no-op is due to blank message, not missing session
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState { ConversationId = "conv-1", Title = "T", HistoryLoaded = true };
         agent.Conversations["conv-1"].ActiveSessionId = "session-1";
 
@@ -82,7 +69,7 @@ public sealed class InterruptAndSteerTests
     {
         // Arrange - set up session so the hub call path is reached
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState { ConversationId = "conv-1", Title = "T", HistoryLoaded = true };
         agent.Conversations["conv-1"].ActiveSessionId = "session-1";
 

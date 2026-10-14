@@ -79,7 +79,7 @@ public sealed class ConversationSwitcherTests : IDisposable
     private IRenderedComponent<ConversationSwitcher> Render(string? active = "c-1") =>
         _ctx.Render<ConversationSwitcher>(p => p
             .Add(c => c.AgentId, "agent-1")
-            .Add(c => c.ActiveConversationId, active));
+            .Add(c => c.SelectedConversationId, active));
 
     private static IElement Trigger(IRenderedComponent<ConversationSwitcher> cut) =>
         cut.Find("[data-testid='conversation-switcher-trigger']");
