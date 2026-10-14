@@ -170,16 +170,10 @@ internal static class AnthropicRequestBuilder
         if (options?.Temperature.HasValue == true && anthropicOpts?.ThinkingEnabled != true)
             body["temperature"] = options.Temperature.Value;
 
-        // Shared request-budget intent from bradbor23's PR #4132. Preserve the
-        // existing system markers and unmarked tools; only messages spend the remainder.
-        var systemBreakpoints = body["system"] is JsonArray system
-            ? system.Count(block => block?["cache_control"] is not null)
-            : 0;
-        AnthropicMessageConverter.ApplyMultiBreakpointCacheControl(
-            messages,
-            options?.CacheRetention ?? CacheRetention.Short,
-            model.BaseUrl,
-            maxBreakpoints: Math.Min(3, MaxCacheBreakpoints - systemBreakpoints));
+        // Messages were already stamped above, from the single budget threaded through tools and
+        // system. Upstream reached the same intent with a second pass here that recounted only
+        // body["system"] - which cannot see the tools marker, so running both put 5 markers on
+        // any tool-using request and the API rejects the whole thing. One pass, one budget.
         body["messages"] = ToNode(messages);
 
         return body;

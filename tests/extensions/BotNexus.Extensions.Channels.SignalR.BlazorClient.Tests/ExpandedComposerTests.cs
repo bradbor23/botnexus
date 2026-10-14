@@ -23,7 +23,7 @@ public sealed class ExpandedComposerTests : IDisposable
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences());
         _ctx.Services.AddSingleton(preferences);
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
         _store.UpsertAgent(new AgentState { AgentId = "agent-1", DisplayName = "Agent", IsConnected = true });

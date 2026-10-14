@@ -274,11 +274,6 @@
     /// </summary>
     private string ShellAttribute => PortalShell.Normalize(Prefs.Current.Shell);
 
-    /// <summary>
-    /// Whether this is the narrow viewport. Read once after first render from the same JS probe the
-    /// chat scroller uses, so the sidebar's auto-close and the mobile-shell redirect agree about it.
-    /// </summary>
-    private bool _isMobile;
 
     /// <summary>True when the light theme is active, driving the toggle's icon and label.</summary>
     private bool IsLightTheme => PortalTheme.Normalize(Prefs.Current.Theme) == PortalTheme.Light;
@@ -770,8 +765,7 @@
     private void OnToolbarNavClick()
     {
         _overflowOpen = false;
-        if (_isMobile)
-            _sidebarOpen = false;
+        _sidebarOpen = false;
     }
 
     private void OnContributionClick(NavContributionDto contribution)
@@ -1108,7 +1102,6 @@
             var filterStored = await JS.InvokeAsync<string?>("localStorage.getItem", ActivityFilterKey);
             if (Enum.TryParse<ConversationActivityFilter>(filterStored, out var storedFilter))
                 _activityFilter = storedFilter;
-            _isMobile = await JS.InvokeAsync<bool>("chatScroll.isMobileView");
             await Prefs.LoadAsync();
             // Re-apply after load: the pre-paint script in index.html already set the attribute
             // from the same stored value, but that script is the only thing that ran before this
@@ -1208,11 +1201,10 @@
         await JS.InvokeVoidAsync("localStorage.setItem", SidebarKey, _sidebarOpen ? "true" : "false");
     }
 
-    private void CloseSidebar()
-    {
-        if (_isMobile)
-            _sidebarOpen = false;
-    }
+    // Unconditional: desktop and mobile are explicit applications, so nothing here may branch on
+    // viewport geometry (ExplicitClientViewArchitectureTests). Narrow-screen presentation of the
+    // sidebar is responsive CSS's job, not a device probe's.
+    private void CloseSidebar() => _sidebarOpen = false;
 
 
     /// <summary>
@@ -1518,13 +1510,9 @@
             ? $"agent/{encodedAgentId}"
             : $"agent/{encodedAgentId}/conversation/{Uri.EscapeDataString(conversationId)}";
 
-        // On mobile, navigate to the mobile app path (/mobile/agent/...). The desktop and mobile
-        // portals are separate apps served at "/" and "/mobile/", so this needs a full load.
-        var target = _isMobile ? "/mobile/" + relPath : relPath;
-
         var current = Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/');
         if (!string.Equals(current, relPath, StringComparison.OrdinalIgnoreCase))
-            Nav.NavigateTo(target, forceLoad: _isMobile);
+            Nav.NavigateTo(relPath);
     }
 
     private async Task ArchiveConversationAsync(string agentId, string conversationId, string title, bool isVirtualSession)
@@ -1780,8 +1768,7 @@
 
     private void NavigateToContribution(NavContributionDto contribution)
     {
-        if (_isMobile)
-            _sidebarOpen = false;
+        _sidebarOpen = false;
 
         // forceLoad ONLY for a full-page view. The embedded route is an ordinary Blazor route, so
         // a client-side navigation keeps the portal loaded rather than reloading the whole app.

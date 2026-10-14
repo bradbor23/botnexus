@@ -19,7 +19,7 @@ public sealed class ExportDialogTests : IDisposable
         _ctx.Services.AddSingleton<IClientStateStore>(_store);
         _ctx.Services.AddSingleton(interaction);
         _ctx.Services.AddSingleton(_rest);
-        _ctx.Services.AddSingleton(new HttpClient());
+        _ctx.Services.AddSingleton(OfflineTestHttp.Create());
         _ctx.Services.AddSingleton<ISlashCommandDispatcher>(new SlashCommandDispatcher(interaction));
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences());

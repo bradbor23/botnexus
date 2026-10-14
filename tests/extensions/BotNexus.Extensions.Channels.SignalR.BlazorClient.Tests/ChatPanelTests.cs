@@ -2248,7 +2248,7 @@ public sealed class ChatPanelAttachmentTests : IDisposable
         _context.Services.AddSingleton(interaction);
         _context.Services.AddSingleton<ISlashCommandDispatcher>(new SlashCommandDispatcher(interaction));
         _context.Services.AddSingleton(Substitute.For<IGatewayRestClient>());
-        _context.Services.AddSingleton(new HttpClient());
+        _context.Services.AddSingleton(OfflineTestHttp.Create());
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences());
         _context.Services.AddSingleton(preferences);

@@ -1632,7 +1632,7 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
         {
             AgentRunId = ToDomainRunId(_agent.State.AgentRunId),
             Content = lastAssistant?.Content ?? string.Empty,
-            Usage = lastAssistant?.Usage is { } u ? new AgentResponseUsage(u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite) : null,
+            Usage = ProjectLastTurnUsage(messages),
             RunUsage = AggregateRunUsage(messages),
             TurnCount = messages.OfType<AssistantAgentMessage>().Count(),
             ToolCalls = BuildToolCalls(messages, pendingToolCallIds: null).Select(call => call with { AgentRunId = ToDomainRunId(_agent.State.AgentRunId) }).ToArray(),
@@ -1674,6 +1674,32 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
     /// error is the load-bearing signal, and collapsing a detail-free failure to <c>null</c> would
     /// make it indistinguishable from a clean run - the exact conflation #3565 exists to remove.
     /// </remarks>
+    /// <summary>
+    /// Projects the last assistant turn's usage onto the response's four-component shape.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// All FOUR components, not two. On a cache-aware provider CacheRead and CacheWrite are the
+    /// ones that grow: the last cache breakpoint sits on the newest user message, so the system
+    /// prompt, the tools and the whole conversation are billed as cache tokens, and Anthropic
+    /// excludes those from input_tokens. Building the record from InputTokens/OutputTokens alone
+    /// produced a REST usage figure structurally incapable of moving - measured on a live gateway
+    /// it read 1222 across three turns, and 1221 for an 11.8 KB message.
+    /// </para>
+    /// <para>
+    /// Extracted because the expression was duplicated verbatim on the completed and interrupted
+    /// response paths, and because that left the guarantee reachable only through a private
+    /// instance method. Internal keeps the seam without widening BuildResponse.
+    /// </para>
+    /// </remarks>
+    internal static AgentResponseUsage? ProjectLastTurnUsage(IReadOnlyList<AgentMessage> messages)
+    {
+        var lastAssistant = messages.OfType<AssistantAgentMessage>().LastOrDefault();
+        return lastAssistant?.Usage is { } u
+            ? new AgentResponseUsage(u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite)
+            : null;
+    }
+
     internal static string? DescribeTerminalError(AssistantAgentMessage? lastAssistant)
     {
         if (lastAssistant is not { FinishReason: StopReason.Error })
@@ -1744,7 +1770,7 @@ internal sealed class InProcessAgentHandle : IAgentHandle, IHealthCheckable, IAg
         {
             AgentRunId = ToDomainRunId(_agent.State.AgentRunId),
             Content = lastAssistant?.Content ?? string.Empty,
-            Usage = lastAssistant?.Usage is { } u ? new AgentResponseUsage(u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite) : null,
+            Usage = ProjectLastTurnUsage(snapshot),
             // #2641 AC1: an interrupted run still cost what it cost. Carrying the aggregate out on
             // the partial response is what lets the timeout/abort paths record a real figure
             // instead of leaving the most expensive runs on the platform unmeasured.

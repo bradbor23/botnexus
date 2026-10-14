@@ -122,6 +122,14 @@ public sealed class ChannelKnowledgeFenceArchitectureTests : ArchitectureTest
         new("R2", Path.Combine("domain", "BotNexus.Domain", "Primitives", "ChannelKey.cs"),
             "Aliases table maps \"web chat\"/\"web-chat\"/\"webchat\" onto the concrete key \"signalr\"", "#2089"),
 
+        // The notification path asks "did this channel already echo the user's own reply back to
+        // them?" and answers it by naming Telegram, because Telegram is currently the only channel
+        // that does. A push for a reply the user has already seen in their inbox is the defect this
+        // avoids (#168). The question is a CAPABILITY one and belongs on the adapter contract; until
+        // it lives there this stays a named violation rather than a silent one.
+        new("R2", Path.Combine("gateway", "BotNexus.Gateway", "GatewayHost.cs"),
+            "IsTelegram suppresses a notification for a reply the inbound channel already echoed", "#168"),
+
         // ---- Rule 3: concrete channel resolved for observer/fan-out behaviour ----
 
         // ---- Rule 5: direct IChannelAdapter send calls outside channel extensions ----

@@ -63,7 +63,7 @@ public sealed class InboundDeliveryIntentParityTests : IDisposable
         var preferences = Substitute.For<IPortalPreferencesService>();
         preferences.Current.Returns(new PortalPreferences());
         _desktop.Services.AddSingleton(preferences);
-        _desktop.Services.AddSingleton(new HttpClient());
+        _desktop.Services.AddSingleton(OfflineTestHttp.Create());
         _desktop.JSInterop.Mode = JSRuntimeMode.Loose;
     }
 

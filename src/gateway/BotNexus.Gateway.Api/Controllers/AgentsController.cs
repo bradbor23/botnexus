@@ -367,7 +367,7 @@ public sealed class AgentsController : ControllerBase
     /// </summary>
     /// <remarks>
     /// This exists because <see cref="Update"/> is a whole-descriptor REPLACE. Properties a caller
-    /// does not model bind as their defaults and are then removed from config.json by the writer,
+    /// does not model bind as their defaults and are then removed from the platform configuration,
     /// so a quick-edit surface that sent only persona fields would silently delete ToolIds, Memory,
     /// Heartbeat and the rest - and would 400 first, because AgentId, DisplayName, ModelId and
     /// ApiProvider are <c>required</c> and the validator also demands IsolationStrategy.

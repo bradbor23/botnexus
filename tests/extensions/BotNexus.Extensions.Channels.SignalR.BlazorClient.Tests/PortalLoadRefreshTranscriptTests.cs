@@ -61,7 +61,7 @@ public sealed class PortalLoadRefreshTranscriptTests
 
     private GatewayEventHandler CreateProductionEventHandler() => new(
         _store,
-        new GatewayHubConnection(),
+        OfflineTestHub.Create(),
         Microsoft.Extensions.Logging.Abstractions.NullLogger<GatewayEventHandler>.Instance,
         _store);
 

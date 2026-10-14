@@ -9,7 +9,7 @@ namespace BotNexus.Gateway.Api.Models;
 /// <para>
 /// This exists because <c>PUT /api/agents/{id}</c> binds a whole <c>AgentDescriptor</c> and
 /// full-replaces it: every descriptor property the caller does not model binds as its default and
-/// is then REMOVED from config.json by the writer. A fast-edit panel that sent only a persona body
+/// is then REMOVED from the platform configuration by the writer. A fast-edit panel that sent only a persona body
 /// would therefore blank <c>ToolIds</c>, <c>Memory</c>, <c>Heartbeat</c> and the rest — and would
 /// not even get that far, because <c>AgentId</c>, <c>DisplayName</c>, <c>ModelId</c> and
 /// <c>ApiProvider</c> are <c>required</c> members and the validator also demands

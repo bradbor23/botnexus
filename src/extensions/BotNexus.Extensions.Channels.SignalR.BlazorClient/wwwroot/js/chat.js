@@ -15,12 +15,6 @@ window.chatScroll = {
         }
     },
 
-    /** Returns true when the viewport matches the mobile breakpoint (<=768px). Read by MainLayout
-     *  to decide whether a conversation link goes to the separate /mobile/ shell. */
-    isMobileView: function () {
-        return window.innerWidth <= 768;
-    },
-
     /** Force-scrolls to bottom regardless of current position. Defers to next frame
      *  so the element is visible (hidden panels have scrollHeight=0). */
     forceScrollToBottom: function (element) {

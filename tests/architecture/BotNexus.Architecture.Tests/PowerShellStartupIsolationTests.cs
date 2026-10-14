@@ -30,7 +30,7 @@ public sealed class PowerShellStartupIsolationTests(Xunit.Abstractions.ITestOutp
         await ExerciseLintBoundaryAsync(
             "[Console]::Out.Write('ready-never-exit'); [Threading.Tasks.Task]::Delay(-1).GetAwaiter().GetResult()",
             cancelAfterStart: true,
-            budget: TimeSpan.FromSeconds(10));
+            timeout: TimeSpan.FromSeconds(10));
     }
 
     [Fact]
