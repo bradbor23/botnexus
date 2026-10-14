@@ -123,6 +123,12 @@ public sealed class TelegramChannelAdapter(
     public override bool SupportsInteractivePrompts => true;
 
     /// <summary>
+    /// A Telegram reply is delivered into the same chat the message came from, so the person has
+    /// already read it by the time a push would arrive.
+    /// </summary>
+    public override bool DeliversReplyToSender => true;
+
+    /// <summary>
     /// Telegram chats are a user-visible surface, so the delimited internal runtime-context
     /// envelope is redacted from outbound text before delivery (#1430).
     /// </summary>

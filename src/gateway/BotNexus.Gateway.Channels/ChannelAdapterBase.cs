@@ -98,6 +98,9 @@ public abstract class ChannelAdapterBase : IChannelAdapter
     public virtual bool SupportsInteractivePrompts => false;
 
     /// <inheritdoc />
+    public virtual bool DeliversReplyToSender => false;
+
+    /// <inheritdoc />
     public bool IsRunning => _isRunning;
 
     /// <summary>

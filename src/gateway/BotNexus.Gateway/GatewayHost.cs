@@ -1659,8 +1659,8 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
         if (!session.ConversationId.IsInitialized())
             return;
 
-        // The reply reached Telegram on the way in, so Telegram has already said so.
-        if (IsTelegram(message.ChannelType))
+        // The reply went back where the message came from, so that channel has already said so.
+        if (ChannelEchoesReplyToSender(message.ChannelType))
             return;
 
         try
@@ -1672,8 +1672,9 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
             if (conversation is null || conversation.Kind != ConversationKind.HumanAgent)
                 return;
 
-            // A conversation bound outward to Telegram is answered there whichever side began it.
-            if (conversation.ChannelBindings.Any(binding => IsTelegram(binding.ChannelType)))
+            // A conversation bound outward to such a channel is answered there whichever side
+            // began it.
+            if (conversation.ChannelBindings.Any(b => ChannelEchoesReplyToSender(b.ChannelType)))
                 return;
 
             await _notificationPublisher.TryPublishAsync(
@@ -1701,8 +1702,23 @@ public sealed class GatewayHost : BackgroundService, IChannelDispatcher, IInboun
         }
     }
 
-    private static bool IsTelegram(ChannelKey channel) =>
-        channel.Equals(ChannelKey.From("telegram"));
+    /// <summary>
+    /// Whether a reply delivered on <paramref name="channelType"/> is already in front of the
+    /// person who sent the message.
+    /// </summary>
+    /// <remarks>
+    /// Asked of the adapter rather than answered by naming a channel. Generic orchestration naming
+    /// Telegram is the coupling ChannelKnowledgeFenceArchitectureTests exists to stop, and the
+    /// question was always a capability one: "does this channel put my reply back in my own inbox?"
+    /// <para>
+    /// An unregistered channel answers NO, so a notification is raised. That is a change in one
+    /// edge case and the right way round: if the adapter is gone, the reply did not reach it, and
+    /// the old identity check suppressed the notification anyway - silently, and forever, for any
+    /// conversation still carrying the binding.
+    /// </para>
+    /// </remarks>
+    private bool ChannelEchoesReplyToSender(ChannelKey channelType) =>
+        _channelManager.Get(channelType) is { DeliversReplyToSender: true };
 
     /// <summary>How much of a reply a notification body carries.</summary>
     private const int NotificationBodyBudget = 200;

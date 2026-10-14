@@ -29,7 +29,7 @@
                     <span class="burger-line"></span>
                 </button>
             }
-            <a href="" class="banner-home-link" data-testid="banner-home-link" title="Home" @onclick="CloseSidebar">
+            <a href="" class="banner-home-link" data-testid="banner-home-link" title="Home">
                 <span class="banner-logo">&#x1F916;</span>
                 <span class="banner-title">BotNexus</span>
             </a>
@@ -765,7 +765,6 @@
     private void OnToolbarNavClick()
     {
         _overflowOpen = false;
-        _sidebarOpen = false;
     }
 
     private void OnContributionClick(NavContributionDto contribution)
@@ -1201,9 +1200,16 @@
         await JS.InvokeVoidAsync("localStorage.setItem", SidebarKey, _sidebarOpen ? "true" : "false");
     }
 
-    // Unconditional: desktop and mobile are explicit applications, so nothing here may branch on
-    // viewport geometry (ExplicitClientViewArchitectureTests). Narrow-screen presentation of the
-    // sidebar is responsive CSS's job, not a device probe's.
+    /// <summary>
+    /// Closes the sidebar. Reached from the scrim behind it - a user action, not a viewport probe,
+    /// and CSS decides whether that scrim is showing at all.
+    /// </summary>
+    /// <remarks>
+    /// Navigation deliberately does NOT call this. Desktop and mobile are explicit applications
+    /// (ExplicitClientViewArchitectureTests), so this one must not close its sidebar on every nav
+    /// click for the separate /mobile/ app's benefit - which is what branching on _isMobile used to
+    /// arrange, and what MainLayoutTests' "navigation preserves open sidebar" cases pin.
+    /// </remarks>
     private void CloseSidebar() => _sidebarOpen = false;
 
 
@@ -1768,8 +1774,6 @@
 
     private void NavigateToContribution(NavContributionDto contribution)
     {
-        _sidebarOpen = false;
-
         // forceLoad ONLY for a full-page view. The embedded route is an ordinary Blazor route, so
         // a client-side navigation keeps the portal loaded rather than reloading the whole app.
         if (contribution.FullPage)

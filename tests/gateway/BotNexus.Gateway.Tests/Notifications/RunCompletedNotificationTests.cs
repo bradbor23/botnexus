@@ -186,24 +186,51 @@ public sealed class RunCompletedNotificationTests
             notificationPublisher: publisher);
     }
 
+    /// <summary>
+    /// A channel manager holding the adapter under test, plus a Telegram adapter that declares
+    /// <c>DeliversReplyToSender</c>.
+    /// </summary>
+    /// <remarks>
+    /// The suppression used to be keyed on the channel's NAME inside the gateway. It is now keyed
+    /// on that capability, so the adapter has to declare it - and the binding case needs a Telegram
+    /// adapter registered at all, because an unregistered channel now answers "does not echo".
+    /// </remarks>
     private static IChannelManager ChannelManager(string channelType)
+    {
+        var adapter = Adapter(channelType);
+        var telegram = adapter.Object.ChannelType.Equals(TelegramKey) ? adapter : Adapter("telegram");
+
+        var manager = new Mock<IChannelManager>();
+        manager.SetupGet(m => m.Adapters).Returns(
+            adapter == telegram ? [adapter.Object] : [adapter.Object, telegram.Object]);
+
+        IChannelAdapter? Resolve(ChannelKey key) =>
+            key.Equals(adapter.Object.ChannelType) ? adapter.Object
+            : key.Equals(TelegramKey) ? telegram.Object
+            : null;
+
+        manager.Setup(m => m.Get(It.IsAny<ChannelKey>())).Returns((ChannelKey key) => Resolve(key));
+        manager.Setup(m => m.Get(It.IsAny<ChannelKey>(), It.IsAny<string?>()))
+            .Returns((ChannelKey key, string? _) => Resolve(key));
+
+        return manager.Object;
+    }
+
+    private static readonly ChannelKey TelegramKey = ChannelKey.From("telegram");
+
+    private static Mock<IChannelAdapter> Adapter(string channelType)
     {
         var adapter = new Mock<IChannelAdapter>();
         adapter.SetupGet(c => c.ChannelType).Returns(ChannelKey.From(channelType));
         adapter.SetupGet(c => c.DisplayName).Returns(channelType);
         adapter.SetupGet(c => c.SupportsStreaming).Returns(false);
         adapter.SetupGet(c => c.SupportsThinkingDisplay).Returns(false);
+        // Telegram puts the reply back in the chat the message came from; the web shell does not.
+        adapter.SetupGet(c => c.DeliversReplyToSender)
+            .Returns(channelType == "telegram");
         adapter.Setup(c => c.SendAsync(It.IsAny<OutboundMessage>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
-
-        var manager = new Mock<IChannelManager>();
-        manager.SetupGet(m => m.Adapters).Returns([adapter.Object]);
-        manager.Setup(m => m.Get(It.IsAny<ChannelKey>())).Returns((ChannelKey key) =>
-            key.Equals(adapter.Object.ChannelType) ? adapter.Object : null);
-        manager.Setup(m => m.Get(It.IsAny<ChannelKey>(), It.IsAny<string?>())).Returns((ChannelKey key, string? _) =>
-            key.Equals(adapter.Object.ChannelType) ? adapter.Object : null);
-
-        return manager.Object;
+        return adapter;
     }
 
     private static InboundMessage Message(string channelType = "web")
