@@ -151,40 +151,6 @@ public sealed class MainLayoutTests : IDisposable
         Assert.Equal("false", setItemCall.Arguments[1]);
     }
 
-    [Theory]
-    [InlineData("configuration")]
-    [InlineData("agents")]
-    [InlineData("cron")]
-    public async Task Desktop_top_level_navigation_preserves_open_sidebar(string route)
-    {
-        var cut = RenderLayout();
-        await cut.InvokeAsync(() => cut.Find(".burger-btn").Click());
-        var nav = _ctx.Services.GetRequiredService<NavigationManager>();
-
-        await cut.InvokeAsync(() => nav.NavigateTo(route));
-
-        cut.Find(".sidebar-open");
-    }
-
-    [Fact]
-    public async Task Desktop_subnavigation_preserves_open_sidebar_and_does_not_write_preference()
-    {
-        var cut = RenderLayout();
-        await cut.InvokeAsync(() => cut.Find(".burger-btn").Click());
-        var writesBeforeNavigation = _ctx.JSInterop.Invocations["localStorage.setItem"]
-            .Count(invocation => invocation.Arguments.Count == 2
-                && (string?)invocation.Arguments[0] == "botnexus-sidebar-open");
-        var nav = _ctx.Services.GetRequiredService<NavigationManager>();
-
-        await cut.InvokeAsync(() => nav.NavigateTo("release-history"));
-
-        cut.Find(".sidebar-open");
-        var writesAfterNavigation = _ctx.JSInterop.Invocations["localStorage.setItem"]
-            .Count(invocation => invocation.Arguments.Count == 2
-                && (string?)invocation.Arguments[0] == "botnexus-sidebar-open");
-        Assert.Equal(writesBeforeNavigation, writesAfterNavigation);
-    }
-
     [Fact]
     public void Does_not_show_agent_dropdown_when_no_agents()
     {
@@ -1296,16 +1262,6 @@ public sealed class MainLayoutTests : IDisposable
     }
 
     [Fact]
-    public void Home_nav_contains_change_history_subnavigation()
-    {
-        var cut = RenderLayout();
-
-        var link = cut.Find("[data-testid='subnav-release-history']");
-        Assert.Equal("release-history", link.GetAttribute("href"));
-        Assert.Equal("Change history", link.TextContent.Trim());
-    }
-
-    [Fact]
     public void Home_nav_entry_renders_first_in_default_order()
     {
         var cut = RenderLayout();
@@ -1459,6 +1415,14 @@ public sealed class MainLayoutTests : IDisposable
     // The sidebar has been the conversation list and nothing else since navigation moved to the
     // toolbar, yet it rendered on every route - 240px of chat furniture on pages with no
     // conversations in them.
+    //
+    // Upstream asserts the opposite - that an opened sidebar PERSISTS across top-level
+    // navigation to configuration, agents and cron, and that a Home sub-nav offers Change
+    // history. Those three tests were removed in the 2026-10 sync rather than reconciled: this
+    // fork decided the sidebar is the conversation list and does not belong on pages with no
+    // conversations in them, and it has no toolbar sub-nav for the release-history link to live
+    // in. The theories below cover the same routes from the opposite direction, so the decision
+    // stays pinned rather than merely untested.
 
     private void NavigateTo(string relative) =>
         _ctx.Services.GetRequiredService<NavigationManager>().NavigateTo($"http://localhost/{relative}");
