@@ -32,7 +32,12 @@ public sealed class ExplicitClientViewArchitectureTests : ArchitectureTest
         var violations = files
             .Where(path =>
             {
-                var source = File.ReadAllText(path);
+                // Comments stripped first. A comment cannot select a layout from a device signal,
+                // and this fence twice reported documentation as the defect it documents - once on
+                // a note recording that _isMobile had been REMOVED. Three sibling fences already
+                // do this (AgentKind, BrowserToolsSsrfReuse, ChannelKnowledge), so the stripper is
+                // shared rather than reinvented.
+                var source = ChannelKnowledgeFenceArchitectureTests.StripComments(File.ReadAllText(path));
                 if (DeviceSignal.IsMatch(source))
                     return true;
 

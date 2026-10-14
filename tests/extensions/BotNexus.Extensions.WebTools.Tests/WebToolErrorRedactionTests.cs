@@ -237,7 +237,14 @@ public class WebToolErrorRedactionTests
     private static string ReadToolSource(string fileName)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".git")))
+        // `.git` is a DIRECTORY in an ordinary clone and a FILE in a git worktree, and the
+        // Directory.Packages.props anchor covers both - the same pair RepoLocator already uses.
+        // Testing only for a directory made every test that walks for the repo root fail inside a
+        // worktree, which is where this suite is run to escape the exFAT volume.
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, "Directory.Packages.props")))
             dir = dir.Parent;
 
         dir.ShouldNotBeNull("Could not locate the repository root from the test output directory.");
