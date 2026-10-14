@@ -347,8 +347,9 @@ public sealed class GatewayProcessManagerTests : IDisposable
         // Start a simple long-running process we can kill
         var psi = new ProcessStartInfo
         {
-            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-            Arguments = OperatingSystem.IsWindows() ? "/c timeout /t 30" : "-c \"sleep 30\"",
+            // `sleep` directly: `sh -c "sleep 30"` execs, so the process name changes under the test.
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "sleep",
+            Arguments = OperatingSystem.IsWindows() ? "/c timeout /t 30" : "30",
             UseShellExecute = false,
             CreateNoWindow = true,
         };

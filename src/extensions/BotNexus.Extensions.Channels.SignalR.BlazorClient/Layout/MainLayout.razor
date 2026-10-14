@@ -1207,8 +1207,8 @@
     /// <remarks>
     /// Navigation deliberately does NOT call this. Desktop and mobile are explicit applications
     /// (ExplicitClientViewArchitectureTests), so this one must not close its sidebar on every nav
-    /// click for the separate /mobile/ app's benefit - which is what branching on _isMobile used to
-    /// arrange, and what MainLayoutTests' "navigation preserves open sidebar" cases pin.
+    /// click for the separate /mobile/ app's benefit - which is what a per-viewport branch here used
+    /// to arrange, and what MainLayoutTests' "navigation preserves open sidebar" cases pin.
     /// </remarks>
     private void CloseSidebar() => _sidebarOpen = false;
 

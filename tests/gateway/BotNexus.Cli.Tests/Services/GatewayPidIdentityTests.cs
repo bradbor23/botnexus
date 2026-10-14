@@ -124,18 +124,25 @@ public sealed class GatewayPidIdentityTests : IDisposable
         GatewayPidFile.Verify(recycled, current).ShouldBe(GatewayIdentityMatch.Mismatch);
     }
 
+    // Both directions: `Verify` takes the absolute delta, so a boot-time term that drifts the other
+    // way has to be tolerated on the same terms. Only the negative half was covered, which left the
+    // abs() itself unexercised.
     [Theory]
+    [InlineData(-0.25)]
+    [InlineData(-1.5)]
+    [InlineData(-5)]
+    [InlineData(-9)]
     [InlineData(0.25)]
     [InlineData(1.5)]
     [InlineData(5)]
     [InlineData(9)]
-    public void Verify_StartTimeReadJitter_StillMatches(double skewSeconds)
+    public void Verify_StartTimeReadJitter_StillMatches(double offsetSeconds)
     {
-        // The regression this fence exists for. StopAsync against a live gateway reported the PID
-        // "recycled onto a different process" with the same pid AND the same process name, which no
-        // recycle can produce - only a start time read differently twice. On Unix .NET derives start
-        // time from boot time plus start ticks, and the boot-time term is re-derived per call and
-        // jitters, more so under load.
+        // A defensive fence, not a regression capture. On Unix .NET derives start time from boot
+        // time plus start ticks, and the boot-time term is re-derived per call, so two reads of one
+        // live process can differ by a little. No failure has been traced to that: the intermittent
+        // "recycled onto a different process" this was first blamed for was a stand-in fixture
+        // changing its own name (see StartLongRunningProcess).
         //
         // It matters because the mismatch branch does not merely refuse to signal: it also deletes
         // the PID file, so a false mismatch leaves a live gateway unstoppable by `gateway stop` and
@@ -144,10 +151,29 @@ public sealed class GatewayPidIdentityTests : IDisposable
         var genuine = GatewayPidFile.Capture(current);
         var jittered = genuine with
         {
-            StartTimeUtc = genuine.StartTimeUtc!.Value.AddSeconds(-skewSeconds)
+            StartTimeUtc = genuine.StartTimeUtc!.Value.AddSeconds(offsetSeconds)
         };
 
         GatewayPidFile.Verify(jittered, current).ShouldBe(GatewayIdentityMatch.Match);
+    }
+
+    // The upper edge of the tolerance. Widening it to absorb a future false mismatch trades away
+    // the guarantee this record exists for - that `gateway stop` never signals a foreign process -
+    // and the existing mismatch cases skew by hours, so nothing told anyone where the line sits.
+    // A case just outside it fails if the window is ever widened silently.
+    [Theory]
+    [InlineData(-11)]
+    [InlineData(11)]
+    public void Verify_StartTimeBeyondTolerance_ReturnsMismatch(double offsetSeconds)
+    {
+        var current = Process.GetCurrentProcess();
+        var genuine = GatewayPidFile.Capture(current);
+        var beyond = genuine with
+        {
+            StartTimeUtc = genuine.StartTimeUtc!.Value.AddSeconds(offsetSeconds)
+        };
+
+        GatewayPidFile.Verify(beyond, current).ShouldBe(GatewayIdentityMatch.Mismatch);
     }
 
     [Fact]
@@ -438,8 +464,11 @@ public sealed class GatewayPidIdentityTests : IDisposable
     {
         var psi = new ProcessStartInfo
         {
-            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-            Arguments = OperatingSystem.IsWindows() ? "/c timeout /t 60 /nobreak" : "-c \"sleep 60\"",
+            // Start `sleep` itself on Unix. `/bin/sh -c "sleep 60"` execs its only command, so the
+            // PID is `sh` when Capture reads it and `sleep` a moment later - a process name that
+            // changes under the test, which reads as a recycled PID.
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "sleep",
+            Arguments = OperatingSystem.IsWindows() ? "/c timeout /t 60 /nobreak" : "60",
             UseShellExecute = false,
             CreateNoWindow = true,
         };

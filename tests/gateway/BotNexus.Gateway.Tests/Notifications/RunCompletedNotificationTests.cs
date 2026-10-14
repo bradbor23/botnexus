@@ -92,6 +92,27 @@ public sealed class RunCompletedNotificationTests
         Assert.DoesNotContain(publisher.Published, n => n.Kind == NotificationKind.AgentRunCompleted);
     }
 
+    // The suppression asks the adapter whether it echoes the reply, so a channel with no adapter
+    // registered has nobody to ask. It must answer "does not echo" and still notify: the binding
+    // names a channel this gateway cannot deliver to, so the push is the only way the reply is
+    // heard about. Keyed on the channel NAME this case was silent, which is the bug the capability
+    // replaced - the one behaviour change here that the other facts do not reach.
+    [Fact]
+    public async Task A_conversation_bound_to_a_channel_with_no_adapter_still_raises()
+    {
+        var publisher = new RecordingPublisher();
+        await using var host = Host(
+            publisher,
+            "Hello, world!",
+            bindings: [new ChannelBinding { ChannelType = ChannelKey.From("slack") }]);
+
+        await host.DispatchAsync(Message());
+
+        var raised = Assert.Single(publisher.Published, n => n.Kind == NotificationKind.AgentRunCompleted);
+        Assert.Equal("agent-a", raised.AgentId);
+        Assert.Equal(ThreadId, raised.ConversationId);
+    }
+
     [Fact]
     public async Task Two_agents_talking_to_each_other_raise_nothing()
     {
