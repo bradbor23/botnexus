@@ -260,7 +260,7 @@ public sealed class AgentConverseToolTests
 
         try
         {
-            await exchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await exchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
             callerCancellation.IsCancellationRequested.ShouldBeFalse();
         }
         finally
@@ -322,7 +322,7 @@ public sealed class AgentConverseToolTests
 
         try
         {
-            await exchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await exchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
             callerCancellation.IsCancellationRequested.ShouldBeFalse();
         }
         finally

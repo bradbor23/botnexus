@@ -970,6 +970,9 @@ public sealed class ActivityDashboardComponentTests : IDisposable
         var badge = Assert.Single(cut.FindAll("[data-testid='activity-live-badge']"));
         Assert.Equal("s-active", badge.Closest("[data-testid='activity-row']")?.GetAttribute("data-session-id"));
 
+        // The live/idle filter sits behind the fork's "More filters" disclosure.
+        cut.Find("[data-testid='activity-filter-more']").Click();
+
         cut.Find("[data-testid='activity-filter-live']").Change(nameof(ActivityLiveFilter.Live));
         cut.WaitForState(() => RowIds(cut).SequenceEqual(new[] { "active" }));
 

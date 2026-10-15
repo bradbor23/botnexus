@@ -114,14 +114,13 @@ window.BotNexus.splitter = (function () {
                 if (container.getBoundingClientRect().width <= 0) return;
 
                 if (userSized) {
-                    var stored = parseInt(localStorage.getItem(storageKey), 10);
-                    if (!isNaN(stored) && stored > 0) {
-                        // Re-clamp only; the stored value is left alone so widening the window
-                        // restores the width the user picked rather than the squeezed one.
-                        applyWidth(container, leftPane, stored, minPx, maxFraction);
-                    }
+                    // Re-clamp only. preferredPx is the width the user picked and is never
+                    // overwritten here, so widening the window restores it rather than the
+                    // squeezed width. The ARIA values follow the visible width.
+                    updateAccessibleValues(applyWidth(container, leftPane, preferredPx, minPx, maxFraction));
                 } else {
                     applyDefault();
+                    updateAccessibleValues(leftPane.getBoundingClientRect().width);
                 }
             });
 
@@ -206,15 +205,6 @@ window.BotNexus.splitter = (function () {
         document.addEventListener('touchend', onTouchEnd);
         splitter.addEventListener('keydown', onKeyDown);
 
-        // Keep the visible width within the current container while retaining the user's
-        // preferred width for a later expansion. ResizeObserver follows the actual flex
-        // container rather than only the viewport, so embedded splitter consumers are covered.
-        var resizeObserver = new ResizeObserver(function () {
-            var currentPx = applyWidth(container, leftPane, preferredPx, minPx, maxFraction);
-            updateAccessibleValues(currentPx);
-        });
-        resizeObserver.observe(container);
-
         _instances[containerId] = function () {
             if (observer) observer.disconnect();
             splitter.removeEventListener('mousedown', onMouseDown);
@@ -224,7 +214,6 @@ window.BotNexus.splitter = (function () {
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             splitter.removeEventListener('keydown', onKeyDown);
-            resizeObserver.disconnect();
         };
     }
 

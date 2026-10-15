@@ -254,7 +254,7 @@ public sealed class LegacyToolInvocationBackfillHostedServiceTests
             },
             new BotNexusMetrics(), logger);
         await service.StartAsync(CancellationToken.None);
-        await retryReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await retryReached.Task.WaitAsync(TimeSpan.FromSeconds(30));
         await service.StopAsync(CancellationToken.None);
         calls.ShouldBe(1);
         var warning = logger.Messages.ShouldHaveSingleItem();

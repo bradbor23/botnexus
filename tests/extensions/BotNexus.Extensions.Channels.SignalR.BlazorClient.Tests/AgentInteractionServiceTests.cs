@@ -203,6 +203,55 @@ public sealed class AgentInteractionServiceTests
     }
 
     [Fact]
+    public async Task SelectConversation_when_history_404s_removes_the_conversation_without_flagging_a_load_failure()
+    {
+        // A 404 means the conversation is gone server-side and can never be opened, so it is
+        // dropped from the roster. That is not a transient load failure: no error empty state.
+        var agent = _store.GetAgent("agent-1")!;
+        agent.Conversations["conv-1"] = new ConversationState
+        {
+            ConversationId = "conv-1",
+            Title = "Gone",
+            HistoryLoaded = false
+        };
+
+        _restClient.GetHistoryAsync("conv-1", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<ConversationHistoryResponseDto?>(_ =>
+                throw new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound));
+
+        await _service.SelectConversationAsync("agent-1", "conv-1");
+
+        agent.Conversations.ContainsKey("conv-1").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task SelectConversation_when_a_cron_projection_history_404s_removes_the_projection()
+    {
+        // The fork's stale-cron guarantee, moved to where it now happens: a locally-synthesised
+        // cron projection whose backing session is gone must not stay in the sidebar as a row
+        // that can never be opened.
+        const string sessionId = "cron:20260509002033:6f2f84a4f1634ff492a4fec212872c54";
+        var conversationId = $"cron-session:{sessionId}";
+        var agent = _store.GetAgent("agent-1")!;
+        agent.Conversations[conversationId] = new ConversationState
+        {
+            ConversationId = conversationId,
+            Title = "Scheduled run",
+            IsLocallySynthesised = true,
+            ActiveSessionId = sessionId,
+            HistoryLoaded = false
+        };
+
+        _restClient.GetSessionHistoryAsync(sessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<SessionHistoryResponseDto?>(_ =>
+                throw new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound));
+
+        await _service.SelectConversationAsync("agent-1", conversationId);
+
+        agent.Conversations.ContainsKey(conversationId).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task SelectConversation_when_history_loads_empty_clears_HistoryLoadFailed()
     {
         // #1697: a successful load (even an empty one) leaves HistoryLoadFailed false so the view shows
