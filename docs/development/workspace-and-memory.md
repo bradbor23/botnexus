@@ -686,64 +686,19 @@ Consolidation **ships** as the `memory-dreaming` cron action
 
 ### Consolidation Trigger
 
-- **Mechanism**: a cron job whose action type is `memory-dreaming`, run by the cron service (see
-  [Cron and Scheduling Guide](../cron-and-scheduling.md)).
-- **Interval**: whatever schedule you give that cron job. There is no separate interval setting.
-- **Provisioning**: **none — you must create the job yourself.** `MemoryDreamingCronAction` is
-  registered as an available action in `CronServiceCollectionExtensions`, but unlike the heartbeat
-  and skill-review actions it has no provisioner, so no job is created for you. An agent with
-  memory enabled and no `memory-dreaming` job never consolidates.
-
-Configuration is per-job, through `CronJob.Metadata`:
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `lookbackDays` | 14 | How many days of daily notes to read |
-| `maxContentChars` | 50000 | Cap on the source material handed to the model |
+**Main branch:** source-verified at `08ae4a8c353ce8a6ecfa6d866c53b70be86a8310`. `MemoryDreamingCronAction` is implemented and registered; it is not an unimplemented future feature. Configure a cron job with action type `memory-dreaming`, an `agentId`, and a schedule. There is no registered automatic dreaming provisioner or `MemoryConsolidationIntervalHours` setting. The [cron guide](../cron-and-scheduling.md#_8-4-memory-dreaming) owns job fields, metadata defaults, and an example schedule.
 
 ### Consolidation Process
 
-1. Reads the agent's daily notes under `memory/` for the last `lookbackDays`, capped at
-   `maxContentChars`. If there are none, the run is a no-op.
-2. Reads the existing `MEMORY.md` so the model can see what it has already concluded.
-3. Builds a consolidation prompt and dispatches a **sub-agent session** to run it.
-4. That sub-agent appends a new `## Consolidated — YYYY-MM-DD` section to `MEMORY.md` using the
-   ordinary `memory_save` tool.
-5. Separately, durable knowledge is promoted to any shared stores the agent may write to, via
-   `SharedMemoryPromoter`, which skips near-duplicates at a 0.85 similarity threshold.
+The action reads recent daily notes and existing workspace `MEMORY.md`, builds an LLM prompt, and dispatches a cron-triggered session. It skips when there are no recent notes. `MarkdownAgentMemory.ConsolidateAsync` does not provide a separate manual consolidation implementation.
 
-**Note on `MEMORY.md` writability.** This page previously claimed `MEMORY.md` was read-only during
-normal turns and reachable only through a privileged consolidation path. It is not: `memory_save`
-accepts a `file_path`, `MarkdownAgentMemory.SaveToFileAsync` passes it through unguarded, and the
-consolidation prompt relies on exactly that to write `MEMORY.md`. The daily-note default is a
-convention the scaffolded `AGENTS.md` encourages, not an enforced boundary.
+During normal turns, treat workspace `MEMORY.md` as read-only. Use `memory_save` for append-only notes under the configured memory root (normally `memory/`), not as an arbitrary workspace writer. The tool's file path is relative to that root and cannot escape it. This is also an instruction/policy boundary, not a claim that every general-purpose file tool technically prevents workspace edits. A human can maintain the workspace file, but should coordinate edits with any explicitly authorized writer.
 
-1. A dedicated consolidation agent reviews daily-note files through a file-reading tool or searches indexed entries with `memory_search(query="...")`
-2. The consolidation agent identifies patterns and durable learnings
-3. The consolidation agent writes updated content to `MEMORY.md` (using a privileged write path not available during normal turns)
-4. The scaffolded `AGENTS.md` template reminds agents to use `MEMORY.md` for stable facts and `memory/YYYY-MM-DD.md` for active work context
-
-**Example of what consolidation will produce**:
-```text
-Daily Notes (memory/2026-04-02.md):
-User prioritizes concise summaries, max 100 words
-Architecture has 17 projects with clean inversion
-Build command: dotnet build dirs.proj
-Confirmed user timezone is Pacific Time
-
-memory-dreaming → MEMORY.md gains:
-## Consolidated — 2026-04-03
-- Pattern: User prefers concise summaries (max 100 words) before detail
-- User timezone is Pacific Time
-```
+**Current limitation:** The dreaming prompt requests a `MEMORY.md` append using `memory_save`, but with the default root an explicit `file_path="MEMORY.md"` targets `memory/MEMORY.md`, not workspace `MEMORY.md` consumed by prompt context. Without an explicit path it writes a daily note. [#4818](https://github.com/sytone/botnexus/issues/4818) tracks the persistence mismatch. A successful dispatch does not prove the intended long-term file changed. Do not recommend a root override or a permission bypass to make the prompt work.
 
 ### Still not built
 
-- **`IMemoryConsolidator`** — there is no pluggable consolidation-strategy interface; the dreaming
-  action is the only implementation and is not behind a seam.
-- **A dedicated consolidation model setting** — the sub-agent runs on the agent's own model. There
-  is no `ConsolidationModel` equivalent to compaction's `SummarizationModel`.
-- **Automatic provisioning** — see above; the job is operator-created.
+As of 2026-10-10, [#1803](https://github.com/sytone/botnexus/issues/1803) owns the future canonical per-agent memory architecture. [#3843](https://github.com/sytone/botnexus/issues/3843) owns verified Markdown migration and authority cutover; [#3890](https://github.com/sytone/botnexus/issues/3890) owns bounded long-term curation and recent context. These are planned delivery boundaries, not proof that SQL authority or completed long-term consolidation has shipped.
 
 ---
 

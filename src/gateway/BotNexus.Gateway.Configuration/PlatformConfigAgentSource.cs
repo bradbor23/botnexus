@@ -227,6 +227,7 @@ public sealed class PlatformConfigAgentSource(
                     : null,
                     Thinking = effectiveConfig.Thinking,
                     ContextWindow = effectiveConfig.ContextWindow,
+                    CompactionTokenCeiling = effectiveConfig.CompactionTokenCeiling,
                     MaxConcurrentSessions = effectiveConfig.MaxConcurrentSessions ?? 0,
                     Metadata = metadata,
                     IsolationOptions = ConvertObject(effectiveConfig.IsolationOptions),

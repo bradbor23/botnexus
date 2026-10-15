@@ -362,6 +362,8 @@ public sealed class SqliteConversationStore : IConversationStore
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         using var activity = ActivitySource.StartActivity("conversation.create", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversation.ConversationId.Value);
         activity?.SetTag("botnexus.agent.id", conversation.AgentId.Value);
@@ -390,6 +392,8 @@ public sealed class SqliteConversationStore : IConversationStore
     /// <inheritdoc />
     public async Task SaveAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         ValidateLifecycleState(conversation);
         using var activity = ActivitySource.StartActivity("conversation.save", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversation.ConversationId.Value);
@@ -895,6 +899,8 @@ public sealed class SqliteConversationStore : IConversationStore
     public async Task<Conversation?> PatchOverrideAsync(ConversationId conversationId, ConversationOverridePatch patch, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(patch);
+        if (patch.CompactionTokenCeiling.IsSet && patch.CompactionTokenCeiling.Value is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(patch), "CompactionTokenCeiling must be positive or null.");
         using var activity = ActivitySource.StartActivity("conversation.patch_override", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversationId.Value);
 
@@ -927,6 +933,11 @@ public sealed class SqliteConversationStore : IConversationStore
             }
             // #2523: the tool overlay rides the SAME narrow patch as the model overrides so a
             // restriction cannot be clobbered by a concurrent whole-record save.
+            if (patch.CompactionTokenCeiling.IsSet)
+            {
+                sets.Add("compaction_token_ceiling = $ceiling");
+                command.Parameters.AddWithValue("$ceiling", (object?)patch.CompactionTokenCeiling.Value ?? DBNull.Value);
+            }
             if (patch.ToolOverrideJson.IsSet)
             {
                 sets.Add("tool_override_json = $toolOverride");
@@ -1258,6 +1269,7 @@ public sealed class SqliteConversationStore : IConversationStore
                     model_override TEXT,
                     thinking_override TEXT,
                     context_window_override INTEGER,
+                    compaction_token_ceiling INTEGER,
                     tool_override_json TEXT,
                     version INTEGER NOT NULL DEFAULT 1
                 );
@@ -1403,6 +1415,7 @@ public sealed class SqliteConversationStore : IConversationStore
         ("model_override", "ALTER TABLE conversations ADD COLUMN model_override TEXT;"),
         ("thinking_override", "ALTER TABLE conversations ADD COLUMN thinking_override TEXT;"),
         ("context_window_override", "ALTER TABLE conversations ADD COLUMN context_window_override INTEGER;"),
+        ("compaction_token_ceiling", "ALTER TABLE conversations ADD COLUMN compaction_token_ceiling INTEGER;"),
         // #2523: per-session narrowing tool overlay, stored as opaque JSON.
         ("tool_override_json", "ALTER TABLE conversations ADD COLUMN tool_override_json TEXT;"),
         ("initiator", "ALTER TABLE conversations ADD COLUMN initiator TEXT;"),
@@ -1595,7 +1608,7 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
+            SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
             FROM conversations
             WHERE id = $id
             """;
@@ -1704,7 +1717,7 @@ public sealed class SqliteConversationStore : IConversationStore
         {
             var inClause = BuildIdInClause(command, ids);
             command.CommandText = $"""
-                SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
+                SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
                 FROM conversations
                 WHERE id IN ({inClause})
                 """;
@@ -1885,8 +1898,8 @@ public sealed class SqliteConversationStore : IConversationStore
         conversationCommand.Transaction = transaction;
         conversationCommand.CommandText = upsert
             ? """
-                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
-                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
+                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
+                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $compactionTokenCeiling, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
                 ON CONFLICT(id) DO UPDATE SET
                     agent_id = excluded.agent_id,
                     title = excluded.title,
@@ -1911,14 +1924,15 @@ public sealed class SqliteConversationStore : IConversationStore
                     model_override = excluded.model_override,
                     thinking_override = excluded.thinking_override,
                     context_window_override = excluded.context_window_override,
+                    compaction_token_ceiling = excluded.compaction_token_ceiling,
                     tool_override_json = excluded.tool_override_json,
                     version = conversations.version + 1
                 WHERE $expectedVersion = 0 OR conversations.version = $expectedVersion
                 RETURNING version
                 """
             : """
-                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
-                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
+                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
+                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $compactionTokenCeiling, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
                 """;
         conversationCommand.Parameters.AddWithValue("$id", conversation.ConversationId.Value);
         conversationCommand.Parameters.AddWithValue("$agentId", conversation.AgentId.Value);
@@ -1947,6 +1961,7 @@ public sealed class SqliteConversationStore : IConversationStore
         conversationCommand.Parameters.AddWithValue("$pendingAskUserJson", conversation.PendingAskUserJson is null ? (object)DBNull.Value : conversation.PendingAskUserJson);
         conversationCommand.Parameters.AddWithValue("$modelOverride", conversation.ModelOverride is null ? (object)DBNull.Value : conversation.ModelOverride);
         conversationCommand.Parameters.AddWithValue("$thinkingOverride", conversation.ThinkingOverride is null ? (object)DBNull.Value : conversation.ThinkingOverride);
+        conversationCommand.Parameters.AddWithValue("$compactionTokenCeiling", (object?)conversation.CompactionTokenCeiling ?? DBNull.Value);
         conversationCommand.Parameters.AddWithValue("$contextWindowOverride", conversation.ContextWindowOverride.HasValue ? conversation.ContextWindowOverride.Value : (object)DBNull.Value);
         conversationCommand.Parameters.AddWithValue("$toolOverrideJson", conversation.ToolOverrideJson is null ? (object)DBNull.Value : conversation.ToolOverrideJson);
         // #2338: deliberately NOT in the upsert's DO UPDATE SET list - the parent edge and the
@@ -2036,6 +2051,7 @@ public sealed class SqliteConversationStore : IConversationStore
             ModelOverride = conversation.ModelOverride,
             ThinkingOverride = conversation.ThinkingOverride,
             ContextWindowOverride = conversation.ContextWindowOverride,
+            CompactionTokenCeiling = conversation.CompactionTokenCeiling,
             // #2523: same reasoning - an overlay omitted from the clone would be NULLed by every
             // full save, silently lifting a blast-radius restriction the operator set.
             ToolOverrideJson = conversation.ToolOverrideJson,

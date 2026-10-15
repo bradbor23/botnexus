@@ -116,6 +116,8 @@ public sealed class FileConversationStore : IConversationStore
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         StampWorldId(conversation);
 
         await _lock.WaitAsync(ct).ConfigureAwait(false);
@@ -133,6 +135,8 @@ public sealed class FileConversationStore : IConversationStore
     /// <inheritdoc />
     public async Task SaveAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         if (conversation.Status == ConversationStatus.Archived && conversation.ActiveSessionId is not null)
             throw new InvalidOperationException($"Conversation '{conversation.ConversationId}' cannot be archived while an active session is assigned.");
         StampWorldId(conversation);
@@ -352,6 +356,8 @@ public sealed class FileConversationStore : IConversationStore
     public async Task<Conversation?> PatchOverrideAsync(ConversationId conversationId, ConversationOverridePatch patch, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(patch);
+        if (patch.CompactionTokenCeiling.IsSet && patch.CompactionTokenCeiling.Value is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(patch), "CompactionTokenCeiling must be positive or null.");
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -364,6 +370,8 @@ public sealed class FileConversationStore : IConversationStore
                 conversation.ThinkingOverride = patch.Thinking.Value;
             if (patch.ContextWindow.IsSet)
                 conversation.ContextWindowOverride = patch.ContextWindow.Value;
+            if (patch.CompactionTokenCeiling.IsSet)
+                conversation.CompactionTokenCeiling = patch.CompactionTokenCeiling.Value;
             if (patch.ToolOverrideJson.IsSet)
                 conversation.ToolOverrideJson = patch.ToolOverrideJson.Value;
             conversation.UpdatedAt = _clock.GetUtcNow();
