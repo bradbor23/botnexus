@@ -2192,7 +2192,9 @@ public sealed class DefaultSubAgentManager : ISubAgentManager
                     ex,
                     "Failed stopping child agent '{ChildAgentId}' for sub-agent '{SubAgentId}'.",
                     childAgentId,
-                    subAgentId);
+                    // The id arrives from a caller; neutralise CR/LF so it cannot forge a log record.
+                    subAgentId.Replace("\r", "\\r", StringComparison.Ordinal)
+                        .Replace("\n", "\\n", StringComparison.Ordinal));
             }
             finally
             {

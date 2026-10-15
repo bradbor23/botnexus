@@ -166,7 +166,7 @@ public sealed class ConversationMessagesController(
 
         logger.LogInformation(
             "Accepted conversation message for agent '{AgentId}' conversation '{ConversationId}' from '{SenderId}' (wake, {Status}).",
-            agentId.Value, conversationId.Value, inbound.SenderId, admission);
+            agentId.Value, conversationId.Value, RequestLogText.Safe(inbound.SenderId), admission);
 
         return Accepted(new PostConversationMessageResponse(
             conversationId.Value, resolution.SessionId.Value, Wake: true));
