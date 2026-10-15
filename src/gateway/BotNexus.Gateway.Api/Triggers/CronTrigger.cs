@@ -109,6 +109,8 @@ public sealed class CronTrigger(
         // and then receive the same prompt again via PromptAsync, giving the model a
         // duplicate user message and suppressing tool call execution. (#656)
         await sessions.SaveAsync(session, ct).ConfigureAwait(false);
+        if (request?.SessionCreatedAsync is not null)
+            await request.SessionCreatedAsync(sessionId, ct).ConfigureAwait(false);
 
         var retainSession = true;
         try
@@ -212,7 +214,7 @@ public sealed class CronTrigger(
             foreach (var toolEntry in ProjectToolEntries(response))
                 session.AddEntry(toolEntry);
 
-            session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = response.Content });
+            session.AddEntry(new SessionEntry { AgentRunId = response.AgentRunId, Role = MessageRole.Assistant, Content = response.Content });
         }
         finally
         {

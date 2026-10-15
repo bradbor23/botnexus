@@ -64,15 +64,24 @@ public sealed class ShellTool : IAgentTool
     public const int DefaultMaxTimeoutSeconds = 3600;
 
     private static readonly Lazy<string?> WindowsBashPath = new(FindBashExecutable);
+    private readonly LocalChildEnvironmentPolicy _environmentPolicy;
     private readonly string? _workingDirectory;
     private readonly int? _defaultTimeoutSeconds;
     private readonly int _maxTimeoutSeconds;
     private readonly ShellPreference _shellPreference;
     private readonly string[]? _shellCommand;
-    private readonly IReadOnlyList<string>? _environmentPassThrough;
 
-    public ShellTool(string? workingDirectory = null, int? defaultTimeoutSeconds = 600, ShellPreference shellPreference = ShellPreference.Auto, string[]? shellCommand = null, int maxTimeoutSeconds = DefaultMaxTimeoutSeconds, IReadOnlyList<string>? environmentPassThrough = null)
+    // Per-instance diagnostic seams order timer arm, child readiness, and exit observation.
+    // Defaults preserve the existing execution ordering and system clock.
+    internal Func<Process, Task> BeforeTimeoutArmAsync { get; init; }
+        = static _ => Task.CompletedTask;
+    internal TimeProvider ExecutionTimeProvider { get; init; } = TimeProvider.System;
+    internal Func<Process, CancellationToken, Task> WaitForProcessExitAsync { get; init; }
+        = static (process, token) => process.WaitForExitAsync(token);
+
+    public ShellTool(string? workingDirectory = null, int? defaultTimeoutSeconds = 600, ShellPreference shellPreference = ShellPreference.Auto, string[]? shellCommand = null, int maxTimeoutSeconds = DefaultMaxTimeoutSeconds, LocalChildEnvironmentPolicy? environmentPolicy = null)
     {
+        _environmentPolicy = environmentPolicy ?? LocalChildEnvironmentPolicy.Default;
         _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
             ? null
             : Path.GetFullPath(workingDirectory);
@@ -95,7 +104,6 @@ public sealed class ShellTool : IAgentTool
             : maxTimeoutSeconds;
         _shellPreference = shellPreference;
         _shellCommand = shellCommand is { Length: >= 2 } ? shellCommand : null;
-        _environmentPassThrough = environmentPassThrough is { Count: > 0 } ? environmentPassThrough : null;
     }
 
     /// <inheritdoc />
@@ -135,7 +143,8 @@ public sealed class ShellTool : IAgentTool
               "directly - wrap them in a subexpression, '$(foreach ($x in $xs) { ... }) | <cmd>', not " +
               "'foreach ($x in $xs) { ... } | <cmd>' which fails with 'An empty pipe element is not allowed'; " +
               "inside double-quoted strings wrap a variable followed by ':' as ${var} " +
-              "(or use single quotes); no backtick line-continuations; pass -Filter a single string, not an array; for " +
+              "(or use single quotes); $PID is a read-only automatic variable, so use a name such as $processId for your own value; " +
+              "no backtick line-continuations; pass -Filter a single string, not an array; for " +
               "multi-line or complex scripts write a tmp/*.ps1 file and run it. Inline Python on Windows prints cp1252 by " +
               "default (UnicodeEncodeError on emoji/em-dash/box glyphs) -- set $env:PYTHONUTF8=1 or write a tmp/*.py file and " +
               "run 'python -X utf8 file.py'. Never pipe a here-string into an interpreter; write a temp file and execute it."
@@ -281,14 +290,7 @@ public sealed class ShellTool : IAgentTool
 
         startInfo.ArgumentList.Add(invocation.Command);
 
-        // Build the child environment from an allow-list instead of inheriting the gateway's own.
-        // .NET seeds startInfo.Environment from the parent process, so without this a command an
-        // agent composed - from page text, a tool result, or a user message - could read every
-        // provider key and every `env:` credential this gateway resolves. See
-        // ToolProcessEnvironment; the browser worker has had the same control since
-        // GHSA-m4m8-xjp4-5rmm.
-        ToolProcessEnvironment.ApplyTo(startInfo.Environment, passThrough: _environmentPassThrough);
-
+        LocalChildEnvironment.Apply(startInfo, _environmentPolicy);
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
@@ -327,8 +329,18 @@ public sealed class ShellTool : IAgentTool
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
+        try
+        {
+            await BeforeTimeoutArmAsync(process).ConfigureAwait(false);
+        }
+        catch
+        {
+            TryKill(process);
+            throw;
+        }
+
         using var timeoutCts = timeoutSeconds.HasValue
-            ? new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds.Value))
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds.Value), ExecutionTimeProvider)
             : null;
         using var linkedCts = timeoutCts is null
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
@@ -336,7 +348,7 @@ public sealed class ShellTool : IAgentTool
 
         try
         {
-            await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            await WaitForProcessExitAsync(process, linkedCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested != true)
         {
@@ -483,6 +495,7 @@ public sealed class ShellTool : IAgentTool
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            LocalChildEnvironment.Apply(whereStartInfo);
             using var process = Process.Start(whereStartInfo);
             if (process is null)
             {
@@ -535,6 +548,7 @@ public sealed class ShellTool : IAgentTool
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            LocalChildEnvironment.Apply(whereStartInfo);
             using var process = Process.Start(whereStartInfo);
             if (process is null)
             {

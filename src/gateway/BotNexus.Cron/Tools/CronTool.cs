@@ -82,7 +82,7 @@ public sealed class CronTool(
 
     public Tool Definition => new(
         Name,
-        "Manage scheduled cron jobs. Create, list, update, delete, and run cron jobs. A job is either an 'agent-prompt' job (the default - costs a model turn on every fire, requires 'message' or 'templateName') or a 'command' job (runs 'shellCommand' directly and costs no tokens, requires 'shellCommand').",
+        "Manage scheduled cron jobs. Create, list, update, delete, and run cron jobs. The 'run' action accepts execution asynchronously and returns a runId immediately; use 'history' to poll for completion. A job is either an 'agent-prompt' job (the default - costs a model turn on every fire, requires 'message' or 'templateName') or a 'command' job (runs 'shellCommand' directly and costs no tokens, requires 'shellCommand').",
         JsonDocument.Parse("""
             {
               "type": "object",
@@ -507,8 +507,15 @@ public sealed class CronTool(
             ?? throw new KeyNotFoundException($"Cron job '{jobId.Value}' was not found.");
 
         EnsureCanManage(existing);
-        var run = await scheduler.RunNowAsync(jobId, cancellationToken).ConfigureAwait(false);
-        return TextResult(JsonSerializer.Serialize(run, JsonOptions));
+        var run = await scheduler.AcceptRunNowAsync(jobId, cancellationToken).ConfigureAwait(false);
+        return TextResult(JsonSerializer.Serialize(new
+        {
+            runId = run.Id.Value,
+            jobId = run.JobId.Value,
+            status = "accepted",
+            startedAt = run.StartedAt,
+            pollWith = "cron history"
+        }, JsonOptions));
     }
 
     private async Task<AgentToolResult> HistoryAsync(IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken)
@@ -535,7 +542,8 @@ public sealed class CronTool(
             var runs = statuses is null
                 ? await cronStore.GetRunHistoryAsync(jobId, limit, cancellationToken).ConfigureAwait(false)
                 : await cronStore.GetRecentRunsAsync([jobId], statuses, limit, cancellationToken).ConfigureAwait(false);
-            return TextResult(JsonSerializer.Serialize(runs, JsonOptions));
+            var projectedRuns = await scheduler.GetRunHealthAsync(runs, cancellationToken).ConfigureAwait(false);
+            return TextResult(JsonSerializer.Serialize(projectedRuns, JsonOptions));
         }
 
         // The cross-job scope is derived by applying the SAME CanManage rule the per-job path
@@ -548,7 +556,8 @@ public sealed class CronTool(
             .ToList();
 
         var recent = await cronStore.GetRecentRunsAsync(manageable, statuses, limit, cancellationToken).ConfigureAwait(false);
-        return TextResult(JsonSerializer.Serialize(recent, JsonOptions));
+        var projectedRecent = await scheduler.GetRunHealthAsync(recent, cancellationToken).ConfigureAwait(false);
+        return TextResult(JsonSerializer.Serialize(projectedRecent, JsonOptions));
     }
 
     /// <summary>
@@ -650,6 +659,7 @@ public sealed class CronTool(
         CronRunStatus.Error,
         CronRunStatus.TimedOut,
         CronRunStatus.NoToolCalls,
+        CronRunStatus.Incomplete,
         // #3161: a run whose output reached nobody is exactly what the operator asking 'what broke'
         // needs to see - it is the failure shape that used to be invisible entirely.
         CronRunStatus.DeliveryFailed,

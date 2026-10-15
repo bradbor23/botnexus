@@ -27,6 +27,16 @@
       ],
       "description": "Stable GUID identifying this BotNexus world. Generated automatically on first start; do not copy it between installations."
     },
+    "world": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/WorldSettingsConfig"
+        }
+      ]
+    },
     "gateway": {
       "title": "Gateway",
       "description": "Gateway-specific settings.",
@@ -59,6 +69,17 @@
       "description": "Provider configurations keyed by provider name.",
       "additionalProperties": {
         "$ref": "#/definitions/ProviderConfig"
+      }
+    },
+    "extensionRepositories": {
+      "title": "Extension repositories",
+      "type": [
+        "null",
+        "object"
+      ],
+      "description": "Source repositories registered for extension discovery and updates.",
+      "additionalProperties": {
+        "$ref": "#/definitions/ExtensionRepositoryRegistration"
       }
     },
     "channels": {
@@ -126,10 +147,30 @@
     }
   },
   "definitions": {
+    "WorldSettingsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "type": [
+            "null",
+            "object"
+          ],
+          "additionalProperties": {}
+        }
+      }
+    },
     "GatewaySettingsConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "extensions": {
+          "type": [
+            "null",
+            "object"
+          ],
+          "additionalProperties": {}
+        },
         "listenUrl": {
           "title": "Listen URL",
           "type": [
@@ -354,15 +395,15 @@
             "$ref": "#/definitions/ApiKeyConfig"
           }
         },
-        "extensions": {
-          "title": "Extensions",
-          "description": "Dynamic extension loading: whether extensions load, from where, and their world-level defaults.",
+        "extensionLoader": {
+          "title": "Extension loader",
+          "description": "Dynamic extension loading settings.",
           "oneOf": [
             {
               "type": "null"
             },
             {
-              "$ref": "#/definitions/ExtensionsConfig"
+              "$ref": "#/definitions/ExtensionLoaderConfig"
             }
           ]
         },
@@ -576,6 +617,15 @@
           "format": "int32",
           "default": 30
         },
+        "advisoryMaxTurns": {
+          "title": "Advisory max turns",
+          "type": "integer",
+          "description": "Advisory turn threshold for staging guidance. A value of zero disables the advisory.",
+          "format": "int32",
+          "default": 30,
+          "maximum": 2147483647.0,
+          "minimum": 0.0
+        },
         "defaultTimeoutSeconds": {
           "title": "Default timeout (seconds)",
           "type": "integer",
@@ -591,6 +641,15 @@
           "description": "Hard upper bound, in seconds, for an agent-supplied timeoutSeconds on a spawn request. A value of zero or less disables the ceiling.",
           "format": "int32",
           "default": 1800
+        },
+        "advisoryTimeoutSeconds": {
+          "title": "Advisory timeout (seconds)",
+          "type": "integer",
+          "description": "Advisory timeout threshold for staging guidance. A value of zero disables the advisory.",
+          "format": "int32",
+          "default": 1500,
+          "maximum": 2147483647.0,
+          "minimum": 0.0
         },
         "maxDepth": {
           "title": "Max depth",
@@ -1195,7 +1254,7 @@
         }
       }
     },
-    "ExtensionsConfig": {
+    "ExtensionLoaderConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -2247,7 +2306,9 @@
           "title": "Half life days",
           "type": "integer",
           "description": "Age in days at which a memory's relevance score is halved. Lower values forget faster.",
-          "format": "int32"
+          "format": "int32",
+          "maximum": 2147483647.0,
+          "minimum": 1.0
         }
       }
     },
@@ -2527,6 +2588,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "type": {
+          "title": "Type",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Optional built-in provider type for this named provider instance (for example, github-copilot)."
+        },
         "enabled": {
           "title": "Enabled",
           "type": "boolean",
@@ -2548,6 +2617,17 @@
             "string"
           ],
           "description": "Optional base URL override for this provider's API endpoint."
+        },
+        "streamIdleTimeoutMs": {
+          "title": "Stream idle timeout",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Maximum milliseconds between streaming response chunks. Leave empty for 30000; set 0 to disable.",
+          "format": "int32",
+          "maximum": 2147483647.0,
+          "minimum": 0.0
         },
         "defaultModel": {
           "title": "Default model",
@@ -2619,6 +2699,216 @@
           ],
           "description": "PBI6 (#1707): default context-window size (in tokens) for this provider's dynamic models. When null a conservative 128000-token default is used. Sets the standard tier the context-size picker offers for a config-declared model.",
           "format": "int32"
+        },
+        "chat": {
+          "title": "Chat",
+          "description": "Chat-capability settings for this provider (model, allowlist, API and reasoning declarations). Presence of this object declares the provider serves chat.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/ProviderChatConfig"
+            }
+          ]
+        },
+        "embeddings": {
+          "title": "Embeddings",
+          "description": "Embeddings-capability settings for this provider (embedding model, API and vector dimensions). Presence of this object declares the provider serves embeddings.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/ProviderEmbeddingsConfig"
+            }
+          ]
+        }
+      }
+    },
+    "ProviderChatConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "title": "API",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "API identifier used when registering this provider's chat models (for example 'openai-completions'). Defaults to 'openai-completions' when omitted."
+        },
+        "defaultModel": {
+          "title": "Default model",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Default chat model identifier used for this provider when an agent does not specify one."
+        },
+        "models": {
+          "title": "Models",
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Allowed chat model IDs for this provider. Null means all models, empty means none.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input": {
+          "title": "Input",
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Explicit input modalities (for example [\"text\",\"image\"]) for this provider's chat models. When null or empty the modalities are inferred from each model's family.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reasoning": {
+          "title": "Reasoning",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Explicit reasoning/thinking capability for this provider's chat models. When null the capability is inferred from each model's family."
+        },
+        "supportsExtraHighThinking": {
+          "title": "Supports extra high thinking",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Explicit extra-high (ExtraHigh / Max) thinking-tier capability for this provider's chat models. When null the value is inferred from the model family."
+        },
+        "supportsExtendedContextWindow": {
+          "title": "Supports extended context window",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Explicit extended (1M) context-window capability for this provider's chat models. When null the value is inferred from the model family."
+        },
+        "contextWindow": {
+          "title": "Context window",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Default context-window size (in tokens) for this provider's chat models. When null a conservative 128000-token default is used.",
+          "format": "int32"
+        }
+      }
+    },
+    "ProviderEmbeddingsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "title": "API",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "API identifier used for this provider's embeddings endpoint (for example 'openai-embeddings')."
+        },
+        "model": {
+          "title": "Model",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Embedding model identifier served by this provider (for example 'nomic-embed-text'). Required when an embeddings capability is configured."
+        },
+        "dimensions": {
+          "title": "Dimensions",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Vector dimensionality produced by the embedding model (for example 768). Must be greater than zero when specified.",
+          "format": "int32"
+        }
+      }
+    },
+    "ExtensionRepositoryRegistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repositoryUrl": {
+          "title": "Repository URL",
+          "type": "string",
+          "description": "Absolute HTTP, HTTPS, or SSH URL of the repository that supplies the extension."
+        },
+        "requestedRef": {
+          "title": "Requested ref",
+          "type": "string",
+          "description": "Branch, tag, or commit to resolve when this repository is reconciled."
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean",
+          "description": "Whether this repository is eligible for later extension reconciliation.",
+          "default": true
+        },
+        "updatesEnabled": {
+          "title": "Updates enabled",
+          "type": "boolean",
+          "description": "Whether later reconciliation may refresh this repository to its requested ref.",
+          "default": true
+        },
+        "reconciliationStatus": {
+          "title": "Reconciliation status",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Latest repository reconciliation outcome recorded by the CLI."
+        },
+        "resolvedCommit": {
+          "title": "Resolved commit",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Exact Git commit selected by the most recent successful reconciliation."
+        },
+        "clonePath": {
+          "title": "Clone path",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Managed local path where BotNexus materializes this repository."
+        },
+        "lastAttemptUtc": {
+          "title": "Last attempt",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "UTC timestamp of the most recent repository reconciliation attempt.",
+          "format": "date-time"
+        },
+        "lastSuccessUtc": {
+          "title": "Last success",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "UTC timestamp of the most recent successful repository reconciliation.",
+          "format": "date-time"
+        },
+        "latestFailure": {
+          "title": "Latest failure",
+          "type": [
+            "null",
+            "string"
+          ],
+          "description": "Named failure and bounded diagnostic from the most recent failed reconciliation."
         }
       }
     },

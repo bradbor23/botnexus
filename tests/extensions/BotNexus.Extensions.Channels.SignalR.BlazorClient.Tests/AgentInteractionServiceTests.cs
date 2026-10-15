@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 
 namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Tests;
@@ -21,6 +21,21 @@ public sealed class AgentInteractionServiceTests
     }
 
     [Fact]
+    public async Task RefreshAgentsAsync_copies_summary_on_add_and_update()
+    {
+        _restClient.GetAgentsAsync(Arg.Any<CancellationToken>()).Returns(
+        [
+            new AgentSummary("agent-1", "Agent 1", Summary: "Updated summary"),
+            new AgentSummary("agent-2", "Agent 2", Summary: "Added summary")
+        ]);
+
+        await _service.RefreshAgentsAsync();
+
+        _store.GetAgent("agent-1")?.Summary.ShouldBe("Updated summary");
+        _store.GetAgent("agent-2")?.Summary.ShouldBe("Added summary");
+    }
+
+    [Fact]
     public async Task CreateConversationAsync_adds_conversation_and_selects_it()
     {
         _restClient.CreateConversationAsync(Arg.Any<CreateConversationRequestDto>(), Arg.Any<CancellationToken>())
@@ -39,7 +54,7 @@ public sealed class AgentInteractionServiceTests
 
         var agent = _store.GetAgent("agent-1")!;
         Assert.Equal("conv-1", conversationId);
-        Assert.Equal("conv-1", agent.ActiveConversationId);
+        Assert.Equal("conv-1", (_store as IDisplayedConversation)?.DisplayedConversationIdFor(agent.AgentId));
         Assert.True(agent.Conversations.ContainsKey("conv-1"));
     }
 
@@ -62,14 +77,14 @@ public sealed class AgentInteractionServiceTests
 
         await _service.SelectConversationAsync("agent-1", "conv-2");
 
-        Assert.Equal("conv-2", agent.ActiveConversationId);
+        Assert.Equal("conv-2", (_store as IDisplayedConversation)?.DisplayedConversationIdFor(agent.AgentId));
     }
 
     [Fact]
     public void ClearLocalMessages_clears_active_conversation_and_adds_system_message()
     {
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState
         {
             ConversationId = "conv-1",
@@ -185,6 +200,55 @@ public sealed class AgentInteractionServiceTests
         conv.HistoryLoadFailed.ShouldBeTrue();
         conv.IsLoadingHistory.ShouldBeFalse();
         conv.HistoryLoaded.ShouldBeTrue(); // marked loaded so the view stops showing the spinner
+    }
+
+    [Fact]
+    public async Task SelectConversation_when_history_404s_removes_the_conversation_without_flagging_a_load_failure()
+    {
+        // A 404 means the conversation is gone server-side and can never be opened, so it is
+        // dropped from the roster. That is not a transient load failure: no error empty state.
+        var agent = _store.GetAgent("agent-1")!;
+        agent.Conversations["conv-1"] = new ConversationState
+        {
+            ConversationId = "conv-1",
+            Title = "Gone",
+            HistoryLoaded = false
+        };
+
+        _restClient.GetHistoryAsync("conv-1", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<ConversationHistoryResponseDto?>(_ =>
+                throw new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound));
+
+        await _service.SelectConversationAsync("agent-1", "conv-1");
+
+        agent.Conversations.ContainsKey("conv-1").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task SelectConversation_when_a_cron_projection_history_404s_removes_the_projection()
+    {
+        // The fork's stale-cron guarantee, moved to where it now happens: a locally-synthesised
+        // cron projection whose backing session is gone must not stay in the sidebar as a row
+        // that can never be opened.
+        const string sessionId = "cron:20260509002033:6f2f84a4f1634ff492a4fec212872c54";
+        var conversationId = $"cron-session:{sessionId}";
+        var agent = _store.GetAgent("agent-1")!;
+        agent.Conversations[conversationId] = new ConversationState
+        {
+            ConversationId = conversationId,
+            Title = "Scheduled run",
+            IsLocallySynthesised = true,
+            ActiveSessionId = sessionId,
+            HistoryLoaded = false
+        };
+
+        _restClient.GetSessionHistoryAsync(sessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<SessionHistoryResponseDto?>(_ =>
+                throw new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound));
+
+        await _service.SelectConversationAsync("agent-1", conversationId);
+
+        agent.Conversations.ContainsKey(conversationId).ShouldBeFalse();
     }
 
     [Fact]
@@ -326,7 +390,7 @@ public sealed class AgentInteractionServiceTests
             ActiveSessionId = "cron:job-1:run",
             HistoryLoaded = true
         };
-        _store.SetActiveConversation("agent-1", "cron-session:cron:job-1:run");
+        _store.SelectView("agent-1", "cron-session:cron:job-1:run", SelectionSource.RouteNavigation);
 
         _restClient.ArchiveConversationAsync("cron-session:cron:job-1:run", Arg.Any<CancellationToken>())
             .Returns(true);
@@ -336,7 +400,11 @@ public sealed class AgentInteractionServiceTests
         // Must route through conversation archive (not session deletion) to preserve session records
         await _restClient.Received(1).ArchiveConversationAsync("cron-session:cron:job-1:run", Arg.Any<CancellationToken>());
         agent.Conversations.ContainsKey("cron-session:cron:job-1:run").ShouldBeFalse();
-        agent.ActiveConversationId.ShouldBe("conv-1");
+        (_store as IDisplayedConversation)?.DisplayedConversationIdFor(agent.AgentId).ShouldBe(
+            "cron-session:cron:job-1:run",
+            customMessage: "The route owner retains identity until it chooses a replacement.");
+        _store.PendingSelectionInvalid.ShouldBeTrue(
+            "Archiving the routed conversation must invalidate selection without ambiently choosing a fallback.");
     }
 
     [Fact]
@@ -360,7 +428,8 @@ public sealed class AgentInteractionServiceTests
         {
             SubAgentId = "sub-1",
             Name = "Scout",
-            Task = "Inspect repository"
+            Task = "Inspect repository",
+            Status = "Failed"
         });
 
         await _restClient.Received(1).GetSessionHistoryAsync("sub-1", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
@@ -369,7 +438,8 @@ public sealed class AgentInteractionServiceTests
         var subAgent = _store.GetAgent("sub-1");
         Assert.NotNull(subAgent);
         Assert.Equal("agent-subagent", subAgent.SessionType);
-        Assert.Equal("subagent-session:sub-1", subAgent.ActiveConversationId);
+        Assert.Equal(SubAgentObserverStatus.Failed, subAgent.ObserverStatus);
+        Assert.Equal("subagent-session:sub-1", (_store as IDisplayedConversation)?.DisplayedConversationIdFor(subAgent.AgentId));
 
         var conversation = subAgent.Conversations["subagent-session:sub-1"];
         // #2305: the locally-synthesised observer row carries the immutable typed origin instead of
@@ -398,7 +468,7 @@ public sealed class AgentInteractionServiceTests
             ActiveSessionId = sessionId,
             HistoryLoaded = true
         };
-        _store.SetActiveConversation("agent-1", cronKey);
+        _store.SelectView("agent-1", cronKey, SelectionSource.RouteNavigation);
 
         _restClient.ArchiveConversationAsync(cronKey, Arg.Any<CancellationToken>())
             .Returns(true);
@@ -474,7 +544,7 @@ public sealed class AgentInteractionServiceTests
             IsDefault = false,
             HistoryLoaded = true
         };
-        _store.SetActiveConversation("agent-1", "conv-normal");
+        _store.SelectView("agent-1", "conv-normal", SelectionSource.RouteNavigation);
 
         _restClient.ArchiveConversationAsync("conv-normal", Arg.Any<CancellationToken>())
             .Returns(true);
@@ -564,12 +634,12 @@ public sealed class AgentInteractionServiceTests
     {
         var agent = _store.GetAgent("agent-1")!;
         // No SessionId, no ActiveConversationSessionId
-        Assert.Null(agent.ActiveConversationSessionId);
+        Assert.Null(agent.SessionId);
 
         await _service.SteerAsync("agent-1", "conv-1", "redirect me");
 
         // No local message should be appended because SteerAsync bails early
-        Assert.Null(agent.ActiveConversationId);
+        Assert.Null((_store as IDisplayedConversation)?.DisplayedConversationIdFor(agent.AgentId));
         Assert.Empty(agent.Conversations);
     }
 
@@ -578,7 +648,7 @@ public sealed class AgentInteractionServiceTests
     {
         var agent = _store.GetAgent("agent-1")!;
         agent.SessionId = "sess-1";
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState
         {
             ConversationId = "conv-1",
@@ -601,7 +671,7 @@ public sealed class AgentInteractionServiceTests
     {
         var agent = _store.GetAgent("agent-1")!;
         agent.SessionId = "sess-1";
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState
         {
             ConversationId = "conv-1",
@@ -705,7 +775,7 @@ public sealed class AgentInteractionServiceTests
     public async Task LoadHistory_not_called_when_streaming_active()
     {
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-active";
+        _store.SelectView(agent.AgentId, "conv-active" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-active"] = new ConversationState
         {
             ConversationId = "conv-active",
@@ -882,7 +952,7 @@ public sealed class AgentInteractionServiceTests
         conv.CanvasHtml.ShouldBeNull();
         conv.TodoJson.ShouldBeNull();
         _store.GetPendingAskUser("conv-fail").ShouldBeNull();
-        agent.ActiveConversationId.ShouldBe("conv-fail");
+        (_store as IDisplayedConversation)?.DisplayedConversationIdFor(agent.AgentId).ShouldBe("conv-fail");
     }
 
     [Fact]
@@ -946,7 +1016,7 @@ public sealed class AgentInteractionServiceTests
         // user cannot reply. Stop must always force-clear the local run bracket so the input
         // recovers without a page reload -- even though the (disconnected) hub Abort throws.
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.IsStreaming = true;
         agent.Conversations["conv-1"] = new ConversationState
         {
@@ -986,7 +1056,7 @@ public sealed class AgentInteractionServiceTests
         // ever inject the queued follow-up, so a pending indicator that cannot be verified must
         // not persist.
         var agent = _store.GetAgent("agent-1")!;
-        agent.ActiveConversationId = "conv-1";
+        _store.SelectView(agent.AgentId, "conv-1" ?? string.Empty, SelectionSource.RouteNavigation);
         agent.Conversations["conv-1"] = new ConversationState
         {
             ConversationId = "conv-1",
@@ -1001,5 +1071,30 @@ public sealed class AgentInteractionServiceTests
 
         Assert.Empty(_store.GetSteeringQueue("conv-1"));
     }
+
+    [Fact]
+    public async Task DeliverMessageAsync_AttachmentSnapshot_RemainsOnLocalEcho()
+    {
+        const string agentId = "agent-attachment-echo";
+        const string conversationId = "conversation-attachment-echo";
+        _store.UpsertAgent(new AgentState { AgentId = agentId, DisplayName = "Agent", IsConnected = true });
+        _store.SeedConversations(agentId,
+        [
+            new ConversationSummaryDto(conversationId, agentId, "Conversation", false, "Active", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)
+        ]);
+        var attachment = new DraftAttachment("photo.png", "image/png", "AQID", 3);
+
+        await _service.DeliverMessageAsync(agentId, conversationId, "caption", attachments: [attachment]);
+
+        var messages = _store.GetAgent(agentId)?.Conversations[conversationId].Messages;
+        messages.ShouldNotBeNull();
+        var echo = messages.Where(message => message.Role == "User").ShouldHaveSingleItem();
+        var snapshot = echo.Attachments.ShouldHaveSingleItem();
+        snapshot.FileName.ShouldBe("photo.png");
+        snapshot.MimeType.ShouldBe("image/png");
+        snapshot.Size.ShouldBe(3);
+        snapshot.DataUrl.ShouldBe("data:image/png;base64,AQID");
+    }
+
 }
 

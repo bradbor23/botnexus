@@ -290,6 +290,124 @@ public sealed class PlatformConfigService
         }
     }
 
+    /// <summary>Lists file-backed secret metadata. Secret values are never returned.</summary>
+    public async Task<IReadOnlyList<SecretListItem>?> ListSecretsAsync()
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<List<SecretListItem>>("/api/secrets", s_jsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Creates or overwrites a file-backed secret with a complete new value.</summary>
+    public async Task<(bool Success, string? Error)> SetSecretAsync(string key, string value)
+    {
+        try
+        {
+            var response = await _http.PutAsJsonAsync(
+                $"/api/secrets/{Uri.EscapeDataString(key)}",
+                new SecretWriteRequest(value),
+                s_jsonOptions);
+            if (response.IsSuccessStatusCode)
+                return (true, null);
+
+            return (false, await ReadApiErrorAsync(response));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    /// <summary>Deletes a file-backed secret.</summary>
+    public async Task<(bool Success, string? Error)> DeleteSecretAsync(string key)
+    {
+        try
+        {
+            var response = await _http.DeleteAsync($"/api/secrets/{Uri.EscapeDataString(key)}");
+            if (response.IsSuccessStatusCode)
+                return (true, null);
+
+            return (false, await ReadApiErrorAsync(response));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private static async Task<string> ReadApiErrorAsync(HttpResponseMessage response)
+    {
+        try
+        {
+            var payload = await response.Content.ReadFromJsonAsync<ApiError>(s_jsonOptions);
+            if (!string.IsNullOrWhiteSpace(payload?.Error))
+                return payload.Error;
+        }
+        catch
+        {
+            // Fall through to the bounded status message for non-JSON proxy responses.
+        }
+
+        return $"HTTP {(int)response.StatusCode}";
+    }
+
+    /// <summary>Lists extension repository registrations and their currently available reconciliation status.</summary>
+    public async Task<IReadOnlyList<ExtensionRepositoryItem>?> ListExtensionRepositoriesAsync()
+    {
+        try { return await _http.GetFromJsonAsync<List<ExtensionRepositoryItem>>("/api/extension-repositories", s_jsonOptions); }
+        catch { return null; }
+    }
+
+    /// <summary>Adds an extension repository registration.</summary>
+    public async Task<(bool Success, string? Error)> AddExtensionRepositoryAsync(ExtensionRepositoryCreate request)
+        => await SendRepositoryMutationAsync(HttpMethod.Post, "/api/extension-repositories", request);
+
+    /// <summary>Updates an extension repository registration.</summary>
+    public async Task<(bool Success, string? Error)> UpdateExtensionRepositoryAsync(string id, ExtensionRepositoryUpdate request)
+        => await SendRepositoryMutationAsync(HttpMethod.Put, $"/api/extension-repositories/{Uri.EscapeDataString(id)}", request);
+
+    /// <summary>Enables or disables an extension repository registration.</summary>
+    public async Task<(bool Success, string? Error)> SetExtensionRepositoryEnabledAsync(string id, bool enabled)
+        => await SendRepositoryMutationAsync(HttpMethod.Put, $"/api/extension-repositories/{Uri.EscapeDataString(id)}/enabled", new { enabled });
+
+    /// <summary>Requests immediate reconciliation for one extension repository.</summary>
+    public async Task<(bool Success, string? Error)> SyncExtensionRepositoryAsync(string id)
+        => await SendRepositoryMutationAsync(HttpMethod.Post, $"/api/extension-repositories/{Uri.EscapeDataString(id)}/sync", new { });
+
+    /// <summary>Removes extension repository registration metadata.</summary>
+    public async Task<(bool Success, string? Error)> RemoveExtensionRepositoryAsync(string id)
+    {
+        try
+        {
+            var response = await _http.DeleteAsync($"/api/extension-repositories/{Uri.EscapeDataString(id)}");
+            return response.IsSuccessStatusCode ? (true, null) : (false, await ReadApiErrorAsync(response));
+        }
+        catch (Exception ex) { return (false, ex.Message); }
+    }
+
+    private async Task<(bool Success, string? Error)> SendRepositoryMutationAsync(HttpMethod method, string uri, object body)
+    {
+        try
+        {
+            using var message = new HttpRequestMessage(method, uri) { Content = JsonContent.Create(body, options: s_jsonOptions) };
+            using var response = await _http.SendAsync(message);
+            return response.IsSuccessStatusCode ? (true, null) : (false, await ReadApiErrorAsync(response));
+        }
+        catch (Exception ex) { return (false, ex.Message); }
+    }
+
+    /// <summary>Extension repository registration plus truthful unavailable reconciliation fields.</summary>
+    public sealed record ExtensionRepositoryItem(string Id, string RepositoryUrl, string RequestedRef, bool Enabled, bool UpdatesEnabled, string ReconciliationStatus, string? ResolvedCommit, string? ClonePath, DateTimeOffset? LastAttemptUtc, DateTimeOffset? LastSuccessUtc, string? DeployedVersion, string? LatestFailure, bool SyncAvailable);
+    /// <summary>Payload for registering an extension repository.</summary>
+    public sealed record ExtensionRepositoryCreate(string Id, string RepositoryUrl, string RequestedRef, bool Enabled, bool UpdatesEnabled);
+    /// <summary>Payload for editing an extension repository.</summary>
+    public sealed record ExtensionRepositoryUpdate(string RepositoryUrl, string RequestedRef, bool UpdatesEnabled);
+
     /// <summary>Validate the config file.</summary>
     public async Task<ConfigValidationResult?> ValidateAsync()
     {
@@ -302,6 +420,12 @@ public sealed class PlatformConfigService
             return null;
         }
     }
+
+    /// <summary>Metadata for a file-backed secret. No member contains content-derived data.</summary>
+    public sealed record SecretListItem(string Key, DateTimeOffset CreatedUtc, DateTimeOffset ModifiedUtc, long SizeBytes);
+
+    private sealed record SecretWriteRequest(string Value);
+    private sealed record ApiError(string Error);
 
     /// <summary>A raw config document plus the revision it was read at (#2059).</summary>
     /// <param name="Revision">Compare-and-swap token to quote on the next save.</param>

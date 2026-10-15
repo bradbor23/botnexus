@@ -1550,14 +1550,20 @@ public sealed class ActivityDashboardProjectionTests
         string name = "Daily log analysis",
         string? lastRunStatus = "ok",
         DateTimeOffset? lastRunAt = null,
-        DateTimeOffset? nextRunAt = null) =>
+        DateTimeOffset? nextRunAt = null,
+        bool enabled = true,
+        DateTimeOffset? expiresAt = null,
+        string? lastRunError = null) =>
         new()
         {
             Id = id,
             Name = name,
             LastRunStatus = lastRunStatus!,
             LastRunAt = lastRunAt,
-            NextRunAt = nextRunAt
+            NextRunAt = nextRunAt,
+            Enabled = enabled,
+            ExpiresAt = expiresAt,
+            LastRunError = lastRunError
         };
 
     private static ActivityRow ProjectOneWithCron(
@@ -1623,6 +1629,96 @@ public sealed class ActivityDashboardProjectionTests
 
         Assert.Null(map["j1"].Name);
         Assert.Null(map["j1"].LastRunStatus);
+    }
+
+    [Fact]
+    public void CronHealthById_carries_error_and_normalizes_blank_to_null()
+    {
+        var map = ActivityDashboardProjection.CronHealthById(
+            [Job("failed", lastRunError: "  request timed out  "), Job("blank", lastRunError: "  ")]);
+
+        Assert.Equal("request timed out", map["failed"].LastRunError);
+        Assert.Null(map["blank"].LastRunError);
+    }
+
+    [Fact]
+    public void CronHealthErrorSummary_returns_only_a_bounded_first_line_for_current_failures()
+    {
+        var error = $"  {new string('x', ActivityDashboardProjection.CronErrorDisplayLength + 20)}\r\nstack trace";
+        var failed = ProjectOneWithCron(
+            Conv("c1", source: "Cron", sourceId: "failed"),
+            [Job("failed", lastRunStatus: "failed", lastRunError: error)]);
+        var ok = ProjectOneWithCron(
+            Conv("c2", source: "Cron", sourceId: "ok"),
+            [Job("ok", lastRunStatus: "ok", lastRunError: "stale failure")]);
+        var unknown = ProjectOneWithCron(
+            Conv("c3", source: "Cron", sourceId: "unknown"),
+            [Job("unknown", lastRunStatus: null, lastRunError: "unclassified")]);
+
+        var summary = ActivityDashboardProjection.CronHealthErrorSummary(failed);
+
+        Assert.NotNull(summary);
+        Assert.Equal(ActivityDashboardProjection.CronErrorDisplayLength + 1, summary!.Length);
+        Assert.EndsWith("\u2026", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain('\r', summary);
+        Assert.DoesNotContain('\n', summary);
+        Assert.Null(ActivityDashboardProjection.CronHealthErrorSummary(ok));
+        Assert.Null(ActivityDashboardProjection.CronHealthErrorSummary(unknown));
+    }
+
+    [Fact]
+    public void CronHealthErrorSummary_returns_null_when_failure_has_no_error()
+    {
+        var row = ProjectOneWithCron(
+            Conv("c1", source: "Cron", sourceId: "j1"),
+            [Job("j1", lastRunStatus: "failed", lastRunError: "  ")]);
+
+        Assert.Null(ActivityDashboardProjection.CronHealthErrorSummary(row));
+    }
+
+    [Fact]
+    public void Cron_job_expiry_round_trips_and_an_omitted_expiry_remains_null()
+    {
+        var withExpiry = System.Text.Json.JsonSerializer.Deserialize<CronJobDto>(
+            """{"id":"j1","expiresAt":"2026-07-10T12:00:00Z"}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        var withoutExpiry = System.Text.Json.JsonSerializer.Deserialize<CronJobDto>(
+            """{"id":"j2"}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        Assert.NotNull(withExpiry);
+        Assert.Equal(Now, withExpiry.ExpiresAt);
+        Assert.NotNull(withoutExpiry);
+        Assert.Null(withoutExpiry.ExpiresAt);
+    }
+
+    [Fact]
+    public void CronHealthById_carries_enabled_and_expiry()
+    {
+        var expiry = Now.AddHours(1);
+        var health = ActivityDashboardProjection.CronHealthById(
+            [Job("j1", enabled: false, expiresAt: expiry)])["j1"];
+
+        Assert.False(health.Enabled);
+        Assert.Equal(expiry, health.ExpiresAt);
+    }
+
+    [Theory]
+    [InlineData(true, -1, null)]
+    [InlineData(true, 1, null)]
+    [InlineData(true, 0, "expired")]
+    [InlineData(true, -2, "expired")]
+    [InlineData(false, 1, "disabled")]
+    [InlineData(false, -1, "disabled")]
+    public void CronLiveness_classifies_enabled_disabled_and_expired_jobs(
+        bool enabled,
+        int expiryHoursFromNow,
+        string? expected)
+    {
+        var health = ActivityDashboardProjection.CronHealthById(
+            [Job("j1", enabled: enabled, expiresAt: expiryHoursFromNow == -1 ? null : Now.AddHours(expiryHoursFromNow))])["j1"];
+
+        Assert.Equal(expected, ActivityDashboardProjection.CronLiveness(health, Now));
     }
 
     /// <summary>
@@ -1968,7 +2064,7 @@ public sealed class ActivityDashboardProjectionTests
     /// <c>List</c> and compares by reference.
     /// </summary>
     [Fact]
-    public void An_omitted_or_empty_session_map_leaves_every_row_unchanged()
+    public void An_omitted_session_map_leaves_every_row_unchanged()
     {
         var conv = Conv("c1", activeSessionId: "s-1");
         var filter = new ActivityDashboardFilter();
@@ -1976,14 +2072,23 @@ public sealed class ActivityDashboardProjectionTests
         var baseline = ActivityDashboardProjection.Project([conv], filter, Now).Single();
         var omitted = ActivityDashboardProjection.Project(
             [conv], filter, Now, null, null).Single();
-        var emptyMap = ActivityDashboardProjection.Project(
-            [conv], filter, Now, null, ActivityDashboardProjection.SessionStatusById(null)).Single();
 
         Assert.Equal(ActivitySessionLiveness.Unverifiable, baseline.SessionLiveness);
         Assert.True(baseline.IsLive);
-
         Assert.Equal(baseline with { InvolvedAgents = [] }, omitted with { InvolvedAgents = [] });
-        Assert.Equal(baseline with { InvolvedAgents = [] }, emptyMap with { InvolvedAgents = [] });
+    }
+
+    [Fact]
+    public void An_empty_successful_session_map_is_authoritative()
+    {
+        var row = Assert.Single(ActivityDashboardProjection.Project(
+            [Conv("c1", activeSessionId: "s-1")],
+            new ActivityDashboardFilter(),
+            Now,
+            sessionStatus: ActivityDashboardProjection.SessionStatusById([])));
+
+        Assert.Equal(ActivitySessionLiveness.Absent, row.SessionLiveness);
+        Assert.False(row.IsLive);
     }
 
     /// <summary>

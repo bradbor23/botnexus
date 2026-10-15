@@ -27,10 +27,12 @@ public sealed class ExecTool : IAgentTool
     /// </summary>
     internal static int MaxOutputBytesForTest => MaxOutputBytes;
 
+    private readonly LocalChildEnvironmentPolicy _environmentPolicy;
     private readonly string? _workingDirectory;
     private readonly IFileSystem _fileSystem;
-    private readonly IReadOnlyList<string>? _environmentPassThrough;
     private readonly string _processOwner;
+    private readonly BackgroundProcessRegistry _processRegistry;
+    private readonly Func<BackgroundProcess, Task>? _beforeBackgroundRegister;
 
     /// <summary>
     /// Creates the tool bound to an agent workspace. <paramref name="workingDirectory"/> deliberately
@@ -43,29 +45,26 @@ public sealed class ExecTool : IAgentTool
     /// </summary>
     /// <param name="workingDirectory">The agent workspace, or null for process-relative resolution.</param>
     /// <param name="fileSystem">File system used for Windows .cmd/.bat resolution.</param>
-    /// <param name="environmentPassThrough">
-    /// Extra environment variable names the operator has opted to expose to child processes, on
-    /// top of <see cref="ToolProcessEnvironment.AllowedVariables"/>. Null or empty keeps the
-    /// default, which carries no authentication material.
-    /// </param>
-    public ExecTool(
-        string? workingDirectory,
-        IFileSystem? fileSystem = null,
-        IReadOnlyList<string>? environmentPassThrough = null)
-        : this(workingDirectory, fileSystem, string.Empty, environmentPassThrough) { }
+    /// <param name="environmentPolicy">Trusted ambient-name policy; null uses secure defaults.</param>
+    public ExecTool(string? workingDirectory, IFileSystem? fileSystem = null, LocalChildEnvironmentPolicy? environmentPolicy = null)
+        : this(workingDirectory, fileSystem, string.Empty, environmentPolicy: environmentPolicy) { }
 
     internal ExecTool(
         string? workingDirectory,
         IFileSystem? fileSystem,
         string processOwner,
-        IReadOnlyList<string>? environmentPassThrough = null)
+        BackgroundProcessRegistry? processRegistry = null,
+        Func<BackgroundProcess, Task>? beforeBackgroundRegister = null,
+        LocalChildEnvironmentPolicy? environmentPolicy = null)
     {
+        _environmentPolicy = environmentPolicy ?? LocalChildEnvironmentPolicy.Default;
         _processOwner = processOwner;
+        _processRegistry = processRegistry ?? BackgroundProcessRegistry.Instance;
+        _beforeBackgroundRegister = beforeBackgroundRegister;
         _workingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
             ? null
             : Path.GetFullPath(workingDirectory);
         _fileSystem = fileSystem ?? new FileSystem();
-        _environmentPassThrough = environmentPassThrough is { Count: > 0 } ? environmentPassThrough : null;
     }
 
     /// <inheritdoc />
@@ -98,7 +97,8 @@ public sealed class ExecTool : IAgentTool
         "On Windows PowerShell: foreach/if/switch/while are STATEMENTS and cannot be piped from directly - wrap them in a " +
         "subexpression, '$(foreach ($x in $xs) { ... }) | <cmd>', not 'foreach ($x in $xs) { ... } | <cmd>' which fails with " +
         "'An empty pipe element is not allowed'; wrap a variable followed by ':' as ${var} inside double-quoted strings (or use single quotes); " +
-        "no backtick line-continuations; for multi-line/complex scripts write a tmp/*.ps1 file and run it. Inline Python prints " +
+        "$PID is a read-only automatic variable, so use a name such as $processId for your own value; no backtick line-continuations; " +
+        "for multi-line/complex scripts write a tmp/*.ps1 file and run it. Inline Python prints " +
         "cp1252 by default (UnicodeEncodeError on emoji/em-dash/box glyphs) -- set $env:PYTHONUTF8=1 or write a tmp/*.py file " +
         "and run 'python -X utf8 file.py'. Never pipe a here-string into an interpreter; write a temp file and execute it.",
         JsonDocument.Parse("""
@@ -292,21 +292,8 @@ public sealed class ExecTool : IAgentTool
         // looping over Args by hand here is precisely how a raw cmd payload gets re-escaped.
         launch.ApplyArgumentsTo(startInfo);
 
-
-        // Replace the inherited block with an allow-listed one BEFORE any caller override is
-        // merged on top. .NET seeds startInfo.Environment from the gateway process, which carries
-        // provider keys and every `env:` credential an operator has exported for their
-        // CredentialRefs; merging onto that block would hand the child the whole keyring plus the
-        // overrides. See ToolProcessEnvironment (GHSA-m4m8-xjp4-5rmm for the same control on the
-        // browser worker).
-        ToolProcessEnvironment.ApplyTo(startInfo.Environment, passThrough: _environmentPassThrough);
-
-        if (env is not null)
-        {
-            // Route through the shared merge seam so an override replaces - rather than
-            // duplicates - an inherited variable whose key differs only by case on Windows (#2892).
-            ProcessEnvironment.Merge(startInfo.Environment, env);
-        }
+        // Secure default for both foreground and background; explicit values are merged last.
+        LocalChildEnvironment.Apply(startInfo, _environmentPolicy, env);
 
         // Re-check cancellation immediately before Start(). Everything above - command resolution,
         // PowerShell preflight, working-directory resolution and environment merging - can take arbitrary
@@ -359,7 +346,9 @@ public sealed class ExecTool : IAgentTool
                 if (input is not null)
                     await managed.WriteInitialInputAsync(input, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                BackgroundProcessRegistry.Instance.Register(_processOwner, managed);
+                if (_beforeBackgroundRegister is not null)
+                    await _beforeBackgroundRegister(managed).ConfigureAwait(false);
+                _processRegistry.Register(_processOwner, managed);
                 transferred = true;
             }
             catch
@@ -367,7 +356,7 @@ public sealed class ExecTool : IAgentTool
                 managed.Kill();
                 if (managed.KillUnconfirmed)
                 {
-                    BackgroundProcessRegistry.Instance.Register(_processOwner, managed);
+                    _processRegistry.Register(_processOwner, managed);
                     transferred = true;
                 }
                 else managed.Dispose();

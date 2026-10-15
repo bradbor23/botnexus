@@ -53,6 +53,7 @@ public static class StreamingSessionHelper
             ? k
             : null;
         var streamedContent = new StringBuilder();
+        var runAssistantContent = new StringBuilder();
         var streamedHistory = new List<SessionEntry>();
         var allHistoryEntries = new List<SessionEntry>();
         var hadThinkingContent = false;
@@ -80,6 +81,10 @@ public static class StreamingSessionHelper
         // hand back the SAME record shape produced by the SAME policy.
         var toolInvocationBuilders = new List<ToolInvocationBuilder>();
         var toolInvocationIndex = new Dictionary<string, ToolInvocationBuilder>(StringComparer.Ordinal);
+        RunCompletionSignal? runCompletion = null;
+        AgentResponseUsage? runUsage = null;
+        var turnCount = 0;
+        AgentRunId? agentRunId = null;
 
         // Apply stall watchdog if configured — wraps the stream with inactivity timeout.
         var effectiveStream = options.StallWatchdog is not null
@@ -88,6 +93,7 @@ public static class StreamingSessionHelper
 
         await foreach (var evt in effectiveStream.WithCancellation(cancellationToken))
         {
+            agentRunId = evt.AgentRunId ?? agentRunId;
             switch (evt.Type)
             {
                 case AgentStreamEventType.ContentDelta when evt.ContentDelta is not null:
@@ -103,6 +109,8 @@ public static class StreamingSessionHelper
                     break;
                 case AgentStreamEventType.MessageEnd:
                     hadMessageEnd = true;
+                    turnCount++;
+                    runUsage = AddUsage(runUsage, evt.Usage);
                     // #3336: the provider's own final text for this message wins over the text we
                     // assembled from deltas, mirroring StreamAssemblyConformance.Reconcile at the
                     // parser seam. The deltas were already emitted (and already rendered live), so
@@ -134,20 +142,24 @@ public static class StreamingSessionHelper
                     // behaviour is gated on it.
                     ProviderTokenUsageRecorder.Record(session, evt.Usage);
                     break;
+                case AgentStreamEventType.RunEnded:
+                    runCompletion = evt.Completion;
+                    break;
                 case AgentStreamEventType.ToolStart when evt.ToolCallId is not null || evt.ToolName is not null:
                     var startEntry = auditSink.ProjectStart(
                         evt.ToolCallId,
                         evt.ToolName,
                         evt.ToolArgs is { Count: > 0 }
                             ? System.Text.Json.JsonSerializer.Serialize(evt.ToolArgs)
-                            : null);
+                            : null) with { AgentRunId = evt.AgentRunId, PersistenceKey = DefaultToolAuditSink.GetToolStartPersistenceKey(evt.ToolCallId, evt.AgentRunId) };
+                    // The write-ahead can append directly through ISessionStore, so this aggregate
+                    // may be stale. The stable persistence key on ProjectStart is the authoritative
+                    // idempotency contract; this snapshot check is only a cheap in-memory guard.
                     var alreadyPersisted = evt.ToolCallId is not null
                         && session.GetHistorySnapshot().Any(entry =>
-                            entry.ToolCallId == evt.ToolCallId && entry.IsToolStartRow());
+                            entry.ToolCallId == evt.ToolCallId && entry.AgentRunId == evt.AgentRunId && entry.IsToolStartRow());
                     if (!alreadyPersisted)
-                    {
                         streamedHistory.Add(startEntry);
-                    }
                     allHistoryEntries.Add(startEntry);
                     if (evt.ToolCallId is not null)
                     {
@@ -207,7 +219,7 @@ public static class StreamingSessionHelper
                         evt.ToolResult,
                         evt.ToolIsError == true,
                         options.MaxPersistedToolResultBytes,
-                        resultArgs));
+                        resultArgs) with { AgentRunId = evt.AgentRunId, ToolIsIncomplete = evt.ToolIsIncomplete });
                     allHistoryEntries.Add(streamedHistory[^1]);
                     if (evt.ToolCallId is not null)
                         toolEndIds.Add(evt.ToolCallId);
@@ -221,7 +233,7 @@ public static class StreamingSessionHelper
                         endBuilder.ResultContent = evt.ToolResult;
                         endBuilder.IsError = evt.ToolIsError == true;
                         endBuilder.CompletedAt = evt.Timestamp;
-                        endBuilder.Completed = true;
+                        endBuilder.Completed = !evt.ToolIsIncomplete;
                     }
                     else
                     {
@@ -234,8 +246,8 @@ public static class StreamingSessionHelper
                             ResultContent = evt.ToolResult,
                             IsError = evt.ToolIsError == true,
                             StartedAt = evt.Timestamp,
-                            CompletedAt = evt.Timestamp,
-                            Completed = true
+                            CompletedAt = evt.ToolIsIncomplete ? null : evt.Timestamp,
+                            Completed = !evt.ToolIsIncomplete
                         };
                         toolInvocationBuilders.Add(orphan);
                         toolInvocationIndex[endKey] = orphan;
@@ -245,6 +257,7 @@ public static class StreamingSessionHelper
                 case AgentStreamEventType.Error when options.IncludeErrorsInHistory && !string.IsNullOrWhiteSpace(evt.ErrorMessage):
                     streamedHistory.Add(new SessionEntry
                     {
+                        AgentRunId = agentRunId,
                         Role = MessageRole.System,
                         Content = $"Agent stream error: {evt.ErrorMessage}"
                     });
@@ -260,7 +273,10 @@ public static class StreamingSessionHelper
                     streamedHistory.Clear();
                     if (streamedContent.Length > 0)
                     {
-                        turnSnapshot.Add(new SessionEntry { Role = MessageRole.Assistant, Content = streamedContent.ToString(), ThinkingContent = thinkingBuffer.Length > 0 ? thinkingBuffer.ToString() : null, Kind = assistantKind });
+                        if (runAssistantContent.Length > 0)
+                            runAssistantContent.AppendLine();
+                        runAssistantContent.Append(streamedContent);
+                        turnSnapshot.Add(new SessionEntry { AgentRunId = agentRunId, Role = MessageRole.Assistant, Content = streamedContent.ToString(), ThinkingContent = thinkingBuffer.Length > 0 ? thinkingBuffer.ToString() : null, Kind = assistantKind });
                         emittedAssistantContent = true;
                         thinkingBuffer.Clear();
                         streamedContent.Clear();
@@ -304,7 +320,7 @@ public static class StreamingSessionHelper
             var toolName = hasStart ? entry!.ToolName ?? "unknown" : "unknown";
             // #2906: an interrupted call is exactly the case forensics needs the arguments for, so
             // the synthesized row carries them too.
-            var orphanEntry = auditSink.ProjectIncomplete(orphanId, toolName, hasStart ? entry!.ToolArgs : null);
+            var orphanEntry = auditSink.ProjectIncomplete(orphanId, toolName, hasStart ? entry!.ToolArgs : null) with { AgentRunId = hasStart ? entry?.AgentRunId : agentRunId };
             streamedHistory.Add(orphanEntry);
             allHistoryEntries.Add(orphanEntry);
         }
@@ -315,7 +331,7 @@ public static class StreamingSessionHelper
         var finalContent = streamedContent.ToString();
         if (!string.IsNullOrWhiteSpace(finalContent))
         {
-            session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = finalContent, ThinkingContent = thinkingBuffer.Length > 0 ? thinkingBuffer.ToString() : null, Kind = assistantKind });
+            session.AddEntry(new SessionEntry { AgentRunId = agentRunId, Role = MessageRole.Assistant, Content = finalContent, ThinkingContent = thinkingBuffer.Length > 0 ? thinkingBuffer.ToString() : null, Kind = assistantKind });
             emittedAssistantContent = true;
         }
         else if (streamedHistory.Count == 0 && hadThinkingContent && hadMessageEnd && !emittedAssistantContent)
@@ -326,6 +342,7 @@ public static class StreamingSessionHelper
             // thinking-only responses are a normal model behaviour, not an error (#1198).
             session.AddEntry(new SessionEntry
             {
+                AgentRunId = agentRunId,
                 Role = MessageRole.Assistant,
                 Content = string.Empty,
                 Kind = assistantKind
@@ -411,8 +428,21 @@ public static class StreamingSessionHelper
             }
         }
 
-        // Remove crash sentinel on clean completion (#363).
-        session.RemoveCrashSentinels();
+        // Persist the authoritative finalization signal alongside the session before the same
+        // final save that commits the transcript. This keeps history/debug callers truthful after a
+        // restart instead of forcing them to infer completion from inactivity (#4165). Assign even
+        // when null so a later legacy/no-signal run cannot leave an earlier parked outcome behind.
+        session.RunCompletion = runCompletion;
+
+        // A failed terminal completion is recoverable work, not a clean lease release. Keep the
+        // sentinel through the authoritative save so the live recovery subscriber (or startup scan
+        // after a crash) has the same durable marker to accept-before-consume (#4406).
+        var terminalFailure = string.Equals(
+            runCompletion?.Status,
+            "Failed",
+            StringComparison.OrdinalIgnoreCase);
+        if (!terminalFailure)
+            session.RemoveCrashSentinels();
 
         // #1518: the final write is the authoritative post-run finalizer save. When a fence was
         // supplied, honour it so a delete/reset that landed mid-stream cannot be undone here. On
@@ -428,7 +458,9 @@ public static class StreamingSessionHelper
                 new SessionLifecycleEvent(
                     session.SessionId.Value,
                     session.AgentId.Value,
-                    SessionLifecycleEventType.Closed,
+                    terminalFailure
+                        ? SessionLifecycleEventType.TerminalFailure
+                        : SessionLifecycleEventType.Closed,
                     session),
                 cancellationToken);
         }
@@ -445,10 +477,43 @@ public static class StreamingSessionHelper
                 isError: builder.Completed ? builder.IsError : true,
                 isIncomplete: !builder.Completed,
                 startedAt: builder.StartedAt,
-                completedAt: builder.Completed ? builder.CompletedAt : null))
+                completedAt: builder.Completed ? builder.CompletedAt : null) with { AgentRunId = agentRunId })
             .ToList();
 
-        return new StreamingSessionResult(streamedContent.ToString(), allHistoryEntries, toolInvocations);
+        if (streamedContent.Length > 0)
+        {
+            if (runAssistantContent.Length > 0)
+                runAssistantContent.AppendLine();
+            runAssistantContent.Append(streamedContent);
+        }
+
+        return new StreamingSessionResult(
+            runAssistantContent.ToString(),
+            allHistoryEntries,
+            toolInvocations,
+            runCompletion,
+            runUsage,
+            turnCount,
+            finalOutcome);
+    }
+
+    private static AgentResponseUsage? AddUsage(AgentResponseUsage? aggregate, AgentResponseUsage? next)
+    {
+        if (next is null)
+            return aggregate;
+
+        static int? Add(int? left, int? right)
+        {
+            if (left is null && right is null)
+                return null;
+            return (int)Math.Min(int.MaxValue, (long)(left ?? 0) + (right ?? 0));
+        }
+
+        return new AgentResponseUsage(
+            Add(aggregate?.InputTokens, next.InputTokens),
+            Add(aggregate?.OutputTokens, next.OutputTokens),
+            Add(aggregate?.CacheRead, next.CacheRead),
+            Add(aggregate?.CacheWrite, next.CacheWrite));
     }
 
     /// <summary>
@@ -546,10 +611,18 @@ public sealed record StreamingSessionOptions(
 /// projects - so a streamed run and a blocking run of the same tool sequence are observably
 /// equivalent rather than two parallel shapes.
 /// </param>
+/// <param name="Completion">Authoritative completion signal carried by the run-ended event.</param>
+/// <param name="Usage">Usage aggregated across every streamed assistant message.</param>
+/// <param name="TurnCount">Number of completed streamed assistant messages.</param>
+/// <param name="FinalSaveOutcome">Outcome of the authoritative final transcript save.</param>
 public sealed record StreamingSessionResult(
     string AssistantContent,
     IReadOnlyList<SessionEntry> HistoryEntries,
-    IReadOnlyList<ToolInvocationRecord>? ToolInvocations = null)
+    IReadOnlyList<ToolInvocationRecord>? ToolInvocations = null,
+    RunCompletionSignal? Completion = null,
+    AgentResponseUsage? Usage = null,
+    int TurnCount = 0,
+    SessionSaveOutcome FinalSaveOutcome = SessionSaveOutcome.Persisted)
 {
     /// <summary>
     /// The run's tool timeline in execution order; never null, empty when the run used no tools.

@@ -48,7 +48,7 @@ public sealed class MemoryController(
     /// Access lists rather than contents. Who can reach a shared store is the thing an operator
     /// has to be able to check, and it is the thing that is invisible everywhere else - a store
     /// several agents write to is a channel one agent can use to influence the others, and the
-    /// only place that relationship is written down is config.json.
+    /// only place that relationship is written down is the platform configuration.
     /// <para>
     /// The registry parameter is optional to match every other consumer of it, so this endpoint
     /// answers with an empty list rather than a 500 on a gateway that has none.
@@ -139,6 +139,11 @@ public sealed class MemoryController(
                 query,
                 entries = dtos,
                 count = dtos.Count,
+                temporalDecay = new
+                {
+                    enabled = result.TemporalDecay?.Enabled ?? true,
+                    halfLifeDays = result.TemporalDecay?.HalfLifeDays ?? MemoryTemporalDecayPolicy.Default.HalfLifeDays
+                },
                 vectorScan = new
                 {
                     status = result.VectorScan.Status.ToString(),

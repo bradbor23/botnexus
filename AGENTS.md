@@ -93,7 +93,7 @@ All planning items (features, bugs, improvements, refactors) are tracked as **Gi
    scripts/repo/Validate-PreCommit.ps1
    ```
 
-   By default this invokes remote Azure Container Apps validation; a qualifying exact-content receipt then bypasses redundant remote validation. Set `BOTNEXUS_VALIDATION_MODE=local` to explicitly select globally serialized local strict validation instead. Both modes build the full solution and run impacted tests plus mandatory architecture/scenario and Playwright safety nets.
+   By default this invokes remote Azure Container Apps validation; a qualifying exact-content receipt then bypasses redundant remote validation. Set `BOTNEXUS_VALIDATION_MODE=local` to explicitly select globally serialized local strict validation instead. Remote validation runs the complete fail-closed non-browser core suite. Browser-emulated E2E is temporarily quarantined under #3601 and remains available only through explicit diagnostic modes until its reliability review and re-entry criteria are satisfied.
 
    The lower-level `test-impacted.ps1 -DryRun` remains useful to preview impacted projects during diagnosis, but it is not an additional pre-push requirement after a qualifying remote receipt.
 
@@ -103,7 +103,7 @@ All planning items (features, bugs, improvements, refactors) are tracked as **Gi
 
 5. **Do not use `--no-verify`** for code changes. There is deliberately no pre-commit hook - commit-time local validation is banned, and `scripts/repo/install-hooks.ps1` activates only the `pre-push` `core.bare` guard (#1602). `--no-verify` therefore skips that guard, not a test gate. Run `scripts/repo/Validate-PreCommit.ps1` for the final candidate instead.
 
-6. **Local `dotnet build` is permitted and expected; local test execution is not.** Compile the projects you changed before spending a remote gate - `dotnet build` starts no test host and no gateway process, so it cannot leak, and it catches in about a second the compile errors that otherwise cost a full remote run. Never run `dotnet test`, `test-impacted.ps1`, or `Validate-PreCommit.ps1 -LocalFallback` on a host with a live gateway: a test host boots real gateway processes that survive their parent, claim scheduled jobs from the shared cron store, and starve the live gateway - that is the orphan-process leak #2158 exists to close. All test execution is remote and authoritative: `scripts/repo/Invoke-AzureBuildTest.ps1 -Mode core -WorktreePath <worktree>`. If the remote infrastructure is genuinely unavailable, `Validate-PreCommit.ps1 -ValidationMode local` (or the `-LocalFallback` alias) is the sole supported local gate; state that fallback explicitly whenever you use it.
+6. **Local `dotnet build` is permitted and expected; local test execution is not.** Compile the projects you changed before spending a remote gate - `dotnet build` starts no test host and no gateway process, so it cannot leak, and it catches in about a second the compile errors that otherwise cost a full remote run. Never run `dotnet test`, `test-impacted.ps1`, or `Validate-PreCommit.ps1 -LocalFallback` on a host with a live gateway: a test host boots real gateway processes that survive their parent, claim scheduled jobs from the shared cron store, and starve the live gateway - that is the orphan-process leak #2158 exists to close. All ordinary test execution is remote and authoritative: `scripts/repo/Invoke-AzureBuildTest.ps1 -Mode core -WorktreePath <worktree>`. Browser-emulated E2E is excluded from ordinary validation while #3601 is reviewed; `-Mode full` and `-Mode playwright` are explicit diagnostics, not required gates or passing evidence for the quarantine. If the remote infrastructure is genuinely unavailable, `Validate-PreCommit.ps1 -ValidationMode local` (or the `-LocalFallback` alias) is the sole supported local gate; state that fallback explicitly whenever you use it.
 
 7. **Documentation-only changes do not run the test gate.** If a change touches nothing but `*.md`, `docs/**`, or `mkdocs.yml`, the required validation is the documentation build, not the ~12-minute remote test suite:
 
@@ -196,7 +196,10 @@ Before every `git push` on a PR branch:
 
 - `../botnexus-wt-N` — dedicated worktree per issue/PR (N = GitHub issue number)
 - Branch naming: `<type>/<issue-number>-<short-slug>` (e.g. `fix/64-history-first-load`, `feat/128-gateway-plugins`)
-- PRs always target `main`; never branch off a feature branch
+- Ordinary PRs target `main` and never branch from another feature branch.
+- **Stacked PR exception:** use GitHub native stacked PRs only when a plan has at least two dependent, independently reviewable layers. The bottom layer targets `main`; each upper layer targets the branch immediately below it. Unrelated or independently mergeable issues remain separate `main`-based PRs.
+- Every stack layer keeps its own issue or explicit partial-work reason, worktree, validation evidence, title/body checks, and merge authorization. Merge bottom-up. A lower-layer change requires affected upper layers to be rebased and revalidated.
+- Use GitHub CLI 2.90.0+ with the official `github/gh-stack` extension for stack topology and cascading rebases. Do not hand-maintain PR bases when `gh stack` can do so.
 - `~/projects/botnexus` — always on `main`, clean and synced to `origin/main`
 
 ### PR Titles
@@ -447,16 +450,16 @@ docs(planning): archive completed provider-routing spec
 test(domain): add missing edge case for session expiry
 ```
 
-## Configuration
+## Configuration authority review (#4324, #4564, #4567)
 
-The BotNexus development configuration file is located at:
+The target contract is SQLite-first: `config.sqlite` is the live configuration authority after verified cutover. `config.json` may be a legacy import, explicit export/rollback input, or marked generated projection; a generated projection is never a runtime read source. The cutover is not complete on `main` yet, so distinguish current compatibility behavior from the target contract rather than assuming the latter has shipped.
 
-```
-C:\Users\<ALIAS>\.botnexus\config.json
-```
+Before approving configuration-related changes, inspect the actual read/write path in **C#, executable scripts (including shell, PowerShell and Python), tests, and operator documentation**. Require ordinary startup, gateway/CLI commands, REST/Portal, agent tools and helpers to use the central home-rooted provider and canonical writer. Do not introduce a direct `config.json` read, file-existence gate, filename-shaped configuration identity, caller-selected backend switch, or JSON-first instruction merely because current fixtures or a generated projection contain the file. A `config.json` mention is not automatically a defect: migration, explicit import/export/rollback, projection generation, and isolated fixtures are legitimate when bounded and labelled. For a new configuration consumer, test SQLite-only operation with the projection absent, corrupt, and conflicting; ensure scripts and launch helpers receive the same scrutiny as C#.
 
-Use the BotNexus CLI to manage configuration:
+The first-stage architecture ratchet (#4603) scans production C# only. It is not evidence that non-C# helpers or documentation follow the authority contract. See #4134's `scripts/gateway-restart.sh` for the direct-JSON restart-address failure shape. File a concrete issue or blocking PR finding when a new leak is found; do not treat a green C# gate as clearance for other languages.
+
+Use the BotNexus CLI/API to manage live configuration; do not hand-edit a generated JSON projection. For a source checkout the CLI is invoked with:
 
 ```shell
-dotnet run --project src\gateway\BotNexus.Cli -- <command>
+dotnet run --project src/gateway/BotNexus.Cli -- <command>
 ```

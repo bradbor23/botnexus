@@ -115,12 +115,28 @@ public sealed class InMemorySatelliteRegistryTests
         });
 
         registry.MarkOnline("sat1", "conn-123");
-        registry.MarkOffline("sat1");
+        registry.MarkOffline("sat1", "conn-123");
 
         var sat = registry.GetById("sat1");
         Assert.NotNull(sat);
         Assert.Equal(SatelliteStatus.Offline, sat.Status);
         Assert.Null(sat.ConnectionId);
+    }
+
+    [Fact]
+    public void MarkOffline_SupersededConnection_DoesNotTakeReplacementOffline()
+    {
+        var registry = CreateRegistry(new Dictionary<string, SatelliteConfig>
+        {
+            ["sat1"] = new() { DisplayName = "Desktop", Platform = "windows", OwnerUserId = "jon", ApiKey = "k1" }
+        });
+
+        registry.MarkOnline("sat1", "older");
+        registry.MarkOnline("sat1", "replacement");
+
+        registry.MarkOffline("sat1", "older").ShouldBeFalse();
+        registry.GetById("sat1")!.Status.ShouldBe(SatelliteStatus.Online);
+        registry.GetById("sat1")!.ConnectionId.ShouldBe("replacement");
     }
 
     [Fact]
@@ -138,10 +154,23 @@ public sealed class InMemorySatelliteRegistryTests
 
         // The registry already takes a TimeProvider, so move the clock rather than sleep on it.
         clock.Advance(TimeSpan.FromSeconds(1));
-        registry.RecordHeartbeat("sat1");
+        registry.RecordHeartbeat("sat1", "conn-123");
 
         var afterHeartbeat = registry.GetById("sat1")!.LastSeen;
         Assert.True(afterHeartbeat > firstSeen);
+    }
+
+    [Fact]
+    public void RecordHeartbeat_SupersededConnection_IsRejected()
+    {
+        var registry = CreateRegistry(new Dictionary<string, SatelliteConfig>
+        {
+            ["sat1"] = new() { DisplayName = "Desktop", Platform = "windows", OwnerUserId = "jon", ApiKey = "k1" }
+        });
+
+        registry.MarkOnline("sat1", "replacement");
+
+        registry.RecordHeartbeat("sat1", "older").ShouldBeFalse();
     }
 
     [Fact]

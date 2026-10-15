@@ -58,6 +58,15 @@ public sealed class PlatformConfig : IValidatableObject
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "general", Order = 2)]
     public string? WorldId { get; set; }
 
+    /// <summary>World-scoped extension-owned runtime configuration.</summary>
+    [Display(
+        Name = "World",
+        Description = "World-scoped settings shared across the BotNexus installation, including extension-owned world configuration.",
+        GroupName = "General",
+        Order = 5)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "general", Order = 5)]
+    public WorldSettingsConfig? World { get; set; }
+
     /// <summary>Gateway-specific settings.</summary>
     [Display(
         Name = "Gateway",
@@ -84,6 +93,15 @@ public sealed class PlatformConfig : IValidatableObject
         Order = 7)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "general", Order = 7)]
     public Dictionary<string, ProviderConfig>? Providers { get; set; }
+
+    /// <summary>Extension source repositories keyed by their stable registration ID.</summary>
+    [Display(
+        Name = "Extension repositories",
+        Description = "Source repositories registered for extension discovery and updates.",
+        GroupName = "General",
+        Order = 8)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "general", Order = 8)]
+    public Dictionary<string, ExtensionRepositoryRegistration>? ExtensionRepositories { get; set; }
 
     /// <summary>Channel settings keyed by channel name.</summary>
     [Display(
@@ -196,9 +214,125 @@ public sealed class PlatformConfig : IValidatableObject
 
 }
 
+/// <summary>Persisted registration of a repository that can supply BotNexus extensions.</summary>
+public sealed class ExtensionRepositoryRegistration
+{
+    /// <summary>Absolute HTTP, HTTPS, or SSH repository URL.</summary>
+    [Display(
+        Name = "Repository URL",
+        Description = "Absolute HTTP, HTTPS, or SSH URL of the repository that supplies the extension.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 0)]
+    public string RepositoryUrl { get; set; } = string.Empty;
+
+    /// <summary>Branch, tag, or commit requested when the repository is later materialized.</summary>
+    [Display(
+        Name = "Requested ref",
+        Description = "Branch, tag, or commit to resolve when this repository is reconciled.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 1)]
+    public string RequestedRef { get; set; } = string.Empty;
+
+    /// <summary>Whether extensions from this repository are eligible for use.</summary>
+    [Display(
+        Name = "Enabled",
+        Description = "Whether this repository is eligible for later extension reconciliation.")]
+    [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "extension-repository", Order = 2)]
+    [DefaultValue(true)]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Whether later repository update workflows may refresh this registration.</summary>
+    [Display(
+        Name = "Updates enabled",
+        Description = "Whether later reconciliation may refresh this repository to its requested ref.")]
+    [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "extension-repository", Order = 3)]
+    [DefaultValue(true)]
+    public bool UpdatesEnabled { get; set; } = true;
+
+    /// <summary>Current reconciliation state, or null before the first attempt.</summary>
+    [Display(
+        Name = "Reconciliation status",
+        Description = "Latest repository reconciliation outcome recorded by the CLI.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 4)]
+    public string? ReconciliationStatus { get; set; }
+
+    /// <summary>Exact commit selected by the most recent successful reconciliation.</summary>
+    [Display(
+        Name = "Resolved commit",
+        Description = "Exact Git commit selected by the most recent successful reconciliation.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 5)]
+    public string? ResolvedCommit { get; set; }
+
+    /// <summary>Managed clone path used by the reconciler.</summary>
+    [Display(
+        Name = "Clone path",
+        Description = "Managed local path where BotNexus materializes this repository.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 6)]
+    public string? ClonePath { get; set; }
+
+    /// <summary>UTC timestamp of the most recent reconciliation attempt.</summary>
+    [Display(
+        Name = "Last attempt",
+        Description = "UTC timestamp of the most recent repository reconciliation attempt.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 7)]
+    public DateTimeOffset? LastAttemptUtc { get; set; }
+
+    /// <summary>UTC timestamp of the most recent successful reconciliation.</summary>
+    [Display(
+        Name = "Last success",
+        Description = "UTC timestamp of the most recent successful repository reconciliation.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 8)]
+    public DateTimeOffset? LastSuccessUtc { get; set; }
+
+    /// <summary>Named failure and diagnostic from the most recent failed attempt.</summary>
+    [Display(
+        Name = "Latest failure",
+        Description = "Named failure and bounded diagnostic from the most recent failed reconciliation.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extension-repository", Order = 9)]
+    public string? LatestFailure { get; set; }
+}
+
+/// <summary>Read model for an extension repository registration and its dictionary key.</summary>
+public sealed record ExtensionRepositoryRegistrationInfo(
+    string Id,
+    string RepositoryUrl,
+    string RequestedRef,
+    bool Enabled,
+    bool UpdatesEnabled,
+    string? ReconciliationStatus,
+    string? ResolvedCommit,
+    string? ClonePath,
+    DateTimeOffset? LastAttemptUtc,
+    DateTimeOffset? LastSuccessUtc,
+    string? LatestFailure);
+
+/// <summary>Provider-owned authentication settings.</summary>
+public sealed class ProviderAuthenticationConfig
+{
+    /// <summary>Required authentication mode discriminator.</summary>
+    [Display(Name = "Type", Description = "Authentication mode discriminator.", GroupName = "Provider authentication", Order = 0)]
+    [ConfigField(Widget = ConfigFieldWidget.Select, Group = "provider-authentication", Order = 0)]
+    public string? Type { get; set; }
+
+    /// <summary>User-assigned managed identity client ID when that mode is selected.</summary>
+    [Display(Name = "Client ID", Description = "Client ID of the user-assigned managed identity.", GroupName = "Provider authentication", Order = 1)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "provider-authentication", Order = 1)]
+    public string? ClientId { get; set; }
+}
+
 /// <summary>Provider-specific configuration.</summary>
 public sealed class ProviderConfig
 {
+    /// <summary>
+    /// Built-in provider type implemented by this configured provider instance. Null preserves the
+    /// legacy behavior where the dictionary key itself identifies the provider.
+    /// </summary>
+    [Display(
+        Name = "Type",
+        Description = "Optional built-in provider type for this named provider instance (for example, github-copilot).",
+        GroupName = "Provider",
+        Order = 0)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "provider", Order = 0)]
+    public string? Type { get; set; }
+
     /// <summary>Whether this provider is enabled. Disabled providers are hidden from API.</summary>
     [Display(
         Name = "Enabled",
@@ -218,6 +352,15 @@ public sealed class ProviderConfig
     [ConfigField(Widget = ConfigFieldWidget.Secret, Group = "provider", Order = 1, Secret = true)]
     public string? ApiKey { get; set; }
 
+    /// <summary>Explicit authentication mode for providers that support more than API keys.</summary>
+    [Display(
+        Name = "Authentication",
+        Description = "Explicit provider authentication mode. Microsoft Foundry supports entra-default, managed-identity, user-assigned-managed-identity, and api-key.",
+        GroupName = "Provider",
+        Order = 2)]
+    [ConfigField(Widget = ConfigFieldWidget.Select, Group = "provider", Order = 2)]
+    public ProviderAuthenticationConfig? Authentication { get; set; }
+
     /// <summary>Base URL override.</summary>
     [Display(
         Name = "Base URL",
@@ -226,6 +369,19 @@ public sealed class ProviderConfig
         Order = 2)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "provider", Order = 2)]
     public string? BaseUrl { get; set; }
+
+    /// <summary>
+    /// Maximum idle interval between streaming response chunks, in milliseconds. Null uses the
+    /// platform default of 30000; zero disables the deadline.
+    /// </summary>
+    [Display(
+        Name = "Stream idle timeout",
+        Description = "Maximum milliseconds between streaming response chunks. Leave empty for 30000; set 0 to disable.",
+        GroupName = "Provider",
+        Order = 3)]
+    [Range(0, int.MaxValue)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "provider", Order = 3)]
+    public int? StreamIdleTimeoutMs { get; set; }
 
     /// <summary>Default model for this provider.</summary>
     [Display(
@@ -367,6 +523,20 @@ public sealed class ProviderConfig
     public ProviderEmbeddingsConfig? Embeddings { get; set; }
 }
 
+/// <summary>Operator-declared token capacities for one exact chat model identifier.</summary>
+public sealed class ProviderModelCapacityConfig
+{
+    /// <summary>Total context capacity in tokens; null inherits the provider default.</summary>
+    [Display(Name = "Context capacity", Description = "Operator-declared total context capacity in tokens for this exact model. Null inherits the provider default; this declaration is not provider-verified.", GroupName = "Model capacity", Order = 0)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "model-capacity", Order = 0)]
+    public int? ContextWindow { get; set; }
+
+    /// <summary>Maximum output tokens; null uses the conservative output fallback.</summary>
+    [Display(Name = "Maximum output tokens", Description = "Operator-declared output-token ceiling for this exact model, separate from context capacity and throughput quota. Null uses the conservative fallback; explicit values must be positive and less than context capacity.", GroupName = "Model capacity", Order = 1)]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "model-capacity", Order = 1)]
+    public int? MaxTokens { get; set; }
+}
+
 /// <summary>
 /// Chat-capability settings nested under a provider (#2854).
 /// </summary>
@@ -377,6 +547,21 @@ public sealed class ProviderConfig
 /// </remarks>
 public sealed class ProviderChatConfig
 {
+    private Dictionary<string, ProviderModelCapacityConfig> _modelCapacities = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Operator-declared capacities keyed by exact, case-sensitive model ID. These values are not
+    /// provider-verified. Assignments are copied with ordinal keys; runtime post-configuration
+    /// materializes this map from accepted raw documents rather than case-insensitive binding.
+    /// </summary>
+    [Display(Name = "Model capacities", Description = "Operator-declared context and output token capacities keyed by exact, case-sensitive model ID. Configure the complete map with the central configuration CLI; values are declarations, not provider-verified limits.", GroupName = "Provider chat", Order = 8)]
+    [ConfigField(Group = "provider-chat", Order = 8)]
+    public Dictionary<string, ProviderModelCapacityConfig> ModelCapacities
+    {
+        get => _modelCapacities;
+        set => _modelCapacities = value is null ? new(StringComparer.Ordinal) : new(value, StringComparer.Ordinal);
+    }
+
     /// <summary>API identifier used when registering this provider's chat models.</summary>
     [Display(
         Name = "API",
@@ -488,9 +673,35 @@ public sealed class ProviderEmbeddingsConfig
     public int? Dimensions { get; set; }
 }
 
+/// <summary>Configuration owned by the singular BotNexus world.</summary>
+public sealed class WorldSettingsConfig
+{
+    /// <summary>Optional positive compaction trigger ceiling in tokens; null inherits the enclosing scope. Not model capacity.</summary>
+    [Range(1, int.MaxValue)]
+    [Display(Name = "Compaction token ceiling", Description = "Optional positive compaction trigger ceiling, not model capacity. Null inherits.")]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 0)]
+    [System.Text.Json.Serialization.JsonNumberHandling(System.Text.Json.Serialization.JsonNumberHandling.Strict)]
+    public int? CompactionTokenCeiling { get; set; }
+
+
+    /// <summary>World-scoped extension-owned runtime configuration, keyed by extension ID.</summary>
+    [Display(
+        Name = "World extensions",
+        Description = "Extension-owned configuration that applies once to the whole BotNexus world.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extensions", Order = 0)]
+    public Dictionary<string, JsonElement>? Extensions { get; set; }
+}
+
 /// <summary>Gateway runtime configuration.</summary>
 public sealed class GatewaySettingsConfig
 {
+    /// <summary>Gateway-scoped extension-owned runtime configuration, keyed by extension ID.</summary>
+    [Display(
+        Name = "Gateway extensions",
+        Description = "Extension-owned configuration for the singular gateway runtime.")]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extensions", Order = 1)]
+    public Dictionary<string, JsonElement>? Extensions { get; set; }
+
     /// <summary>Gateway HTTP listen URL.</summary>
     [Display(
         Name = "Listen URL",
@@ -546,9 +757,9 @@ public sealed class GatewaySettingsConfig
     [Display(
         Name = "Session store",
         Description = "Backend used to persist sessions and conversation history.",
-        GroupName = "Storage",
-        Order = 2)]
-    [ConfigField(Group = "storage", Order = 2)]
+        GroupName = "Session store",
+        Order = 0)]
+    [ConfigField(Group = "session-store", Order = 0)]
     public SessionStoreConfig? SessionStore { get; set; }
 
     /// <summary>Interval in minutes between periodic PASSIVE SQLite WAL checkpoints (#1438). Default 30.</summary>
@@ -680,14 +891,10 @@ public sealed class GatewaySettingsConfig
     // .GetSection_GatewaySection_RedactsApiKeysConnectionStringsAndCrossWorldSecrets.
     [ConfigField(Group = "security", Order = 0)]
     public Dictionary<string, ApiKeyConfig>? ApiKeys { get; set; }
-    /// <summary>Extensions loading settings.</summary>
-    [Display(
-        Name = "Extensions",
-        Description = "Dynamic extension loading: whether extensions load, from where, and their world-level defaults.",
-        GroupName = "Extensions",
-        Order = 0)]
+    /// <summary>Dynamic extension discovery and loading settings.</summary>
+    [Display(Name = "Extension loader", Description = "Dynamic extension loading settings.", GroupName = "Extensions", Order = 0)]
     [ConfigField(Group = "extensions", Order = 0)]
-    public ExtensionsConfig? Extensions { get; set; }
+    public ExtensionLoaderConfig? ExtensionLoader { get; set; }
     /// <summary>World identity shown by gateway clients.</summary>
     [Display(
         Name = "World identity",
@@ -700,9 +907,9 @@ public sealed class GatewaySettingsConfig
     [Display(
         Name = "Locations",
         Description = "Named locations registry used for resource management and path resolution.",
-        GroupName = "Storage",
-        Order = 3)]
-    [ConfigField(Group = "storage", Order = 3)]
+        GroupName = "Locations",
+        Order = 0)]
+    [ConfigField(Group = "locations", Order = 0)]
     public Dictionary<string, LocationConfig>? Locations { get; set; }
     /// <summary>Optional explicit cross-world communication permissions.</summary>
     [Display(
@@ -781,6 +988,17 @@ public sealed class GatewaySettingsConfig
         Order = 1)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "execution", Order = 1)]
     public string[]? ShellCommand { get; set; }
+
+    /// <summary>
+    /// Exact ambient environment names approved for local shell/exec children, in addition to
+    /// OS essentials. Null or empty uses secure defaults. Values are never stored here.
+    /// No wildcard, prefix or inherit-all mode is supported. Changes require a gateway restart.
+    /// </summary>
+    [Display(Name = "Local child environment pass-through",
+        Description = "Exact ambient variable names allowed in shell/exec children. Names only; no wildcard or inherit-all mode. Requires restart.",
+        GroupName = "Execution", Order = 2)]
+    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "execution", Order = 2)]
+    public List<string>? LocalChildEnvironmentPassThrough { get; set; }
 
     /// <summary>Auto-update settings for self-updating the gateway via the BotNexus CLI.</summary>
     [Display(
@@ -1950,7 +2168,7 @@ public sealed class PromptTemplateParameterConfig
 }
 
 /// <summary>Configuration for dynamic extension discovery and loading.</summary>
-public sealed class ExtensionsConfig
+public sealed class ExtensionLoaderConfig
 {
     /// <summary>
     /// Root directory containing extension folders with botnexus-extension.json manifests.
@@ -1974,22 +2192,19 @@ public sealed class ExtensionsConfig
     [ConfigField(Widget = ConfigFieldWidget.Toggle, Group = "extensions", Order = 1)]
     public bool Enabled { get; set; } = true;
 
-    /// <summary>
-    /// World-level default extension configuration, keyed by extension ID.
-    /// Deep-merged with agent-level overrides to produce effective config per agent.
-    /// </summary>
-    [Display(
-        Name = "Defaults",
-        Description = "World-level default extension configuration, keyed by extension ID. Deep-merged with agent-level overrides to produce effective config per agent.",
-        GroupName = "Extensions",
-        Order = 2)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "extensions", Order = 2)]
-    public Dictionary<string, JsonElement>? Defaults { get; set; }
 }
 
 /// <summary>Agent definition in platform config.</summary>
 public sealed class AgentDefinitionConfig
 {
+    /// <summary>Optional positive compaction trigger ceiling in tokens; null inherits the enclosing scope. Not model capacity.</summary>
+    [Range(1, int.MaxValue)]
+    [Display(Name = "Compaction token ceiling", Description = "Optional positive compaction trigger ceiling, not model capacity. Null inherits.")]
+    [ConfigField(Widget = ConfigFieldWidget.Number, Group = "compaction", Order = 0)]
+    [System.Text.Json.Serialization.JsonNumberHandling(System.Text.Json.Serialization.JsonNumberHandling.Strict)]
+    public int? CompactionTokenCeiling { get; set; }
+
+
     /// <summary>Provider name (e.g. 'copilot').</summary>
     [Display(
         Name = "Provider",
@@ -2076,22 +2291,9 @@ public sealed class AgentDefinitionConfig
         Order = 9)]
     [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 9)]
     public List<string>? AllowedModels { get; set; }
-    /// <summary>Ordered list of files to load as the system prompt. Empty = default order.</summary>
-    [Display(
-        Name = "System prompt files",
-        Description = "Ordered list of files to load as the system prompt. Empty = default order.",
-        GroupName = "Agent",
-        Order = 10)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 10)]
-    public List<string>? SystemPromptFiles { get; set; }
-    /// <summary>Path to a single system prompt file (legacy, prefer SystemPromptFiles).</summary>
-    [Display(
-        Name = "System prompt file",
-        Description = "Path to a single system prompt file (legacy, prefer SystemPromptFiles).",
-        GroupName = "Agent",
-        Order = 11)]
-    [ConfigField(Widget = ConfigFieldWidget.Text, Group = "agent", Order = 11)]
-    public string? SystemPromptFile { get; set; }
+    /// <summary>Whether the source JSON contained either retired custom prompt-file key.</summary>
+    [JsonIgnore]
+    internal bool LegacyPromptFileKeysPresent { get; set; }
     /// <summary>Tool identifiers this agent has access to.</summary>
     [Display(
         Name = "Tool ids",

@@ -95,6 +95,49 @@ public sealed class TranscriptReconcilerTests
         result.Select(m => m.Content).ShouldBe(["a", "b"]);
     }
 
+    [Fact]
+    public void Reconcile_MissingEqualTimestampPredecessor_PreservesServerOrder()
+    {
+        var at = DateTimeOffset.Parse("2026-09-04T10:05:00Z");
+        var first = new ChatMessage("user", "first", at) { ServerEntryId = "entry-1" };
+        var second = new ChatMessage("assistant", "second", at) { ServerEntryId = "entry-2" };
+
+        var result = TranscriptReconciler.Reconcile([second], [first, second]);
+
+        result.ShouldBe([first, second]);
+    }
+
+    [Fact]
+    public void Reconcile_MissingEqualTimestampMiddle_PreservesServerOrderAndPagedLocalRows()
+    {
+        var at = DateTimeOffset.Parse("2026-09-04T10:05:00Z");
+        var older = Msg("user", "older-page", 4);
+        var first = new ChatMessage("user", "first", at) { ServerEntryId = "entry-1" };
+        var middle = new ChatMessage("assistant", "middle", at) { ServerEntryId = "entry-2" };
+        var last = new ChatMessage("user", "last", at) { ServerEntryId = "entry-3" };
+
+        var result = TranscriptReconciler.Reconcile([older, first, last], [first, middle, last]);
+
+        result.ShouldBe([older, first, middle, last]);
+        TranscriptReconciler.Reconcile(result, [first, middle, last]).ShouldBe(result);
+    }
+
+    [Fact]
+    public void Reconcile_MultipleEqualTimestampHoles_PreservesServerOrder()
+    {
+        var at = DateTimeOffset.Parse("2026-09-04T10:05:00Z");
+        var first = new ChatMessage("user", "first", at) { ServerEntryId = "entry-1" };
+        var second = new ChatMessage("assistant", "second", at) { ServerEntryId = "entry-2" };
+        var third = new ChatMessage("assistant", "third", at) { ServerEntryId = "entry-3" };
+        var last = new ChatMessage("user", "last", at) { ServerEntryId = "entry-4" };
+
+        var result = TranscriptReconciler.Reconcile([last], [first, second, third, last]);
+
+        result.ShouldBe([first, second, third, last]);
+        result.ShouldBeUnique();
+        TranscriptReconciler.Reconcile(result, [first, second, third, last]).ShouldBe(result);
+    }
+
     /// <summary>
     /// An empty local timeline is fully seeded from the server page, in order.
     /// </summary>
@@ -124,25 +167,108 @@ public sealed class TranscriptReconcilerTests
 
     /// <summary>
     /// Tool rows are keyed by their tool-call id, so the same tool call arriving from REST does
-    /// not duplicate the row already rendered from the live SignalR ToolStart/ToolEnd pair even
-    /// though the REST copy carries the stripped result as its content.
+    /// not duplicate the row already rendered from the live SignalR ToolStart/ToolEnd pair. A
+    /// terminal REST row repairs only an incomplete local ToolStart placeholder; a locally
+    /// completed ToolEnd row remains newer live state and therefore wins over a stale page.
     /// </summary>
     [Fact]
-    public void Reconcile_ToolRowsAreDedupedByToolCallId()
+    public void Reconcile_TerminalServerToolRepairsIncompleteLocalRowWithoutChangingIdentity()
     {
         var at = new DateTimeOffset(2026, 9, 4, 10, 7, 0, TimeSpan.Zero);
-        var local = new List<ChatMessage>
+        var local = new ChatMessage("Tool", "⏳ Calling read…", at)
         {
-            new("assistant", "live text", at) { ToolName = "read", ToolCallId = "tc-1", IsToolCall = true }
+            Id = "local-row",
+            ToolName = "read",
+            ToolCallId = "tc-1",
+            IsToolCall = true
         };
-        var server = new List<ChatMessage>
+        var server = new ChatMessage("Tool", "rest text", at)
         {
-            new("assistant", "rest text", at) { ToolName = "read", ToolCallId = "tc-1", IsToolCall = true }
+            ServerEntryId = "s-1#1",
+            ToolName = "read",
+            ToolCallId = "tc-1",
+            ToolResult = "rest text",
+            IsToolCall = true
         };
 
-        var result = TranscriptReconciler.Reconcile(local, server);
+        var result = TranscriptReconciler.Reconcile([local], [server]);
 
-        result.Count.ShouldBe(1);
-        result[0].Content.ShouldBe("live text");
+        var repaired = result.ShouldHaveSingleItem();
+        repaired.Id.ShouldBe("local-row");
+        repaired.ServerEntryId.ShouldBe("s-1#1");
+        repaired.Content.ShouldBe("rest text");
+        repaired.ToolResult.ShouldBe("rest text");
+        TranscriptReconciler.CountMissing([local], [server]).ShouldBe(0);
+    }
+
+    [Fact]
+    public void Reconcile_CompletedLocalToolIsNotOverwrittenByStaleServerPage()
+    {
+        var at = new DateTimeOffset(2026, 9, 4, 10, 7, 0, TimeSpan.Zero);
+        var local = new ChatMessage("Tool", "✅ read completed", at)
+        {
+            ToolName = "read",
+            ToolCallId = "tc-1",
+            ToolResult = "newer live result",
+            IsToolCall = true
+        };
+        var staleServer = new ChatMessage("Tool", "stale result", at)
+        {
+            ToolName = "read",
+            ToolCallId = "tc-1",
+            ToolResult = "stale result",
+            IsToolCall = true
+        };
+
+        TranscriptReconciler.Reconcile([local], [staleServer]).ShouldBe([local]);
+    }
+
+    [Fact]
+    public void Reconcile_LiveAndPersistedMessageWithDifferentTimestamps_DoesNotDuplicate()
+    {
+        var live = new ChatMessage("Assistant", "same response", DateTimeOffset.Parse("2026-09-04T10:08:09Z"));
+        var persisted = new ChatMessage("Assistant", "same response", DateTimeOffset.Parse("2026-09-04T10:08:00Z"))
+        {
+            ServerEntryId = "sess-1#1"
+        };
+
+        var result = TranscriptReconciler.Reconcile([live], [persisted]);
+
+        result.ShouldBe([live]);
+        TranscriptReconciler.CountMissing([live], [persisted]).ShouldBe(0);
+    }
+
+    [Fact]
+    public void Reconcile_RepeatedSameContent_PreservesServerMultiplicityAndIsIdempotent()
+    {
+        var live = new ChatMessage("Assistant", "repeat", DateTimeOffset.Parse("2026-09-04T10:09:09Z"));
+        var first = new ChatMessage("Assistant", "repeat", DateTimeOffset.Parse("2026-09-04T10:09:00Z"))
+        {
+            ServerEntryId = "sess-1#1"
+        };
+        var second = new ChatMessage("Assistant", "repeat", DateTimeOffset.Parse("2026-09-04T10:10:00Z"))
+        {
+            ServerEntryId = "sess-1#2"
+        };
+
+        var result = TranscriptReconciler.Reconcile([live], [first, second]);
+
+        result.Count.ShouldBe(2);
+        result[0].ShouldBeSameAs(live);
+        result[1].ShouldBeSameAs(second);
+        TranscriptReconciler.CountMissing([live], [first, second]).ShouldBe(1);
+        TranscriptReconciler.Reconcile(result, [first, second]).ShouldBe(result);
+    }
+
+    [Fact]
+    public void CountMissing_DuplicateServerIdentity_CountsOnlyOneInsert()
+    {
+        var serverRow = new ChatMessage("Assistant", "restored", DateTimeOffset.Parse("2026-09-04T10:11:00Z"))
+        {
+            ServerEntryId = "sess-1#3"
+        };
+
+        TranscriptReconciler.CountMissing([], [serverRow, serverRow]).ShouldBe(1);
+        TranscriptReconciler.Reconcile([], [serverRow, serverRow]).ShouldBe([serverRow]);
     }
 }

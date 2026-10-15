@@ -1,3 +1,5 @@
+using BotNexus.Gateway.Abstractions.Conversations;
+using BotNexus.Gateway.Abstractions.Sessions;
 using BotNexus.Agent.Providers.Core.Registry;
 using BotNexus.Cron;
 using BotNexus.Domain.World;
@@ -5,6 +7,8 @@ using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Api.Models;
 using BotNexus.Gateway.Configuration;
+using BotNexus.Gateway.Extensions;
+using BotNexus.Gateway.Abstractions.Extensions;
 using BotNexus.Gateway.Webhooks;
 using BotNexus.Domain.Primitives;
 using Microsoft.AspNetCore.Http;
@@ -21,6 +25,8 @@ namespace BotNexus.Gateway.Api.Controllers;
 [Route("api/[controller]")]
 public sealed class AgentsController : ControllerBase
 {
+    private readonly ISessionStore? _sessions;
+    private readonly IConversationStore? _conversations;
     private readonly IAgentRegistry _registry;
     private readonly IAgentSupervisor _supervisor;
     private readonly IAgentConfigurationWriter _configurationWriter;
@@ -29,6 +35,7 @@ public sealed class AgentsController : ControllerBase
     private readonly ISkillReviewProvisioner? _skillReviewProvisioner;
     private readonly IAgentWebhookProvisioner? _webhookProvisioner;
     private readonly ModelRegistry? _modelRegistry;
+    private readonly IExtensionLoader? _extensionLoader;
     private readonly ILogger<AgentsController> _logger;
 
     /// <summary>
@@ -43,8 +50,13 @@ public sealed class AgentsController : ControllerBase
         ISkillReviewProvisioner? skillReviewProvisioner = null,
         ModelRegistry? modelRegistry = null,
         ILogger<AgentsController>? logger = null,
-        IAgentWebhookProvisioner? webhookProvisioner = null)
+        IAgentWebhookProvisioner? webhookProvisioner = null,
+        IExtensionLoader? extensionLoader = null,
+        ISessionStore? sessions = null,
+        IConversationStore? conversations = null)
     {
+        _sessions = sessions;
+        _conversations = conversations;
         _registry = registry;
         _supervisor = supervisor;
         _configurationWriter = configurationWriter;
@@ -53,6 +65,7 @@ public sealed class AgentsController : ControllerBase
         _skillReviewProvisioner = skillReviewProvisioner;
         _webhookProvisioner = webhookProvisioner;
         _modelRegistry = modelRegistry;
+        _extensionLoader = extensionLoader;
         _logger = logger ?? NullLogger<AgentsController>.Instance;
     }
 
@@ -149,6 +162,9 @@ public sealed class AgentsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult> Register([FromBody] AgentDescriptor descriptor, CancellationToken cancellationToken)
     {
+        // Defaults are materialized by the server from agents.defaults and are never client-owned.
+        descriptor = descriptor with { DefaultExtensionConfig = new Dictionary<string, System.Text.Json.JsonElement>() };
+
         if (descriptor.Kind == AgentKind.SubAgent)
         {
             return BadRequest(new
@@ -163,6 +179,9 @@ public sealed class AgentsController : ControllerBase
         var validationErrors = BotNexus.Gateway.Agents.AgentDescriptorValidator.ValidateForConfig(descriptor, null, _modelRegistry);
         if (validationErrors.Count > 0)
             return BadRequest(new { error = string.Join(" ", validationErrors) });
+        var extensionScopeErrors = ValidateExtensionConfigurationScopes(null, descriptor);
+        if (extensionScopeErrors.Count > 0)
+            return BadRequest(new { error = string.Join(" ", extensionScopeErrors) });
 
         var agentId = descriptor.AgentId;
         if (_registry.Contains(agentId))
@@ -188,7 +207,7 @@ public sealed class AgentsController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            await CompensateConfigDeleteAsync(agentId.Value, cancellationToken);
+            await CompensateConfigDeleteAsync(agentId, cancellationToken);
             return Conflict(new { error = ex.Message });
         }
 
@@ -208,7 +227,7 @@ public sealed class AgentsController : ControllerBase
         {
             _logger.LogError(ex, "Provisioning failed for new agent {AgentId}; rolling back registry and config.", agentId.Value);
             _registry.Unregister(agentId);
-            await CompensateConfigDeleteAsync(agentId.Value, cancellationToken);
+            await CompensateConfigDeleteAsync(agentId, cancellationToken);
             return Problem(
                 detail: $"Failed to provision agent side effects: {ex.Message}",
                 statusCode: StatusCodes.Status500InternalServerError);
@@ -216,6 +235,75 @@ public sealed class AgentsController : ControllerBase
 
         await NotifyAgentsChangedBestEffortAsync("added", agentId.Value, cancellationToken);
         return CreatedAtAction(nameof(Get), new { agentId = descriptor.AgentId }, descriptor);
+    }
+
+    /// <summary>
+    /// Grants or configures one extension for an agent without requiring clients to round-trip the
+    /// complete descriptor. The extension object is replaced atomically; every unrelated agent
+    /// property and extension entry is copied from the currently registered descriptor.
+    /// </summary>
+    [HttpPut("{agentId}/extensions/{extensionId}")]
+    [ProducesResponseType(typeof(AgentDescriptor), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AgentDescriptor>> PutExtensionConfig(
+        string agentId,
+        string extensionId,
+        [FromBody] System.Text.Json.JsonElement config,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseAgentId(agentId, out var typedAgentId, out var routeError))
+            return BadRequest(new { error = routeError });
+        if (string.IsNullOrWhiteSpace(extensionId) || extensionId.Length > 128)
+            return BadRequest(new { error = "Extension ID must be between 1 and 128 characters." });
+        if (config.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return BadRequest(new { error = "Extension configuration must be a JSON object." });
+
+        var previous = _registry.Get(typedAgentId!.Value);
+        if (previous is null)
+            return NotFound();
+
+        var extensions = new Dictionary<string, System.Text.Json.JsonElement>(
+            previous.ExtensionConfig,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [extensionId] = config.Clone()
+        };
+        return await Update(
+            agentId,
+            previous with { ExtensionConfig = extensions },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Revokes one extension grant without changing any unrelated agent property or extension.
+    /// </summary>
+    [HttpDelete("{agentId}/extensions/{extensionId}")]
+    [ProducesResponseType(typeof(AgentDescriptor), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AgentDescriptor>> DeleteExtensionConfig(
+        string agentId,
+        string extensionId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseAgentId(agentId, out var typedAgentId, out var routeError))
+            return BadRequest(new { error = routeError });
+        if (string.IsNullOrWhiteSpace(extensionId) || extensionId.Length > 128)
+            return BadRequest(new { error = "Extension ID must be between 1 and 128 characters." });
+
+        var previous = _registry.Get(typedAgentId!.Value);
+        if (previous is null)
+            return NotFound();
+
+        var extensions = new Dictionary<string, System.Text.Json.JsonElement>(
+            previous.ExtensionConfig,
+            StringComparer.OrdinalIgnoreCase);
+        extensions.Remove(extensionId);
+        return await Update(
+            agentId,
+            previous with { ExtensionConfig = extensions },
+            cancellationToken);
     }
 
     /// <summary>
@@ -252,16 +340,23 @@ public sealed class AgentsController : ControllerBase
             });
         }
 
+        var typedAgentId = AgentId.From(agentId);
+        var previous = _registry.Get(typedAgentId);
+        if (previous is null)
+            return NotFound();
+
+        // Defaults are materialized by the server from agents.defaults and are never client-owned.
+        descriptor = descriptor with { DefaultExtensionConfig = previous.DefaultExtensionConfig };
+
         // #2065: reject incomplete descriptors before any mutation so an update cannot silently
         // clear persisted required properties.
         var validationErrors = BotNexus.Gateway.Agents.AgentDescriptorValidator.ValidateForConfig(descriptor, null, _modelRegistry);
         if (validationErrors.Count > 0)
             return BadRequest(new { error = string.Join(" ", validationErrors) });
 
-        var typedAgentId = AgentId.From(agentId);
-        var previous = _registry.Get(typedAgentId);
-        if (previous is null)
-            return NotFound();
+        var extensionScopeErrors = ValidateExtensionConfigurationScopes(previous, descriptor);
+        if (extensionScopeErrors.Count > 0)
+            return BadRequest(new { error = string.Join(" ", extensionScopeErrors) });
 
         return await PersistCommitAndProvisionAsync(agentId, typedAgentId, descriptor, previous, cancellationToken);
     }
@@ -272,7 +367,7 @@ public sealed class AgentsController : ControllerBase
     /// </summary>
     /// <remarks>
     /// This exists because <see cref="Update"/> is a whole-descriptor REPLACE. Properties a caller
-    /// does not model bind as their defaults and are then removed from config.json by the writer,
+    /// does not model bind as their defaults and are then removed from the platform configuration,
     /// so a quick-edit surface that sent only persona fields would silently delete ToolIds, Memory,
     /// Heartbeat and the rest - and would 400 first, because AgentId, DisplayName, ModelId and
     /// ApiProvider are <c>required</c> and the validator also demands IsolationStrategy.
@@ -361,7 +456,7 @@ public sealed class AgentsController : ControllerBase
         if (!wasUpdated)
         {
             // Concurrently removed between the Get and the Update; restore config to match.
-            await CompensateConfigDeleteAsync(agentId, cancellationToken);
+            await CompensateConfigDeleteAsync(typedAgentId, cancellationToken);
             return NotFound();
         }
 
@@ -412,7 +507,7 @@ public sealed class AgentsController : ControllerBase
         // 1) Delete config first. If this fails the registry still holds the agent (no divergence).
         try
         {
-            await _configurationWriter.DeleteAsync(agentId, cancellationToken);
+            await _configurationWriter.DeleteAsync(typedAgentId, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -533,6 +628,13 @@ public sealed class AgentsController : ControllerBase
     [HttpPost("{agentId}/sessions/{sessionId}/stop")]
     public async Task<ActionResult> StopInstance(string agentId, string sessionId, CancellationToken cancellationToken)
     {
+        if (_sessions is null)
+            return NotFound();
+        var clientWriteFailure = await ClientConversationWriteGuard.CheckSessionAsync(this, _conversations,
+            await _sessions.GetAsync(SessionId.From(sessionId), cancellationToken), AgentId.From(agentId), cancellationToken);
+        if (clientWriteFailure is not null)
+            return clientWriteFailure;
+
         var typedAgentId = AgentId.From(agentId);
         var typedSessionId = SessionId.From(sessionId);
         await _supervisor.StopAsync(typedAgentId, typedSessionId, cancellationToken);
@@ -569,7 +671,8 @@ public sealed class AgentsController : ControllerBase
         var diag = (handle as IAgentHandleInspector)?.GetContextDiagnostics();
         if (diag is null) return NotFound("Handle does not support diagnostics.");
         var window = (handle as IAgentHandleInspector)?.GetContextWindowTokens();
-        return Ok(BuildContextResponse(agentId, sessionId, diag, window));
+        var budget = (handle as IAgentHandleInspector)?.GetContextBudgetDiagnostics();
+        return Ok(BuildContextResponse(agentId, sessionId, diag, window, budget));
     }
 
     /// <summary>
@@ -623,18 +726,26 @@ public sealed class AgentsController : ControllerBase
     /// <param name="contextWindowTokens">
     /// The resolved context window in tokens, or <see langword="null"/> when unresolvable.
     /// </param>
+    /// <param name="contextBudget">
+    /// The handle's source-backed binding snapshot, when available. Its working budget is the
+    /// denominator; the legacy window remains supported for inspectors without provenance.
+    /// </param>
     public static object BuildContextResponse(
         string agentId,
         string sessionId,
         ContextDiagnostics diag,
-        int? contextWindowTokens = null)
+        int? contextWindowTokens = null,
+        ContextBudgetDiagnostics? contextBudget = null)
     {
+        if (contextBudget is not null)
+            contextWindowTokens = contextBudget.EffectiveWorkingBudgetTokens;
         return new
         {
             agentId,
             sessionId,
             totalEstimatedTokens = diag.TotalEstimatedTokens,
             contextWindowTokens,
+            contextBudget,
             usagePercent = contextWindowTokens is > 0
                 ? Math.Round((double)diag.TotalEstimatedTokens / contextWindowTokens.Value * 100, 1)
                 : (double?)null,
@@ -683,13 +794,40 @@ public sealed class AgentsController : ControllerBase
         var diag = (handle as IAgentHandleInspector)?.GetContextDiagnostics();
         if (diag is null) return NotFound("Handle does not support diagnostics.");
         var logDir = Path.Combine(BotNexusHome.ResolveHomePath(), "logs");
+        var exportIdentifier = $"context-export-{Guid.NewGuid():N}.json";
+        var filePath = BuildContextExportPath(logDir, exportIdentifier);
         Directory.CreateDirectory(logDir);
-        var fileName = $"context-export-{agentId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json";
-        var filePath = Path.Combine(logDir, fileName);
         System.IO.File.WriteAllText(
             filePath,
             System.Text.Json.JsonSerializer.Serialize(diag, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        return Ok(new { exported = filePath });
+        return Ok(new { exported = exportIdentifier });
+    }
+
+    /// <summary>
+    /// Resolves a host-generated context-export identifier beneath the configured logs directory.
+    /// </summary>
+    public static string BuildContextExportPath(string logDirectory, string exportIdentifier)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exportIdentifier);
+
+        if (exportIdentifier.IndexOfAny(['/', '\\']) >= 0
+            || !string.Equals(Path.GetFileName(exportIdentifier), exportIdentifier, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Context export identifier must be a safe file name.", nameof(exportIdentifier));
+        }
+
+        var fullLogDirectory = Path.GetFullPath(logDirectory);
+        var directoryPrefix = Path.EndsInDirectorySeparator(fullLogDirectory)
+            ? fullLogDirectory
+            : fullLogDirectory + Path.DirectorySeparatorChar;
+        var fullExportPath = Path.GetFullPath(Path.Combine(fullLogDirectory, exportIdentifier));
+        if (!fullExportPath.StartsWith(directoryPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Context export path must remain inside the logs directory.", nameof(exportIdentifier));
+        }
+
+        return fullExportPath;
     }
 
     private IAgentHandle? GetAgentHandle(string agentId, string sessionId)
@@ -703,7 +841,7 @@ public sealed class AgentsController : ControllerBase
     // Compensation: best-effort delete of a just-written config entry when a later lifecycle step
     // fails. A failure to compensate is logged but cannot itself surface a new error - the caller
     // is already returning a 500 for the primary failure.
-    private async Task CompensateConfigDeleteAsync(string agentId, CancellationToken cancellationToken)
+    private async Task CompensateConfigDeleteAsync(AgentId agentId, CancellationToken cancellationToken)
     {
         try
         {
@@ -711,7 +849,7 @@ public sealed class AgentsController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Rollback failed: could not delete persisted config for agent {AgentId} after a lifecycle failure.", agentId);
+            _logger.LogError(ex, "Rollback failed: could not delete persisted config for agent {AgentId} after a lifecycle failure.", agentId.Value);
         }
     }
 
@@ -727,6 +865,19 @@ public sealed class AgentsController : ControllerBase
         {
             _logger.LogError(ex, "Rollback failed: could not restore previous config for agent {AgentId} after a lifecycle failure.", previous.AgentId.Value);
         }
+    }
+
+    private IReadOnlyList<string> ValidateExtensionConfigurationScopes(
+        AgentDescriptor? previous,
+        AgentDescriptor candidate)
+    {
+        if (_extensionLoader is null)
+            return [];
+
+        return ExtensionConfigurationScopeValidator.ValidateAgentChanges(
+            previous,
+            candidate,
+            _extensionLoader.GetLoaded());
     }
 
     private async Task NotifyAgentsChangedBestEffortAsync(string changeType, string? agentId, CancellationToken cancellationToken)

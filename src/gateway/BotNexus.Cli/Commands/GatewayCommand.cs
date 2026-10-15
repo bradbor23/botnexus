@@ -11,10 +11,19 @@ namespace BotNexus.Cli.Commands;
 internal sealed class GatewayCommand
 {
     private readonly IGatewayProcessManager _processManager;
+    private readonly Func<IOsServiceManager?> _serviceManagerFactory;
 
     public GatewayCommand(IGatewayProcessManager processManager)
+        : this(processManager, OsServiceManagerFactory.Create)
+    {
+    }
+
+    internal GatewayCommand(
+        IGatewayProcessManager processManager,
+        Func<IOsServiceManager?> serviceManagerFactory)
     {
         _processManager = processManager;
+        _serviceManagerFactory = serviceManagerFactory;
     }
 
     public Command Build(Option<bool> verboseOption, Option<string?> targetOption)
@@ -49,23 +58,18 @@ internal sealed class GatewayCommand
         });
 
         // Stop command
-        //
-        // `--source` is here because stop has to be able to IDENTIFY the gateway, not only signal
-        // it. Without a repo root there is no binary path, without a binary path the manager's
-        // discovery fallback is unreachable, and a gateway started by anything other than this CLI
-        // - a service unit, a deploy script, a hand-run binary - has no PID file to be found by.
         var stopCommand = new Command("stop", "Stop the gateway process")
         {
             sourceOption
         };
         stopCommand.SetHandler(async context =>
         {
-            var target = context.ParseResult.GetValueForOption(targetOption);
             var source = context.ParseResult.GetValueForOption(sourceOption);
+            var target = context.ParseResult.GetValueForOption(targetOption);
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
-            var home = CliPaths.ResolveTarget(target);
             var repoRoot = CliPaths.ResolveSource(source);
-            context.ExitCode = await StopAsync(home, repoRoot, verbose, context.GetCancellationToken());
+            var home = CliPaths.ResolveTarget(target);
+            context.ExitCode = await StopAsync(repoRoot, home, verbose, context.GetCancellationToken());
         });
 
         // Status command
@@ -122,11 +126,18 @@ internal sealed class GatewayCommand
             context.ExitCode = await InstallServiceAsync(repoRoot, home, port, verbose, context.GetCancellationToken());
         });
 
-        var uninstallCommand = new Command("uninstall", "Stop and remove the gateway OS service");
+        var uninstallCommand = new Command("uninstall", "Stop and remove the gateway OS service")
+        {
+            sourceOption
+        };
         uninstallCommand.SetHandler(async context =>
         {
+            var source = context.ParseResult.GetValueForOption(sourceOption);
+            var target = context.ParseResult.GetValueForOption(targetOption);
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
-            context.ExitCode = await UninstallServiceAsync(verbose, context.GetCancellationToken());
+            var repoRoot = CliPaths.ResolveSource(source);
+            var home = CliPaths.ResolveTarget(target);
+            context.ExitCode = await UninstallServiceAsync(repoRoot, home, verbose, context.GetCancellationToken());
         });
 
         command.AddCommand(installCommand);
@@ -169,11 +180,11 @@ internal sealed class GatewayCommand
             AnsiConsole.WriteLine();
         }
 
-        ServeCommand.DeployExtensions(repoRoot, home, verbose);
+        await ServeCommand.ReconcileLifecycleAsync(repoRoot, home, verbose, cancellationToken, "gateway");
 
         // The gateway binds gateway.listenUrl when one is configured, overriding the --urls
         // argument below, so probe where it will actually listen rather than where we asked.
-        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromConfig(port);
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromHome(port, home);
         var options = new GatewayStartOptions(
             ExecutablePath: gatewayDll,
             Arguments: $"--urls \"{gatewayUrl}\" --environment Development",
@@ -275,11 +286,11 @@ internal sealed class GatewayCommand
             return 1;
         }
 
-        ServeCommand.DeployExtensions(repoRoot, home, verbose);
+        await ServeCommand.ReconcileLifecycleAsync(repoRoot, home, verbose, cancellationToken, "gateway");
 
         // The gateway binds gateway.listenUrl when one is configured, overriding the --urls
         // argument below, so probe where it will actually listen rather than where we asked.
-        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromConfig(port);
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromHome(port, home);
         var lastExitCode = 0;
 
         while (true)
@@ -305,8 +316,13 @@ internal sealed class GatewayCommand
             using var process = System.Diagnostics.Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start Gateway process.");
 
-            await process.WaitForExitAsync(cancellationToken);
-            lastExitCode = process.ExitCode;
+            lastExitCode = await ForegroundGatewayLifecycle.WaitForExitAsync(
+                process,
+                _processManager,
+                home,
+                gatewayDll,
+                gatewayUrl,
+                cancellationToken);
 
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine($"[dim]Gateway exited (code [yellow]{lastExitCode}[/]).[/]");
@@ -321,10 +337,21 @@ internal sealed class GatewayCommand
         return lastExitCode;
     }
 
-    private async Task<int> StopAsync(string home, string repoRoot, bool verbose, CancellationToken cancellationToken)
+    /// <summary>
+    /// The gateway binary this CLI would have built. Delegates to <see cref="CliPaths.GatewayBinary"/>
+    /// so there is one definition of that path: three call sites derived it independently once, only
+    /// one of them passed it to <c>StopAsync</c>, and a live gateway was reported "not running".
+    /// </summary>
+    internal static string ResolveGatewayBinaryPath(string repoRoot)
+        => CliPaths.GatewayBinary(repoRoot);
+
+    private async Task<int> StopAsync(string repoRoot, string home, bool verbose, CancellationToken cancellationToken)
     {
         var interactive = AnsiConsole.Profile.Capabilities.Interactive;
-        var gatewayBinary = CliPaths.GatewayBinary(repoRoot);
+        var gatewayBinary = ResolveGatewayBinaryPath(repoRoot);
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromHome(
+            fallbackPort: 5005,
+            homePath: home);
         GatewayStopResult result;
 
         if (interactive)
@@ -335,36 +362,37 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Stopping gateway...", async ctx =>
                 {
-                    capturedResult = await _processManager.StopAsync(home, gatewayBinary, cancellationToken);
+                    capturedResult = await _processManager.StopAsync(home, gatewayBinary, cancellationToken, gatewayUrl);
                 });
             result = capturedResult;
         }
         else
         {
-            result = await _processManager.StopAsync(home, gatewayBinary, cancellationToken);
+            result = await _processManager.StopAsync(home, gatewayBinary, cancellationToken, gatewayUrl);
         }
 
-        if (!result.Success)
+        if (result.Outcome == GatewayStopOutcome.Stopped)
         {
-            AnsiConsole.MarkupLine($"[red]✗[/] {CliText.SafeDisplay(result.Message ?? "Failed to stop gateway")}");
-            return 1;
+            AnsiConsole.MarkupLine($"[green]✓[/] {CliText.SafeDisplay(result.Message ?? "Gateway stopped")}");
+            return 0;
         }
 
-        // A tick for "stopped" and a tick for "there was nothing to stop" are not the same claim.
-        // Reporting both as ✓ is what let a redeploy proceed against a gateway still holding
-        // extension assemblies mapped. Exit code stays 0 either way: stop is idempotent by design,
-        // and "already stopped" is a success for every caller that just wants it not running.
-        var marker = result.Outcome == GatewayStopOutcome.NotRunning ? "[yellow]○[/]" : "[green]✓[/]";
-        AnsiConsole.MarkupLine($"{marker} {CliText.SafeDisplay(result.Message ?? "Gateway stopped")}");
-        return 0;
+        var message = result.Message ?? (result.Outcome == GatewayStopOutcome.NotRunning
+            ? "No running gateway could be identified"
+            : "Failed to stop gateway");
+        AnsiConsole.MarkupLine($"[red]✗[/] {CliText.SafeDisplay(message)}");
+        return 1;
     }
 
     private async Task<int> StatusAsync(string home, string repoRoot, bool verbose, CancellationToken cancellationToken)
     {
+        var interactive = AnsiConsole.Profile.Capabilities.Interactive;
         // Pass the binary path, exactly as StopAsync does since #102. Omitting it is what made the
         // #2772 discovery fallback unreachable from this command.
-        var gatewayBinary = CliPaths.GatewayBinary(repoRoot);
-        var interactive = AnsiConsole.Profile.Capabilities.Interactive;
+        var gatewayBinaryPath = ResolveGatewayBinaryPath(repoRoot);
+        var healthUrl = GatewayProbeUrlResolver.ResolveFromHome(
+            fallbackPort: 5005,
+            homePath: home) + "/health";
         GatewayStatus status;
 
         if (interactive)
@@ -375,13 +403,13 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Checking gateway status...", async ctx =>
                 {
-                    capturedStatus = await _processManager.GetStatusAsync(home, gatewayBinary, cancellationToken);
+                    capturedStatus = await _processManager.GetStatusAsync(home, gatewayBinaryPath, healthUrl, cancellationToken);
                 });
             status = capturedStatus;
         }
         else
         {
-            status = await _processManager.GetStatusAsync(home, gatewayBinary, cancellationToken);
+            status = await _processManager.GetStatusAsync(home, gatewayBinaryPath, healthUrl, cancellationToken);
         }
 
         AnsiConsole.WriteLine();
@@ -468,14 +496,17 @@ internal sealed class GatewayCommand
     private async Task<int> RestartAsync(string repoRoot, string home, int port, bool verbose, CancellationToken cancellationToken)
     {
         var interactive = AnsiConsole.Profile.Capabilities.Interactive;
+        var gatewayBinary = ResolveGatewayBinaryPath(repoRoot);
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromHome(
+            fallbackPort: port,
+            homePath: home);
 
         // Stop
         //
         // The binary path matters more here than in `stop`: a restart that believes nothing was
         // running goes straight on to redeploy extensions, and a live gateway still has them
         // memory-mapped. That is the `IOException: ... <ext>.pdb ... used by another process`
-        // failure, and it leaves a half-updated deployment behind.
-        var gatewayBinary = CliPaths.GatewayBinary(repoRoot);
+        // failure, and it leaves a half-updated deployment behind. (Resolved above.)
         GatewayStopResult stopResult;
         if (interactive)
         {
@@ -485,22 +516,29 @@ internal sealed class GatewayCommand
                 .SpinnerStyle(Style.Parse("blue"))
                 .StartAsync("Stopping gateway...", async ctx =>
                 {
-                    capturedStop = await _processManager.StopAsync(home, gatewayBinary, cancellationToken);
+                    capturedStop = await _processManager.StopAsync(home, gatewayBinary, cancellationToken, gatewayUrl);
                 });
             stopResult = capturedStop;
         }
         else
         {
             AnsiConsole.MarkupLine("[blue][[gateway]][/] Stopping gateway...");
-            stopResult = await _processManager.StopAsync(home, gatewayBinary, cancellationToken);
+            stopResult = await _processManager.StopAsync(home, gatewayBinary, cancellationToken, gatewayUrl);
         }
 
-        if (stopResult.Success && stopResult.Outcome == GatewayStopOutcome.NotRunning)
-            AnsiConsole.MarkupLine($"[yellow]○[/] {CliText.SafeDisplay(stopResult.Message ?? "No gateway was running")}");
-        else if (stopResult.Success)
+        if (stopResult.Outcome == GatewayStopOutcome.Stopped)
+        {
             AnsiConsole.MarkupLine("[green]✓[/] Gateway stopped");
+        }
+        else if (stopResult.Outcome == GatewayStopOutcome.NotRunning)
+        {
+            AnsiConsole.MarkupLine("[dim]○ Gateway is not running[/]");
+        }
         else
-            AnsiConsole.MarkupLine($"[yellow]⚠[/] Stop result: {CliText.SafeDisplay(stopResult.Message ?? "unknown")}");
+        {
+            AnsiConsole.MarkupLine($"[red]✗[/] Stop failed: {CliText.SafeDisplay(stopResult.Message ?? "unknown")}");
+            return 1;
+        }
 
         await Task.Delay(1000, cancellationToken);
 
@@ -538,7 +576,8 @@ internal sealed class GatewayCommand
             return 1;
         }
 
-        var result = await manager.InstallAsync(gatewayDll, home, port, cancellationToken);
+        var serviceExecutable = GatewayProcessManager.ResolveApphostPath(gatewayDll) ?? gatewayDll;
+        var result = await manager.InstallAsync(serviceExecutable, home, port, cancellationToken);
 
         if (result.Success)
         {
@@ -546,7 +585,7 @@ internal sealed class GatewayCommand
             if (verbose)
             {
                 AnsiConsole.MarkupLine($"  [dim]Manager:[/] {manager.ServiceManagerName}");
-                AnsiConsole.MarkupLine($"  [dim]Binary:[/]  {CliText.SafeDisplay(gatewayDll)}");
+                AnsiConsole.MarkupLine($"  [dim]Binary:[/]  {CliText.SafeDisplay(serviceExecutable)}");
                 AnsiConsole.MarkupLine($"  [dim]Home:[/]    {CliText.SafeDisplay(home)}");
                 AnsiConsole.MarkupLine($"  [dim]Port:[/]    {port}");
             }
@@ -557,18 +596,32 @@ internal sealed class GatewayCommand
         return 1;
     }
 
-    private static async Task<int> UninstallServiceAsync(bool verbose, CancellationToken cancellationToken)
+    private async Task<int> UninstallServiceAsync(
+        string repoRoot,
+        string home,
+        bool verbose,
+        CancellationToken cancellationToken)
     {
-        var manager = OsServiceManagerFactory.Create();
+        var manager = _serviceManagerFactory();
         if (manager is null)
         {
             AnsiConsole.MarkupLine("[red]\u2717[/] OS service management is not supported on this platform.");
             return 1;
         }
 
-        AnsiConsole.MarkupLine($"[blue][[gateway]][/] Removing {manager.ServiceManagerName} service...");
+        var gatewayBinary = ResolveGatewayBinaryPath(repoRoot);
+        var gatewayUrl = GatewayProbeUrlResolver.ResolveFromHome(
+            fallbackPort: GatewayDefaults.ListenPort,
+            homePath: home);
 
-        var result = await manager.UninstallAsync(cancellationToken);
+        AnsiConsole.MarkupLine($"[blue][[gateway]][/] Stopping gateway before removing {manager.ServiceManagerName} service...");
+        var lifecycle = new GatewayServiceLifecycle(_processManager);
+        var result = await lifecycle.StopAndRemoveAsync(
+            manager,
+            home,
+            gatewayBinary,
+            gatewayUrl,
+            cancellationToken);
 
         if (result.Success)
         {

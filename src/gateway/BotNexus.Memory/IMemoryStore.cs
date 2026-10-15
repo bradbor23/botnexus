@@ -48,6 +48,18 @@ public interface IMemoryStore : IAsyncDisposable
 
     Task DeleteAsync(string id, CancellationToken ct = default);
 
+    /// <summary>Atomically replaces mutable fields only when the stored revision matches.</summary>
+    Task<MemoryMutationResult> UpdateAsync(string id, int expectedRevision, MemoryUpdate update, CancellationToken ct = default)
+        => Task.FromException<MemoryMutationResult>(new NotSupportedException("This memory store does not support revision-aware updates."));
+
+    /// <summary>Atomically archives a live record only when the stored revision matches.</summary>
+    Task<MemoryMutationResult> ArchiveAsync(string id, int expectedRevision, CancellationToken ct = default)
+        => Task.FromException<MemoryMutationResult>(new NotSupportedException("This memory store does not support revision-aware archive."));
+
+    /// <summary>Atomically deletes a record only when the stored revision matches.</summary>
+    Task<MemoryMutationResult> DeleteAsync(string id, int expectedRevision, CancellationToken ct = default)
+        => Task.FromException<MemoryMutationResult>(new NotSupportedException("This memory store does not support revision-aware delete."));
+
     /// <summary>
     /// Deletes every memory row scoped to <paramref name="sessionId"/> and returns the number of
     /// rows removed (issue #2956).
@@ -112,4 +124,29 @@ public interface IMemoryStore : IAsyncDisposable
 
     Task ClearAsync(CancellationToken ct = default);
     Task<MemoryStoreStats> GetStatsAsync(CancellationToken ct = default);
+
+    /// <summary>Creates or returns the durable job that converges live rows on a target identity.</summary>
+    Task<ReembeddingJob> EnsureReembeddingJobAsync(EmbeddingIdentity targetIdentity, CancellationToken ct = default)
+        => Task.FromException<ReembeddingJob>(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Returns the current durable re-embedding job, or null before one has been ensured.</summary>
+    Task<ReembeddingJob?> GetReembeddingJobAsync(CancellationToken ct = default)
+        => Task.FromException<ReembeddingJob?>(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Leases the oldest pending rows for bounded worker processing.</summary>
+    Task<IReadOnlyList<ReembeddingItem>> ClaimReembeddingBatchAsync(string jobId, int batchSize, CancellationToken ct = default)
+        => Task.FromException<IReadOnlyList<ReembeddingItem>>(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Stores a generated vector only while the revision and opaque claim generation still own the row.</summary>
+    Task CompleteReembeddingItemAsync(string jobId, string memoryId, int claimedRevision, string claimToken, byte[] embedding, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Records a bounded failure only while the revision and opaque claim generation still own the row.</summary>
+    Task FailReembeddingItemAsync(string jobId, string memoryId, int claimedRevision, string claimToken, string error, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Persists a request to stop new claims while retaining progress.</summary>
+    Task PauseReembeddingJobAsync(string jobId, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Returns a paused job to claimable state.</summary>
+    Task ResumeReembeddingJobAsync(string jobId, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("This memory store does not support re-embedding."));
+    /// <summary>Permanently stops claims for the current job.</summary>
+    Task CancelReembeddingJobAsync(string jobId, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("This memory store does not support re-embedding."));
 }

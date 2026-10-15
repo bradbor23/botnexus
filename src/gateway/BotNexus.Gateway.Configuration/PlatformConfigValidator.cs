@@ -21,6 +21,11 @@ public static class PlatformConfigValidator
 {
     private const int SupportedConfigVersion = 1;
 
+    internal const string LegacyPromptFilesWarning =
+        "agents.*.systemPromptFile and agents.*.systemPromptFiles are deprecated (#2941). " +
+        "Move instructions to standard workspace instruction files, WORLD.md, an inline system prompt, " +
+        "conversation instructions, or model-specific variants. The legacy keys are ignored.";
+
     /// <summary>Validates non-fatal configuration concerns and returns warnings.</summary>
     public static IReadOnlyList<string> ValidateWarnings(PlatformConfig config)
     {
@@ -37,6 +42,7 @@ public static class PlatformConfigValidator
 
         ValidateLocationWarnings(config.Gateway?.Locations, warnings);
         ValidateProviderDeprecationWarnings(config.Providers, warnings);
+        ValidateAgentDeprecationWarnings(config.Agents, warnings);
 
         return warnings;
     }
@@ -295,6 +301,9 @@ public static class PlatformConfigValidator
 
         List<string> errors = [];
 
+        if (config.World?.CompactionTokenCeiling is <= 0)
+            errors.Add("world.compactionTokenCeiling must be positive or null.");
+
         var listenUrl = config.Gateway?.ListenUrl;
         if (!string.IsNullOrWhiteSpace(listenUrl))
         {
@@ -337,10 +346,14 @@ public static class PlatformConfigValidator
         ValidateChannels(config.Channels, errors);
         ValidateAgents(config.Agents, errors);
         ValidateAgentDefaults(config.AgentDefaults, errors);
-        ValidateApiKeys(config.Gateway?.ApiKeys, errors);
+        ValidateGatewayCredentials(config, errors);
         ValidatePromptTemplates(config.PromptTemplates, errors);
         ValidateCron(config.Cron, errors);
         ValidateSecretRedaction(config.Gateway?.SecretRedaction, errors);
+        if (config.Gateway?.LocalChildEnvironmentPassThrough is { } passThrough
+            && passThrough.Any(name => string.IsNullOrWhiteSpace(name)
+                || name.Any(c => char.IsWhiteSpace(c) || c is '\0' or '=' or '*' or '?' or '[' or ']')))
+            errors.Add("gateway.localChildEnvironmentPassThrough must contain exact environment variable names, not patterns or assignments.");
 
         return errors;
     }
@@ -506,6 +519,17 @@ public static class PlatformConfigValidator
     /// warning naming its nested replacement path. A warning rather than an error is the whole
     /// compatibility bargain: the old document still WORKS, it just says where it is going.
     /// </summary>
+    private static void ValidateAgentDeprecationWarnings(
+        Dictionary<string, AgentDefinitionConfig>? agents,
+        List<string> warnings)
+    {
+        if (agents?.Values.Any(agent => agent is not null &&
+                agent.LegacyPromptFileKeysPresent) == true)
+        {
+            warnings.Add(LegacyPromptFilesWarning);
+        }
+    }
+
     private static void ValidateProviderDeprecationWarnings(
         Dictionary<string, ProviderConfig>? providers,
         List<string> warnings)
@@ -652,6 +676,9 @@ public static class PlatformConfigValidator
                 continue;
             }
 
+            if (agentConfig.CompactionTokenCeiling is <= 0)
+                errors.Add($"agents.{agentId}.compactionTokenCeiling must be positive or null.");
+
             if (string.IsNullOrWhiteSpace(agentConfig.Provider))
                 errors.Add($"agents.{agentId}.provider is required (example: 'copilot').");
 
@@ -730,6 +757,31 @@ public static class PlatformConfigValidator
         value.Equals("summary", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("none", StringComparison.OrdinalIgnoreCase);
 
+    private static void ValidateGatewayCredentials(PlatformConfig config, List<string> errors)
+    {
+        if (GatewayApiKeyRules.IsExplicitPlaceholder(config.ApiKey))
+        {
+            errors.Add(
+                $"apiKey {GatewayApiKeyRules.PlaceholderValidationMarker} "
+                + "Supply a valid gateway API key or remove the setting for intentional development mode.");
+        }
+
+        ValidateApiKeys(config.Gateway?.ApiKeys, errors);
+
+        if (config.Gateway?.Satellites is null)
+            return;
+
+        foreach (var (satelliteId, satellite) in config.Gateway.Satellites)
+        {
+            if (satellite.Enabled && GatewayApiKeyRules.IsExplicitPlaceholder(satellite.ApiKey))
+            {
+                errors.Add(
+                    $"gateway.satellites.{satelliteId}.apiKey {GatewayApiKeyRules.PlaceholderValidationMarker} "
+                    + "Supply a valid satellite API key.");
+            }
+        }
+    }
+
     private static void ValidateApiKeys(Dictionary<string, ApiKeyConfig>? apiKeys, List<string> errors)
     {
         if (apiKeys is null)
@@ -747,6 +799,12 @@ public static class PlatformConfigValidator
 
             if (string.IsNullOrWhiteSpace(keyConfig.ApiKey))
                 errors.Add($"{keyPath}.apiKey is required.");
+            else if (GatewayApiKeyRules.IsExplicitPlaceholder(keyConfig.ApiKey))
+            {
+                errors.Add(
+                    $"{keyPath}.apiKey {GatewayApiKeyRules.PlaceholderValidationMarker} "
+                    + "Supply a valid API key.");
+            }
 
             if (string.IsNullOrWhiteSpace(keyConfig.TenantId))
                 errors.Add($"{keyPath}.tenantId is required.");

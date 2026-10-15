@@ -106,16 +106,15 @@ public sealed class PortalLoadServiceTests
         // Assert: the service should not have a 404-related error.
         // It may have a hub connection error (since we're not mocking the real hub),
         // but the critical thing is the 404 did NOT abort initialization.
-        // The stale cron projection should have been removed from the store.
         var agent = _store.GetAgent("agent-1");
         Assert.NotNull(agent);
 
-        // The stale virtual cron conversation must be removed after 404
-        var cronConvId = $"cron-session:{staleCronSessionId}";
-        Assert.False(agent.Conversations.ContainsKey(cronConvId),
-            "Stale cron-session projection should be removed after 404 - it can never be opened.");
-        // Selection must not dangle at the conversation that was just dropped.
-        Assert.NotEqual(cronConvId, agent.ActiveConversationId);
+        // Conversation identity is route-owned (upstream #4501/#4577): initialization no longer
+        // selects a conversation or fetches its history, so there is nothing here that can 404.
+        // The stale projection is dropped the moment someone opens it - see
+        // AgentInteractionServiceTests.SelectConversation_when_a_cron_projection_history_404s_*.
+        await _restClient.DidNotReceive().GetSessionHistoryAsync(
+            staleCronSessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         // The history 404 must not have reached the top-level catch. LoadError is set here because
         // the offline handler refuses the hub connect, which is expected and is NOT this 404 - so
@@ -124,11 +123,8 @@ public sealed class PortalLoadServiceTests
         Assert.DoesNotContain("404", _service.LoadError);
         Assert.DoesNotContain("Not Found", _service.LoadError);
         Assert.Contains("offline by design", _service.LoadError);
-
-        // The 404 really fired. Without this the test could go green again by never reaching the
-        // path, which is exactly how it failed silently between #2305 and #156.
-        await _restClient.Received().GetSessionHistoryAsync(
-            staleCronSessionId, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // The 404 itself is exercised, and asserted to fire, in AgentInteractionServiceTests: this
+        // test used to prove it by requiring the init-time fetch, which no longer exists.
     }
 
     /// <summary>
@@ -169,7 +165,10 @@ public sealed class PortalLoadServiceTests
         Assert.DoesNotContain("Not Found", _service.LoadError);
         Assert.Contains("offline by design", _service.LoadError);
 
-        await _restClient.Received().GetHistoryAsync(
+        // Conversation identity is route-owned (upstream #4501/#4577): initialization no longer
+        // fetches history for a selected conversation, so a 404 cannot reach it. The removal of a
+        // 404ing conversation happens when it is opened - see AgentInteractionServiceTests.
+        await _restClient.DidNotReceive().GetHistoryAsync(
             "conv-1", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -200,7 +199,7 @@ public sealed class PortalLoadServiceTests
     }
 
     [Fact]
-    public async Task InitializeAsync_RefreshesStoreFromApiInsteadOfUsingPreexistingConversationState()
+    public async Task InitializeAsync_RefreshesRosterWithoutImplicitlyLoadingConversationHistory()
     {
         _store.UpsertAgent(new AgentState
         {
@@ -244,7 +243,7 @@ public sealed class PortalLoadServiceTests
         await _service.InitializeAsync("http://localhost:5000/hub/gateway");
 
         await _restClient.Received(1).GetConversationsAsync("agent-1", Arg.Any<CancellationToken>());
-        await _restClient.Received(1).GetHistoryAsync("fresh-conv", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await _restClient.DidNotReceive().GetHistoryAsync("fresh-conv", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         var agent = _store.GetAgent("agent-1");
         Assert.NotNull(agent);

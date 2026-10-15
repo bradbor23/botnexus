@@ -75,6 +75,7 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
 
             try
             {
+                ct.ThrowIfCancellationRequested();
                 await StreamCoreAsync(model, context, options, stream,
                     contentBlocks, usage,
                     updatedUsage => usage = updatedUsage,
@@ -104,7 +105,7 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
                 stream.End(msg);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             }
-        }, ct);
+        }); // The producer must run even when cancelled so it can emit and complete the aborted stream.
 
         return stream;
     }
@@ -129,6 +130,7 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
             MaxRetryDelayMs = baseOptions.MaxRetryDelayMs,
             Metadata = baseOptions.Metadata,
             StreamSetupTimeoutMs = baseOptions.StreamSetupTimeoutMs,
+            StreamIdleTimeoutMs = baseOptions.StreamIdleTimeoutMs,
         };
 
         if (options?.Reasoning is { } reasoning)
@@ -256,7 +258,12 @@ public sealed partial class AnthropicProvider(HttpClient httpClient, ISecretReda
         // Bound the untrusted SSE body before a byte reaches the parser: every byte the StreamReader
         // consumes flows through the ByteCountingStream, so an unbounded body or a never-terminating
         // data: line trips the cap regardless of buffering (#1685). Caller owns the inner stream.
-        using var boundedStream = new ByteCountingStream(responseStream, MaxResponseBytes, MaxFrameBytes, leaveOpen: true);
+        using var boundedStream = new ByteCountingStream(
+            responseStream,
+            MaxResponseBytes,
+            MaxFrameBytes,
+            leaveOpen: true,
+            idleTimeout: StreamIdleTimeout.Resolve(options));
         using var reader = new StreamReader(boundedStream, Encoding.UTF8);
 
         // Cancel the setup-phase timeout once the first token arrives.

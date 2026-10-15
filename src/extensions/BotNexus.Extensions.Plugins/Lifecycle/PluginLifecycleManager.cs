@@ -41,6 +41,7 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
     private readonly PluginExtensionDeployer _extensionDeployer;
     private readonly string? _extensionsRoot;
     private readonly ILogger<PluginLifecycleManager> _logger;
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
 
     /// <summary>Creates a manager over a plugin root.</summary>
     /// <param name="store">Installed-plugin record store, which also defines the plugin root.</param>
@@ -99,6 +100,21 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await InstallCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
+    private async Task<PluginOperationResult> InstallCoreAsync(
+        PluginInstallRequest request,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(request.Source))
         {
             return PluginOperationResult.Failure(request.Name ?? string.Empty, "source", "A plugin source is required.");
@@ -257,7 +273,19 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
     public async Task<PluginOperationResult> UpdateAsync(string name, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await UpdateCoreAsync(name, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
 
+    private async Task<PluginOperationResult> UpdateCoreAsync(string name, CancellationToken cancellationToken)
+    {
         var existing = _store.Find(name);
         if (existing is null)
         {
@@ -354,7 +382,19 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
     public PluginOperationResult Remove(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        _mutationGate.Wait();
+        try
+        {
+            return RemoveCore(name);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
 
+    private PluginOperationResult RemoveCore(string name)
+    {
         var existing = _store.Find(name);
         if (existing is null)
         {
@@ -396,7 +436,19 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
     public PluginOperationResult SetUpdatePreference(string name, bool updatesEnabled)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        _mutationGate.Wait();
+        try
+        {
+            return SetUpdatePreferenceCore(name, updatesEnabled);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
 
+    private PluginOperationResult SetUpdatePreferenceCore(string name, bool updatesEnabled)
+    {
         var existing = _store.Find(name);
         if (existing is null)
         {

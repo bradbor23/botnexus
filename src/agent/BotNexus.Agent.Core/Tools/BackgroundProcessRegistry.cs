@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Text;
 
 namespace BotNexus.Agent.Core.Tools;
@@ -34,9 +33,8 @@ public sealed class BackgroundProcessRegistry
             if (_processes.TryGetValue(process.Pid, out var previous))
             {
                 if (ReferenceEquals(previous.Process, process)) return;
-                if (previous.Process.IsRunning || previous.Process.KillUnconfirmed)
+                if (!previous.Process.TryReleaseCompleted())
                     throw new InvalidOperationException("PID is still owned by a tracked process.");
-                previous.Process.Dispose();
             }
             _processes[process.Pid] = (owner, process);
             ReapCore();
@@ -68,7 +66,7 @@ public sealed class BackgroundProcessRegistry
 
     private void ReapCore()
     {
-        var exited = _processes.Values.Where(p => p.Process.IsComplete && !p.Process.KillUnconfirmed)
+        var exited = _processes.Values.Where(p => p.Process.IsTerminal && !p.Process.KillUnconfirmed)
             .OrderBy(p => p.Process.StartedAt).ToArray();
         foreach (var entry in exited.Take(Math.Max(0, exited.Length - _maxExitedRetained)))
         {
@@ -115,20 +113,50 @@ public class BackgroundProcess : IDisposable
     private readonly BackgroundOutputBuffer _output = new();
     private readonly Task _completion;
     private readonly object _lifecycle = new();
+    private readonly SemaphoreSlim _inputGate = new(1, 1);
     private volatile bool _disposed;
+    private int _captureFailures;
+    private int _captureInterruptions;
     private int? _exitCode;
 
     /// <summary>Adopts a process started by a trusted caller; output must be redirected and unread.</summary>
     public BackgroundProcess(Process process, string command, DateTimeOffset startedAt)
+        : this(process, command, startedAt, GetProcess(process).Id,
+            GetProcess(process).StandardOutput, GetProcess(process).StandardError)
     {
-        _process = process ?? throw new ArgumentNullException(nameof(process));
-        Pid = process.Id;
+    }
+
+    internal BackgroundProcess(
+        Process process,
+        string command,
+        DateTimeOffset startedAt,
+        StreamReader? standardOutput,
+        StreamReader? standardError)
+        : this(process, command, startedAt, GetProcess(process).Id,
+            standardOutput ?? throw new ArgumentNullException(nameof(standardOutput)),
+            standardError ?? throw new ArgumentNullException(nameof(standardError)))
+    {
+    }
+
+    internal BackgroundProcess(
+        Process process,
+        string command,
+        DateTimeOffset startedAt,
+        int pid,
+        StreamReader standardOutput,
+        StreamReader standardError)
+    {
+        _process = GetProcess(process);
+        Pid = pid;
         Command = command;
         StartedAt = startedAt;
         try { ProcessName = process.ProcessName; }
         catch (InvalidOperationException) { ProcessName = "exited"; }
-        _completion = CompleteAsync(DrainAsync(process.StandardOutput), DrainAsync(process.StandardError));
+        _completion = CompleteAsync(DrainAsync(standardOutput), DrainAsync(standardError));
     }
+
+    private static Process GetProcess(Process? process)
+        => process ?? throw new ArgumentNullException(nameof(process));
 
     /// <summary>Captured PID remains available after handle disposal.</summary>
     public int Pid { get; }
@@ -138,8 +166,17 @@ public class BackgroundProcess : IDisposable
     public DateTimeOffset StartedAt { get; }
     /// <summary>Captured OS name for diagnostics after termination.</summary>
     public string ProcessName { get; }
-    /// <summary>True until both process exit and redirected output drains finish.</summary>
-    public bool IsComplete => _completion.IsCompletedSuccessfully;
+    /// <summary>True only when process exit and both redirected output drains completed successfully.</summary>
+    public bool IsComplete => IsTerminal && !OutputCaptureIncomplete;
+    /// <summary>True when process exit and both drain attempts reached a terminal outcome.</summary>
+    public bool IsTerminal => _completion.IsCompletedSuccessfully;
+    /// <summary>True when final output may be partial because a redirected stream could not be drained.</summary>
+    public bool OutputCaptureIncomplete => Volatile.Read(ref _captureFailures) != 0 || Volatile.Read(ref _captureInterruptions) != 0;
+    /// <summary>Stable, content-safe output-integrity state for status and output consumers.</summary>
+    public string OutputCaptureStatus => !IsTerminal ? "capturing"
+        : Volatile.Read(ref _captureFailures) != 0 ? "incomplete (read failure)"
+        : Volatile.Read(ref _captureInterruptions) != 0 ? "incomplete (stream closed during cleanup)"
+        : "complete";
     /// <summary>An unconfirmed kill pins the registration even if the root has exited.</summary>
     public bool KillUnconfirmed { get; private set; }
     /// <summary>Distinguishes normal completion from a requested termination.</summary>
@@ -160,12 +197,23 @@ public class BackgroundProcess : IDisposable
         // Read fixed-size chunks, not ReadLine: one unbroken line must not bypass the memory cap.
         var buffer = new char[4096];
         var decoder = new BackgroundOutputDecoder();
-        while (true)
+        try
         {
-            var count = await reader.ReadAsync(buffer).ConfigureAwait(false);
-            var clean = decoder.Append(buffer.AsSpan(0, count), final: count == 0);
-            lock (_gate) _output.AppendChunk(clean);
-            if (count == 0) return;
+            while (true)
+            {
+                var count = await reader.ReadAsync(buffer).ConfigureAwait(false);
+                var clean = decoder.Append(buffer.AsSpan(0, count), final: count == 0);
+                lock (_gate) _output.AppendChunk(clean);
+                if (count == 0) return;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            Interlocked.Increment(ref _captureInterruptions);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            Interlocked.Increment(ref _captureFailures);
         }
     }
 
@@ -175,14 +223,19 @@ public class BackgroundProcess : IDisposable
         {
             await _process.WaitForExitAsync().ConfigureAwait(false);
             _exitCode = _process.ExitCode;
-            await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
         {
-            // Disposal may close redirected pipes while a drain is pending. Observe both tasks.
-            try { await Task.WhenAll(stdout, stderr).ConfigureAwait(false); }
-            catch (Exception drainError) when (drainError is IOException or ObjectDisposedException or InvalidOperationException) { }
+            Interlocked.Increment(ref _captureInterruptions);
         }
+        catch (IOException)
+        {
+            Interlocked.Increment(ref _captureFailures);
+        }
+
+        // Each drain records its own outcome and returns normally so completion remains a bounded
+        // lifecycle signal rather than silently becoming an output-integrity signal.
+        await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
     }
 
     /// <summary>Waits for exit AND final output; cancellation cancels the wait, not the owned child.</summary>
@@ -205,18 +258,31 @@ public class BackgroundProcess : IDisposable
                 var start = Math.Max(0, count - tailLines.Value);
                 text = string.Join('\n', lines.AsSpan(start, count - start));
             }
-            var banner = _output.FormatBanner();
-            return banner.Length == 0 ? text : $"{banner}\n{text}";
+            var retentionBanner = _output.FormatBanner();
+            var captureBanner = OutputCaptureIncomplete ? $"[output capture {OutputCaptureStatus}]" : string.Empty;
+            var banner = string.Join('\n', new[] { captureBanner, retentionBanner }.Where(value => value.Length != 0));
+            return banner.Length == 0 ? text : text.Length == 0 ? banner : $"{banner}\n{text}";
         }
     }
 
-    /// <summary>Writes interactive input only to the retained child handle, never a PID reattachment.</summary>
-    public void WriteInput(string content)
+    /// <summary>Writes serialized interactive input to the retained child handle, never a PID reattachment.</summary>
+    public async Task WriteInputAsync(string content, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!IsRunning) throw new InvalidOperationException($"Process {Pid} has already exited.");
-        _process.StandardInput.Write(content);
-        _process.StandardInput.Flush();
+
+        await _inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!IsRunning) throw new InvalidOperationException($"Process {Pid} has already exited.");
+            await _process.StandardInput.WriteAsync(content.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await _process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _inputGate.Release();
+        }
     }
 
     /// <summary>Supplied launch input is finite: write it while output drains, then signal EOF.</summary>
@@ -274,7 +340,7 @@ public class BackgroundProcess : IDisposable
     {
         lock (_lifecycle)
         {
-            if (!IsComplete || KillUnconfirmed) return false;
+            if (!IsTerminal || KillUnconfirmed) return false;
             Dispose();
             return _disposed;
         }
@@ -297,30 +363,61 @@ public class BackgroundOutputBuffer
     /// <summary>Appends bounded reader chunks without requiring a newline.</summary>
     public void AppendChunk(string value)
     {
+        if (value.Length == 0) return;
+
+        var previousLength = _buffer.Length;
+        var addedBytes = Encoding.UTF8.GetByteCount(value);
         _buffer.Append(value);
-        var text = _buffer.ToString();
-        // Count the concatenated bounded payload so the encoding owns split-scalar accounting.
-        // Production appends at most 4096 characters; no independent surrogate policy is needed.
-        RetainedBytes = Encoding.UTF8.GetByteCount(text);
+
+        // Correct the one boundary where independently counting the append differs from counting
+        // the concatenation: a UTF-16 surrogate pair split across calls.
+        if (previousLength > 0 && char.IsSurrogatePair(_buffer[previousLength - 1], _buffer[previousLength]))
+            addedBytes -= 2; // Two replacement scalars (3 + 3 bytes) become one supplementary scalar (4 bytes).
+
+        RetainedBytes += addedBytes;
         if (RetainedBytes <= _maxOutputBytes) return;
+
         var cut = 0;
         long shed = 0;
-        while (cut < text.Length && RetainedBytes - shed > _maxOutputBytes)
+        while (cut < _buffer.Length && RetainedBytes - shed > _maxOutputBytes)
         {
-            var width = StringInfo.GetNextTextElementLength(text.AsSpan(cut));
-            shed += Encoding.UTF8.GetByteCount(text.AsSpan(cut, width));
+            var (width, byteCount) = GetScalarSize(cut);
+            shed += byteCount;
             cut += width;
         }
-        var newline = text.IndexOf('\n', cut);
-        if (newline >= cut && newline - cut <= 8192)
+
+        var newlineSearchEnd = Math.Min(_buffer.Length, cut + 8193);
+        var newline = -1;
+        for (var index = cut; index < newlineSearchEnd; index++)
         {
-            shed += Encoding.UTF8.GetByteCount(text.AsSpan(cut, newline + 1 - cut));
-            cut = newline + 1;
+            if (_buffer[index] != '\n') continue;
+            newline = index;
+            break;
+        }
+        if (newline >= cut)
+        {
+            while (cut <= newline)
+            {
+                var (width, byteCount) = GetScalarSize(cut);
+                shed += byteCount;
+                cut += width;
+            }
         }
         _buffer.Remove(0, cut);
         RetainedBytes -= shed;
         DiscardedBytes += shed;
     }
+
+    private (int Width, int ByteCount) GetScalarSize(int index)
+    {
+        var value = _buffer[index];
+        if (index + 1 < _buffer.Length && char.IsSurrogatePair(value, _buffer[index + 1]))
+            return (2, 4);
+        if (char.IsSurrogate(value)) return (1, 3);
+        if (value <= '\x7f') return (1, 1);
+        return value <= '\x7ff' ? (1, 2) : (1, 3);
+    }
+
     /// <summary>Returns the bounded payload without disclosure for byte-accounting callers.</summary>
     public string RawSnapshot() => _buffer.ToString();
     /// <summary>Uses the common head/tail loss contract rather than a local truncation message.</summary>
@@ -375,6 +472,7 @@ public sealed class BackgroundOutputDecoder
             if (c == '\x1b') { _state = EscapeState.Escape; continue; }
             if (c == '\x9b') { _state = EscapeState.Csi; continue; }
             if (c == '\x9d') { _state = EscapeState.String; _osc = true; continue; }
+            if (c is '\x90' or '\x98' or '\x9e' or '\x9f') { _state = EscapeState.String; _osc = false; continue; }
             if (c is >= '\x80' and <= '\x9f') continue;
             output.Append(c);
         }

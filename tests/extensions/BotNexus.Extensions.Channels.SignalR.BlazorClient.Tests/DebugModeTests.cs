@@ -73,6 +73,20 @@ public sealed class DebugModeTests : IDisposable
     }
 
     [Fact]
+    public async Task PortalSettingsPanel_active_run_animation_toggle_persists_immediately()
+    {
+        _prefs.Current.Returns(new PortalPreferences());
+        var settingsPanel = _ctx.Render<PortalSettingsPanel>();
+
+        await settingsPanel.InvokeAsync(() => settingsPanel.Instance.Open());
+        var toggle = settingsPanel.Find("[data-testid='animate-active-run-toggle']");
+        toggle.ParentElement?.TextContent.ShouldContain("Animate active-run indicator");
+        await settingsPanel.InvokeAsync(() => toggle.Change(false));
+
+        await _prefs.Received(1).SetAnimateActiveRunIndicatorAsync(false);
+    }
+
+    [Fact]
     public async Task PortalSettingsPanel_contains_debug_mode_toggle()
     {
         _prefs.Current.Returns(new PortalPreferences());
@@ -106,6 +120,20 @@ public sealed class DebugModeTests : IDisposable
         await settingsPanel.InvokeAsync(() => toggle.Change(false));
 
         await _prefs.Received(1).SetArchiveConfirmAsync(false);
+    }
+
+    [Fact]
+    public async Task PortalSettingsPanel_contains_experimental_shell_selector_and_persists_immediately()
+    {
+        _prefs.Current.Returns(new PortalPreferences());
+        var settingsPanel = _ctx.Render<PortalSettingsPanel>();
+
+        await settingsPanel.InvokeAsync(() => settingsPanel.Instance.Open());
+        var selector = settingsPanel.Find("[data-testid='shell-select']");
+
+        selector.ParentElement?.TextContent.ShouldContain("Experimental");
+        await settingsPanel.InvokeAsync(() => selector.Change(PortalShell.Simplified));
+        await _prefs.Received(1).SetShellAsync(PortalShell.Simplified);
     }
 
     [Fact]

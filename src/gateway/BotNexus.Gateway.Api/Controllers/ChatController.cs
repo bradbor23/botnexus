@@ -1,8 +1,11 @@
+using BotNexus.Gateway.Abstractions.Conversations;
 using BotNexus.Gateway.Abstractions.Agents;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Abstractions.Sessions;
 using BotNexus.Gateway.Audit;
+using BotNexus.Gateway.Dispatching;
 using BotNexus.Domain.Primitives;
+using BotNexus.Domain.World;
 using GatewaySessionStatus = BotNexus.Gateway.Abstractions.Models.SessionStatus;
 using Microsoft.AspNetCore.Mvc;
 using BotNexus.Gateway.Streaming;
@@ -22,9 +25,11 @@ namespace BotNexus.Gateway.Api.Controllers;
 [Route("api/[controller]")]
 public sealed class ChatController : ControllerBase
 {
+    private readonly IConversationStore? _conversations;
     private readonly IAgentSupervisor _supervisor;
     private readonly ISessionStore _sessions;
     private readonly IToolAuditSink _toolAudit;
+    private readonly IInboundMessageOrchestrator? _orchestrator;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChatController"/> class.
@@ -37,11 +42,20 @@ public sealed class ChatController : ControllerBase
     /// instance gateway composition registers, so the audit guarantee never depends on whether
     /// this controller happened to be resolved from DI.
     /// </param>
-    public ChatController(IAgentSupervisor supervisor, ISessionStore sessions, IToolAuditSink? toolAudit = null)
+    /// <param name="orchestrator">The unified inbound message entry point used by steer requests.</param>
+    /// <param name="conversations">Stored parent visibility authority; linked sessions fail closed when absent.</param>
+    public ChatController(
+        IAgentSupervisor supervisor,
+        ISessionStore sessions,
+        IToolAuditSink? toolAudit = null,
+        IInboundMessageOrchestrator? orchestrator = null,
+        IConversationStore? conversations = null)
     {
+        _conversations = conversations;
         _supervisor = supervisor;
         _sessions = sessions;
         _toolAudit = toolAudit ?? DefaultToolAuditSink.Instance;
+        _orchestrator = orchestrator;
     }
 
     /// <summary>
@@ -71,6 +85,11 @@ public sealed class ChatController : ControllerBase
 
             var typedAgentId = AgentId.From(request.AgentId);
             var typedSessionId = SessionId.From(sessionId);
+
+            var clientWriteFailure = await ClientConversationWriteGuard.CheckSessionAsync(this, _conversations,
+                await _sessions.GetAsync(typedSessionId, cancellationToken), typedAgentId, cancellationToken);
+            if (clientWriteFailure is not null)
+                return clientWriteFailure;
 
             // #2396: per-run model / thinking selection for a headless one-shot run. Stamped as
             // session metadata - the SAME seam the cron, soul and heartbeat triggers already use -
@@ -124,12 +143,10 @@ public sealed class ChatController : ControllerBase
             // Ordered before the assistant row, matching every other blocking call site.
             foreach (var toolEntry in _toolAudit.ProjectBlockingRun(_toolAudit.CaptureBlockingRun(response)))
                 session.AddEntry(toolEntry);
-            session.AddEntry(new SessionEntry { Role = MessageRole.Assistant, Content = response.Content });
-            // The REST chat path is a blocking PromptAsync boundary like every trigger, and it
-            // was the one that never stamped provider usage. Without this the compactor reads no
-            // lastProviderPromptTokens for a REST session and falls back to the chars/4 estimator,
-            // and the cache-efficiency counters stay empty on exactly the transport whose usage a
-            // caller can see in the response body.
+            session.AddEntry(new SessionEntry { AgentRunId = response.AgentRunId, Role = MessageRole.Assistant, Content = response.Content });
+
+            // #2522: stamp the provider's reported prompt-token count so the compactor has a real
+            // measurement for this turn instead of degrading its unit normalisation to a no-op.
             ProviderTokenUsageRecorder.Record(session, response.Usage);
             await _sessions.SaveAsync(session, CancellationToken.None);
 
@@ -188,20 +205,46 @@ public sealed class ChatController : ControllerBase
     [HttpPost("steer")]
     public async Task<IActionResult> Steer([FromBody] AgentControlRequest request, CancellationToken cancellationToken)
     {
-        var instance = _supervisor.GetInstance(AgentId.From(request.AgentId), SessionId.From(request.SessionId));
+        var clientWriteFailure = await ClientConversationWriteGuard.CheckSessionAsync(this, _conversations,
+            await _sessions.GetAsync(SessionId.From(request.SessionId), cancellationToken), AgentId.From(request.AgentId), cancellationToken);
+        if (clientWriteFailure is not null)
+            return clientWriteFailure;
+
+        var agentId = AgentId.From(request.AgentId);
+        var sessionId = SessionId.From(request.SessionId);
+        var instance = _supervisor.GetInstance(agentId, sessionId);
         if (instance is null)
             return NotFound(new { message = "Agent session not found." });
 
-        try
+        if (_orchestrator is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Inbound message orchestration is unavailable." });
+
+        var session = await _sessions.GetAsync(sessionId, cancellationToken);
+        var conversationId = session is not null && session.ConversationId.IsInitialized()
+            ? session.ConversationId
+            : (ConversationId?)null;
+        var status = await _orchestrator.PostAsync(
+            new InboundMessage
+            {
+                ChannelType = ChannelKey.From("rest"),
+                SenderId = "rest-api",
+                Sender = CitizenId.Of(UserId.From("rest-api")),
+                ChannelAddress = ChannelAddress.From(agentId.Value),
+                Content = request.Message,
+                RoutingHints = new InboundMessageRoutingHints(
+                    RequestedAgentId: agentId,
+                    RequestedSessionId: sessionId,
+                    RequestedConversationId: conversationId,
+                    DeliveryMode: InboundDeliveryMode.Steer)
+            },
+            cancellationToken);
+
+        return status switch
         {
-            var handle = await _supervisor.GetOrCreateAsync(AgentId.From(request.AgentId), SessionId.From(request.SessionId), cancellationToken);
-            await handle.SteerAsync(request.Message, cancellationToken);
-            return Accepted();
-        }
-        catch (AgentConcurrencyLimitExceededException ex)
-        {
-            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = ex.Message });
-        }
+            InboundDispatchStatus.Accepted or InboundDispatchStatus.Steered => Accepted(),
+            InboundDispatchStatus.Busy => StatusCode(StatusCodes.Status429TooManyRequests, new { error = "Inbound queue is busy." }),
+            _ => Conflict(new { error = $"Steering was not accepted ({status})." })
+        };
     }
 
     /// <summary>
@@ -216,6 +259,11 @@ public sealed class ChatController : ControllerBase
     [HttpPost("follow-up")]
     public async Task<IActionResult> FollowUp([FromBody] AgentControlRequest request, CancellationToken cancellationToken)
     {
+        var clientWriteFailure = await ClientConversationWriteGuard.CheckSessionAsync(this, _conversations,
+            await _sessions.GetAsync(SessionId.From(request.SessionId), cancellationToken), AgentId.From(request.AgentId), cancellationToken);
+        if (clientWriteFailure is not null)
+            return clientWriteFailure;
+
         var instance = _supervisor.GetInstance(AgentId.From(request.AgentId), SessionId.From(request.SessionId));
         if (instance is null)
             return NotFound(new { message = "Agent session not found." });

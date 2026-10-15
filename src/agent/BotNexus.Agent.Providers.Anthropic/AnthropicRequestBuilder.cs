@@ -98,7 +98,7 @@ internal static class AnthropicRequestBuilder
         var body = new JsonObject
         {
             ["model"] = model.Id,
-            ["messages"] = ToNode(messages),
+            ["messages"] = null,
             ["max_tokens"] = options?.MaxTokens ?? (model.MaxTokens / 3),
             ["stream"] = true
         };
@@ -169,6 +169,12 @@ internal static class AnthropicRequestBuilder
 
         if (options?.Temperature.HasValue == true && anthropicOpts?.ThinkingEnabled != true)
             body["temperature"] = options.Temperature.Value;
+
+        // Messages were already stamped above, from the single budget threaded through tools and
+        // system. Upstream reached the same intent with a second pass here that recounted only
+        // body["system"] - which cannot see the tools marker, so running both put 5 markers on
+        // any tool-using request and the API rejects the whole thing. One pass, one budget.
+        body["messages"] = ToNode(messages);
 
         return body;
     }

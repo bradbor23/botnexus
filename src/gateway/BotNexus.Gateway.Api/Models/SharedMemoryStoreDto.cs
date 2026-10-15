@@ -6,7 +6,7 @@ namespace BotNexus.Gateway.Api.Models;
 /// <remarks>
 /// Deliberately carries no entries. The contents of a shared store are reachable through the
 /// existing per-store search; what is NOT visible anywhere is the access relationship, which
-/// until now lived only in config.json. Several agents writing to one store is the arrangement
+/// until now lived only in the platform configuration. Several agents writing to one store is the arrangement
 /// worth being able to see at a glance, because it is the one where a note written by one agent
 /// becomes an instruction another agent reads.
 /// </remarks>

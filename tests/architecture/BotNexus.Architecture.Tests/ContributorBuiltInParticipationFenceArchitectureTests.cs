@@ -75,6 +75,7 @@ public sealed class ContributorBuiltInParticipationFenceArchitectureTests : Arch
                 "reached by a shorter route rather than a privileged bypass; this contract exists " +
                 "for assemblies that cannot reach that pipeline at compile time. The wiring is " +
                 "held by a through-the-builder test, so it cannot rot back to silence.",
+
         };
 
     /// <summary>
@@ -87,6 +88,7 @@ public sealed class ContributorBuiltInParticipationFenceArchitectureTests : Arch
         "ICommandContributor",
         "IConfigSchemaContributor",
         "IEndpointContributor",
+        "ISearchContributor",
     ];
 
     /// <summary>

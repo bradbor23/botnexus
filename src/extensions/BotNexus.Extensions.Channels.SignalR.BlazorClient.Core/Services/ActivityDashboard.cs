@@ -257,12 +257,18 @@ public sealed record ActivityAgentRef(string AgentId, string? Role = null);
 /// Carried on the record but deliberately not rendered by this slice - a countdown is its own
 /// design question and would need a ticking clock the dashboard does not have.
 /// </param>
+/// <param name="Enabled">Whether the scheduler permits the job to fire.</param>
+/// <param name="ExpiresAt">The hard suppression instant, or <see langword="null"/> for no expiry.</param>
+/// <param name="LastRunError">The last recorded run error, or <see langword="null"/> when absent.</param>
 public sealed record ActivityCronHealth(
     string JobId,
     string? Name,
     string? LastRunStatus,
     DateTimeOffset? LastRunAt = null,
-    DateTimeOffset? NextRunAt = null);
+    DateTimeOffset? NextRunAt = null,
+    bool Enabled = true,
+    DateTimeOffset? ExpiresAt = null,
+    string? LastRunError = null);
 
 /// <summary>
 /// A single projected row on the Home / Activity dashboard: one active conversation plus the derived
@@ -670,7 +676,10 @@ public static class ActivityDashboardProjection
                 string.IsNullOrWhiteSpace(job.Name) ? null : job.Name.Trim(),
                 string.IsNullOrWhiteSpace(job.LastRunStatus) ? null : job.LastRunStatus.Trim(),
                 job.LastRunAt,
-                job.NextRunAt);
+                job.NextRunAt,
+                job.Enabled,
+                job.ExpiresAt,
+                string.IsNullOrWhiteSpace(job.LastRunError) ? null : job.LastRunError.Trim());
         }
 
         return map;
@@ -697,9 +706,9 @@ public static class ActivityDashboardProjection
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <see langword="null"/> or an empty roster yields an empty map rather than throwing - a failed
-    /// session fetch must degrade the dashboard to its pre-#3713 rendering, never break it and never
-    /// blank every Live badge on the page.
+    /// <see langword="null"/> or an empty roster yields an empty map rather than throwing. Callers
+    /// must preserve fetch success separately: a successful empty roster is authoritative, while a
+    /// failed fetch should pass <see langword="null"/> to the projection for compatibility fallback.
     /// </para>
     /// <para>
     /// First-wins on a duplicated session id, matching <see cref="CronHealthById"/> and
@@ -738,18 +747,19 @@ public static class ActivityDashboardProjection
     /// liveness (#3713), given the session-status map from <see cref="SessionStatusById"/>.
     /// </summary>
     /// <remarks>
-    /// An absent or empty map means the caller supplied no corroborating evidence, so every row
-    /// resolves to <see cref="ActivitySessionLiveness.Unverifiable"/> and the projection is
-    /// byte-identical to its pre-#3713 output. Once a roster IS supplied, a pointer it does not
-    /// name resolves to <see cref="ActivitySessionLiveness.Absent"/> - which is not live.
+    /// A <see langword="null"/> map means the caller supplied no corroborating evidence, so every
+    /// row resolves to <see cref="ActivitySessionLiveness.Unverifiable"/> and the projection is
+    /// byte-identical to its pre-#3713 output. Once a roster IS supplied, even an empty one, a
+    /// pointer it does not name resolves to <see cref="ActivitySessionLiveness.Absent"/> - which is
+    /// not live.
     /// </remarks>
     /// <param name="activeSessionId">The conversation's routing pointer.</param>
-    /// <param name="sessionStatus">The session-status map, or <see langword="null"/>/empty when none was fetched.</param>
+    /// <param name="sessionStatus">The session-status map, or <see langword="null"/> when none was fetched.</param>
     public static ActivitySessionLiveness ResolveSessionLiveness(
         string? activeSessionId,
         IReadOnlyDictionary<string, string?>? sessionStatus)
     {
-        if (sessionStatus is null || sessionStatus.Count == 0)
+        if (sessionStatus is null)
             return ActivitySessionLiveness.Unverifiable;
 
         if (string.IsNullOrWhiteSpace(activeSessionId))
@@ -769,6 +779,9 @@ public static class ActivityDashboardProjection
     /// so it must obey the same bound or a verbosely-named job would reflow the row.
     /// </summary>
     public const int CronNameDisplayLength = SourceIdDisplayLength;
+
+    /// <summary>Maximum characters retained from a cron failure's first line before elision.</summary>
+    public const int CronErrorDisplayLength = 80;
 
     /// <summary>
     /// Renders the name of the cron job that minted a row (#3421), replacing the opaque job id
@@ -832,6 +845,45 @@ public static class ActivityDashboardProjection
     }
 
     /// <summary>
+    /// Returns a bounded first-line failure reason for the current failed run. Stale errors on
+    /// successful or unclassifiable runs are deliberately suppressed.
+    /// </summary>
+    public static string? CronHealthErrorSummary(ActivityRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (!string.Equals(CronHealthModifier(row), "failed", StringComparison.Ordinal))
+            return null;
+
+        var error = row.CronHealth?.LastRunError;
+        if (string.IsNullOrWhiteSpace(error))
+            return null;
+
+        var firstLineLength = error.IndexOfAny(['\r', '\n']);
+        var firstLine = (firstLineLength >= 0 ? error[..firstLineLength] : error).Trim();
+        if (firstLine.Length == 0)
+            return null;
+
+        return firstLine.Length <= CronErrorDisplayLength
+            ? firstLine
+            : string.Concat(firstLine.AsSpan(0, CronErrorDisplayLength), "\u2026");
+    }
+
+    /// <summary>
+    /// Classifies whether a resolved cron job can fire again, independently of its last outcome.
+    /// Explicit disablement outranks elapsed expiry; the scheduler's expiry boundary is inclusive.
+    /// </summary>
+    public static string? CronLiveness(ActivityCronHealth health, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(health);
+
+        if (!health.Enabled)
+            return "disabled";
+
+        return health.ExpiresAt is { } expiresAt && now >= expiresAt ? "expired" : null;
+    }
+
+    /// <summary>
     /// Projects and filters a set of conversation summaries into ordered dashboard rows. Applies the
     /// cron default-exclude, agent-involvement filter, status filter, and recency window, then orders
     /// by most-recent activity so the top of the dashboard is the freshest work.
@@ -851,12 +903,12 @@ public static class ActivityDashboardProjection
     /// </param>
     /// <param name="sessionStatus">
     /// Session-id to status map from <see cref="SessionStatusById"/> (#3713), built from the
-    /// <c>GET /api/sessions</c> roster the portal already loads. A <see langword="null"/> or empty
-    /// map - which is what a failed session fetch yields - leaves every row's
-    /// <see cref="ActivityRow.SessionLiveness"/> at <see cref="ActivitySessionLiveness.Unverifiable"/>,
-    /// so the Live badge, the <c>live now</c> count and the liveness facet all behave exactly as they
-    /// did before this shipped. Passed in rather than fetched here to keep the projection pure,
-    /// matching <paramref name="cronHealth"/>.
+    /// <c>GET /api/sessions</c> roster the portal already loads. A <see langword="null"/> map -
+    /// which is what a failed session fetch yields - leaves every row's
+    /// <see cref="ActivityRow.SessionLiveness"/> at <see cref="ActivitySessionLiveness.Unverifiable"/>.
+    /// An empty but non-null map is a successfully loaded empty roster and therefore authoritative:
+    /// pointers absent from it are idle. Passed in rather than fetched here to keep the projection
+    /// pure, matching <paramref name="cronHealth"/>.
     /// </param>
     public static IReadOnlyList<ActivityRow> Project(
         IEnumerable<ConversationSummaryDto> conversations,

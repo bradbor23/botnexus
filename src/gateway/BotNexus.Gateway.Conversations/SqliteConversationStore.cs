@@ -9,6 +9,7 @@ using BotNexus.Gateway.Abstractions.Models;
 using Microsoft.Data.Sqlite;
 using BotNexus.Persistence.Sqlite;
 using Microsoft.Extensions.Logging;
+using BotNexus.Gateway.Telemetry;
 
 namespace BotNexus.Gateway.Conversations;
 
@@ -27,8 +28,10 @@ public sealed class SqliteConversationStore : IConversationStore
     };
 
     private readonly string _connectionString;
+    private readonly SqliteWalMaintenance _journalModeMaintenance;
     private readonly ILogger<SqliteConversationStore> _logger;
     private readonly IWorldContext? _worldContext;
+    private readonly StoreMetrics? _storeMetrics;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     // Striped write locks: a fixed pool hashed by conversation id. Bounds the number
     // of sync primitives (no per-conversation SemaphoreSlim leak over the process
@@ -56,6 +59,13 @@ public sealed class SqliteConversationStore : IConversationStore
     // retain every conversation ever touched. Cold reads fall through to SQLite.
     private readonly BoundedLruCache<string, Conversation> _cache;
     private bool _initialized;
+
+    /// <summary>
+    /// The schema version this build of the conversation store writes and understands (#2835).
+    /// </summary>
+    public const int CurrentSchemaVersion = 1;
+
+    private static readonly SqliteSchemaMigration[] Migrations = [];
 
     // Read round-trip counter (issue #1626). Incremented once per database query issued by the
     // batched list path of THIS store instance, so the N+1 regression guard can assert that a
@@ -126,12 +136,21 @@ public sealed class SqliteConversationStore : IConversationStore
     /// evicted by LRU; cold reads fall through to SQLite. Defaults to
     /// <see cref="DefaultConversationCacheCapacity"/>.
     /// </param>
-    public SqliteConversationStore(string connectionString, ILogger<SqliteConversationStore> logger, IWorldContext? worldContext, int cacheCapacity = DefaultConversationCacheCapacity, TimeProvider? clock = null)
+    public SqliteConversationStore(
+        string connectionString,
+        ILogger<SqliteConversationStore> logger,
+        IWorldContext? worldContext,
+        int cacheCapacity = DefaultConversationCacheCapacity,
+        StoreMetrics? storeMetrics = null,
+        SqliteWalMaintenance? journalModeMaintenance = null,
+        TimeProvider? clock = null)
     {
         _clock = clock ?? TimeProvider.System;
         _connectionString = connectionString;
+        _journalModeMaintenance = journalModeMaintenance ?? new SqliteWalMaintenance();
         _logger = logger;
         _worldContext = worldContext;
+        _storeMetrics = storeMetrics;
         _cache = new BoundedLruCache<string, Conversation>(cacheCapacity, StringComparer.Ordinal);
     }
 
@@ -150,18 +169,23 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         using var activity = ActivitySource.StartActivity("conversation.get", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversationId.Value);
+        using var metric = _storeMetrics?.Start("conversation", "get");
 
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
         var conversationLock = await AcquireConversationLockAsync(conversationId.Value, ct).ConfigureAwait(false);
         try
         {
             if (_cache.TryGet(conversationId.Value, out var cached))
+            {
+                metric?.Complete();
                 return BackfillWorldId(CloneConversation(cached));
+            }
 
             var loaded = await LoadConversationAsync(conversationId, ct).ConfigureAwait(false);
             if (loaded is not null)
                 _cache.Set(conversationId.Value, CloneConversation(loaded));
 
+            metric?.Complete();
             return BackfillWorldId(loaded);
         }
         finally
@@ -174,6 +198,7 @@ public sealed class SqliteConversationStore : IConversationStore
     public async Task<IReadOnlyList<Conversation>> ListAsync(AgentId? agentId = null, CancellationToken ct = default)
     {
         using var activity = ActivitySource.StartActivity("conversation.list", ActivityKind.Internal);
+        using var metric = _storeMetrics?.Start("conversation", "list");
         if (agentId is not null)
             activity?.SetTag("botnexus.agent.id", agentId.Value);
 
@@ -195,7 +220,9 @@ public sealed class SqliteConversationStore : IConversationStore
                 orderedIds.Add(reader.GetString(0));
         }
 
-        return await MaterializeOrderedAsync(connection, orderedIds, ct).ConfigureAwait(false);
+        var conversations = await MaterializeOrderedAsync(connection, orderedIds, ct).ConfigureAwait(false);
+        metric?.Complete(conversations.Count);
+        return conversations;
     }
 
     /// <inheritdoc />
@@ -335,6 +362,8 @@ public sealed class SqliteConversationStore : IConversationStore
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         using var activity = ActivitySource.StartActivity("conversation.create", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversation.ConversationId.Value);
         activity?.SetTag("botnexus.agent.id", conversation.AgentId.Value);
@@ -363,6 +392,8 @@ public sealed class SqliteConversationStore : IConversationStore
     /// <inheritdoc />
     public async Task SaveAsync(Conversation conversation, CancellationToken ct = default)
     {
+        if (conversation.CompactionTokenCeiling is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(conversation), "CompactionTokenCeiling must be positive or null.");
         ValidateLifecycleState(conversation);
         using var activity = ActivitySource.StartActivity("conversation.save", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversation.ConversationId.Value);
@@ -455,6 +486,15 @@ public sealed class SqliteConversationStore : IConversationStore
         string? correlationId,
         string actor,
         CancellationToken ct = default)
+        => _ = await TryArchiveAsync(conversationId, source, correlationId, actor, ct).ConfigureAwait(false);
+
+    /// <inheritdoc />
+    public async Task<bool> TryArchiveAsync(
+        ConversationId conversationId,
+        string source,
+        string? correlationId,
+        string actor,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(actor);
@@ -487,12 +527,17 @@ public sealed class SqliteConversationStore : IConversationStore
                         active_session_id = NULL,
                         updated_at = $updatedAt,
                         version = version + 1
-                    WHERE id = $id
+                    WHERE id = $id AND status = $activeStatus
                     """;
                 archive.Parameters.AddWithValue("$status", ConversationStatus.Archived.ToString());
+                archive.Parameters.AddWithValue("$activeStatus", ConversationStatus.Active.ToString());
                 archive.Parameters.AddWithValue("$updatedAt", updatedAt.ToString("O"));
                 archive.Parameters.AddWithValue("$id", conversationId.Value);
-                await archive.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                if (await archive.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
+                {
+                    await transaction.RollbackAsync(ct).ConfigureAwait(false);
+                    return false;
+                }
             }
 
             await using (var audit = connection.CreateCommand())
@@ -523,6 +568,8 @@ public sealed class SqliteConversationStore : IConversationStore
                 archived.Version = cached.Version + 1;
                 _cache.Set(conversationId.Value, archived);
             }
+
+            return true;
         }
         finally
         {
@@ -568,7 +615,7 @@ public sealed class SqliteConversationStore : IConversationStore
         {
             await migration.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        catch (SqliteException ex) when (SqliteAdditiveMigration.IsDuplicateColumn(ex))
         {
             // Another process completed the additive migration after the schema probe.
         }
@@ -755,18 +802,11 @@ public sealed class SqliteConversationStore : IConversationStore
         activity?.SetTag("botnexus.binding.id", bindingId.Value);
 
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
-        // Acquire both conversation locks in a deterministic (ordinal) order so a concurrent
-        // inverse move cannot deadlock via lock-ordering inversion.
-        var idA = fromConversationId.Value;
-        var idB = toConversationId.Value;
-        var (first, second) = string.CompareOrdinal(idA, idB) <= 0 ? (idA, idB) : (idB, idA);
-        var firstLock = await AcquireConversationLockAsync(first, ct).ConfigureAwait(false);
-        IDisposable? secondLock = null;
-        try
+        // Distinct IDs can share a stripe. Acquire physical stripes once, in a global
+        // stripe order rather than ID order, avoiding self-deadlock and inversion.
+        using var conversationLocks = await _conversationLocks.AcquirePairAsync(
+            fromConversationId.Value, toConversationId.Value, ct).ConfigureAwait(false);
         {
-            if (!string.Equals(first, second, StringComparison.Ordinal))
-                secondLock = await AcquireConversationLockAsync(second, ct).ConfigureAwait(false);
-
             var now = _clock.GetUtcNow();
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
@@ -795,11 +835,6 @@ public sealed class SqliteConversationStore : IConversationStore
             _cache.Remove(fromConversationId.Value);
             _cache.Remove(toConversationId.Value);
             return true;
-        }
-        finally
-        {
-            secondLock?.Dispose();
-            firstLock.Dispose();
         }
     }
 
@@ -864,6 +899,8 @@ public sealed class SqliteConversationStore : IConversationStore
     public async Task<Conversation?> PatchOverrideAsync(ConversationId conversationId, ConversationOverridePatch patch, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(patch);
+        if (patch.CompactionTokenCeiling.IsSet && patch.CompactionTokenCeiling.Value is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(patch), "CompactionTokenCeiling must be positive or null.");
         using var activity = ActivitySource.StartActivity("conversation.patch_override", ActivityKind.Internal);
         activity?.SetTag("botnexus.conversation.id", conversationId.Value);
 
@@ -896,6 +933,11 @@ public sealed class SqliteConversationStore : IConversationStore
             }
             // #2523: the tool overlay rides the SAME narrow patch as the model overrides so a
             // restriction cannot be clobbered by a concurrent whole-record save.
+            if (patch.CompactionTokenCeiling.IsSet)
+            {
+                sets.Add("compaction_token_ceiling = $ceiling");
+                command.Parameters.AddWithValue("$ceiling", (object?)patch.CompactionTokenCeiling.Value ?? DBNull.Value);
+            }
             if (patch.ToolOverrideJson.IsSet)
             {
                 sets.Add("tool_override_json = $toolOverride");
@@ -1019,6 +1061,7 @@ public sealed class SqliteConversationStore : IConversationStore
     public async Task<IReadOnlyList<ConversationSummary>> GetSummariesAsync(CancellationToken ct = default)
     {
         using var activity = ActivitySource.StartActivity("conversation.get_summaries", ActivityKind.Internal);
+        using var metric = _storeMetrics?.Start("conversation", "get_summaries");
 
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
         await using var connection = CreateConnection();
@@ -1064,21 +1107,59 @@ public sealed class SqliteConversationStore : IConversationStore
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             var conversationId = reader.GetString(0);
-            // #1627: the summary row ordinals live in ConversationRowMapper.MapSummary - the
+            // #1627: the summary row ordinals live in SqliteDataReaderExtensions.MapSummary - the
             // single source of truth shared with the full-conversation mapper. The roster is
             // resolved once via the batch query above (#1427) to avoid an N+1 participant lookup.
-            summaries.Add(ConversationRowMapper.MapSummary(
-                reader,
+            summaries.Add(reader.MapSummary(
                 rosters.TryGetValue(conversationId, out var roster) ? roster : []));
         }
 
+        metric?.Complete(summaries.Count);
         return summaries;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConversationRetentionCandidate>> GetRetentionCandidatesAsync(
+        ConversationSource? source = null,
+        CancellationToken ct = default)
+    {
+        await EnsureCreatedAsync(ct).ConfigureAwait(false);
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, agent_id, updated_at, is_pinned, source, source_id
+            FROM conversations
+            WHERE status = $status AND ($source IS NULL OR source = $source)
+            ORDER BY updated_at ASC
+            """;
+        command.Parameters.AddWithValue("$status", ConversationStatus.Active.ToString());
+        command.Parameters.AddWithValue("$source", source is null ? DBNull.Value : source.Value.ToString());
+
+        var candidates = new List<ConversationRetentionCandidate>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var sourceText = reader.GetString(4);
+            candidates.Add(new ConversationRetentionCandidate(
+                ConversationId.From(reader.GetString(0)),
+                AgentId.From(reader.GetString(1)),
+                DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
+                reader.GetInt64(3) != 0,
+                Enum.TryParse<ConversationSource>(sourceText, ignoreCase: true, out var parsedSource)
+                    ? parsedSource
+                    : ConversationSource.Channel,
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        return candidates;
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<PendingAskUserCheckpoint>> GetPendingAskUserCheckpointsAsync(CancellationToken ct = default)
     {
         using var activity = ActivitySource.StartActivity("conversation.get_pending_ask_user_checkpoints", ActivityKind.Internal);
+        using var metric = _storeMetrics?.Start("conversation", "get_pending_ask_user_checkpoints");
 
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
         await using var connection = CreateConnection();
@@ -1106,6 +1187,7 @@ public sealed class SqliteConversationStore : IConversationStore
         }
 
         activity?.SetTag("botnexus.conversation.pending_ask_user_count", checkpoints.Count);
+        metric?.Complete(checkpoints.Count);
         return checkpoints;
     }
 
@@ -1138,8 +1220,8 @@ public sealed class SqliteConversationStore : IConversationStore
                 rosters[conversationId] = list;
             }
             // #1627: kind/id/role ordinals (offset past the leading conversation_id) live in
-            // ConversationRowMapper.MapParticipantSummary - one source of truth for this shape.
-            list.Add(ConversationRowMapper.MapParticipantSummary(reader, offset: 1));
+            // SqliteDataReaderExtensions.MapParticipantSummary - one source of truth for this shape.
+            list.Add(reader.MapParticipantSummary(offset: 1));
         }
 
         return rosters.ToDictionary(
@@ -1162,9 +1244,13 @@ public sealed class SqliteConversationStore : IConversationStore
             await using var connection = CreateConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
 
-            await using var walCommand = connection.CreateCommand();
-            walCommand.CommandText = "PRAGMA journal_mode=WAL;";
-            await walCommand.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            // The conversation and session stores share this database in production. Both must
+            // apply the same filesystem-aware authority so initialization order cannot re-enable
+            // WAL on a network-mounted database.
+            await _journalModeMaintenance.ApplyJournalModeAsync(
+                connection,
+                connection.DataSource,
+                cancellationToken: ct).ConfigureAwait(false);
 
             await using var command = connection.CreateCommand();
             command.CommandText = """
@@ -1183,6 +1269,7 @@ public sealed class SqliteConversationStore : IConversationStore
                     model_override TEXT,
                     thinking_override TEXT,
                     context_window_override INTEGER,
+                    compaction_token_ceiling INTEGER,
                     tool_override_json TEXT,
                     version INTEGER NOT NULL DEFAULT 1
                 );
@@ -1237,6 +1324,8 @@ public sealed class SqliteConversationStore : IConversationStore
             var archived = await archiveStaleMigration.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (archived > 0)
                 _logger.LogInformation("Archived {Count} stale signalr:connection-id conversations (pre-v0.1.3 cleanup)", archived);
+
+            connection.Apply( CurrentSchemaVersion, Migrations);
 
             _initialized = true;
         }
@@ -1326,6 +1415,7 @@ public sealed class SqliteConversationStore : IConversationStore
         ("model_override", "ALTER TABLE conversations ADD COLUMN model_override TEXT;"),
         ("thinking_override", "ALTER TABLE conversations ADD COLUMN thinking_override TEXT;"),
         ("context_window_override", "ALTER TABLE conversations ADD COLUMN context_window_override INTEGER;"),
+        ("compaction_token_ceiling", "ALTER TABLE conversations ADD COLUMN compaction_token_ceiling INTEGER;"),
         // #2523: per-session narrowing tool overlay, stored as opaque JSON.
         ("tool_override_json", "ALTER TABLE conversations ADD COLUMN tool_override_json TEXT;"),
         ("initiator", "ALTER TABLE conversations ADD COLUMN initiator TEXT;"),
@@ -1387,8 +1477,7 @@ public sealed class SqliteConversationStore : IConversationStore
         {
             await alterCommand.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
-                                         ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        catch (SqliteException ex) when (SqliteAdditiveMigration.IsDuplicateColumn(ex))
         {
             // Cross-process first-boot race: another gateway instance ran EnsureCreatedAsync
             // between our PRAGMA-table_info read and this ALTER. _initLock only serialises within
@@ -1519,7 +1608,7 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
+            SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
             FROM conversations
             WHERE id = $id
             """;
@@ -1529,7 +1618,7 @@ public sealed class SqliteConversationStore : IConversationStore
         if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             return null;
 
-        var conversation = ConversationRowMapper.MapConversation(reader, logger);
+        var conversation = reader.MapConversation(logger);
 
         await reader.DisposeAsync().ConfigureAwait(false);
         conversation.ChannelBindings = await LoadBindingsAsync(connection, conversation.ConversationId, ct).ConfigureAwait(false);
@@ -1628,7 +1717,7 @@ public sealed class SqliteConversationStore : IConversationStore
         {
             var inClause = BuildIdInClause(command, ids);
             command.CommandText = $"""
-                SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
+                SELECT id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version
                 FROM conversations
                 WHERE id IN ({inClause})
                 """;
@@ -1636,7 +1725,7 @@ public sealed class SqliteConversationStore : IConversationStore
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                var conversation = ConversationRowMapper.MapConversation(reader, _logger);
+                var conversation = reader.MapConversation(_logger);
                 conversation.ChannelBindings = [];
                 conversation.Participants = [];
                 byId[conversation.ConversationId.Value] = conversation;
@@ -1674,7 +1763,7 @@ public sealed class SqliteConversationStore : IConversationStore
                     list = [];
                     bindingsById[conversationId] = list;
                 }
-                list.Add(ConversationRowMapper.MapBinding(reader, offset: 1));
+                list.Add(reader.MapBinding(offset: 1));
             }
         }
 
@@ -1699,7 +1788,7 @@ public sealed class SqliteConversationStore : IConversationStore
             {
                 var conversationId = reader.GetString(0);
                 if (!byId.ContainsKey(conversationId)
-                    || ConversationRowMapper.MapParticipant(reader, offset: 1, _logger) is not { } participant)
+                    || reader.MapParticipant(offset: 1, _logger) is not { } participant)
                 {
                     continue;
                 }
@@ -1758,7 +1847,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            if (ConversationRowMapper.MapParticipant(reader, offset: 0, logger) is { } participant)
+            if (reader.MapParticipant(offset: 0, logger) is { } participant)
                 participants.Add(participant);
         }
 
@@ -1781,7 +1870,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            bindings.Add(ConversationRowMapper.MapBinding(reader, offset: 0));
+            bindings.Add(reader.MapBinding(offset: 0));
         }
 
         return bindings;
@@ -1809,8 +1898,8 @@ public sealed class SqliteConversationStore : IConversationStore
         conversationCommand.Transaction = transaction;
         conversationCommand.CommandText = upsert
             ? """
-                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
-                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
+                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
+                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $compactionTokenCeiling, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
                 ON CONFLICT(id) DO UPDATE SET
                     agent_id = excluded.agent_id,
                     title = excluded.title,
@@ -1835,14 +1924,15 @@ public sealed class SqliteConversationStore : IConversationStore
                     model_override = excluded.model_override,
                     thinking_override = excluded.thinking_override,
                     context_window_override = excluded.context_window_override,
+                    compaction_token_ceiling = excluded.compaction_token_ceiling,
                     tool_override_json = excluded.tool_override_json,
                     version = conversations.version + 1
                 WHERE $expectedVersion = 0 OR conversations.version = $expectedVersion
                 RETURNING version
                 """
             : """
-                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
-                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
+                INSERT INTO conversations (id, agent_id, title, purpose, is_default, status, active_session_id, metadata, created_at, updated_at, instructions, canvas_html, initiator, kind, source, source_id, visibility, world_id, is_pinned, pinned_at, todo_json, pending_ask_user_json, model_override, thinking_override, context_window_override, compaction_token_ceiling, tool_override_json, parent_conversation_id, spawning_tool_call_id, version)
+                VALUES ($id, $agentId, $title, $purpose, $isDefault, $status, $activeSessionId, $metadata, $createdAt, $updatedAt, $instructions, $canvasHtml, $initiator, $kind, $source, $sourceId, $visibility, $worldId, $isPinned, $pinnedAt, $todoJson, $pendingAskUserJson, $modelOverride, $thinkingOverride, $contextWindowOverride, $compactionTokenCeiling, $toolOverrideJson, $parentConversationId, $spawningToolCallId, 1)
                 """;
         conversationCommand.Parameters.AddWithValue("$id", conversation.ConversationId.Value);
         conversationCommand.Parameters.AddWithValue("$agentId", conversation.AgentId.Value);
@@ -1871,6 +1961,7 @@ public sealed class SqliteConversationStore : IConversationStore
         conversationCommand.Parameters.AddWithValue("$pendingAskUserJson", conversation.PendingAskUserJson is null ? (object)DBNull.Value : conversation.PendingAskUserJson);
         conversationCommand.Parameters.AddWithValue("$modelOverride", conversation.ModelOverride is null ? (object)DBNull.Value : conversation.ModelOverride);
         conversationCommand.Parameters.AddWithValue("$thinkingOverride", conversation.ThinkingOverride is null ? (object)DBNull.Value : conversation.ThinkingOverride);
+        conversationCommand.Parameters.AddWithValue("$compactionTokenCeiling", (object?)conversation.CompactionTokenCeiling ?? DBNull.Value);
         conversationCommand.Parameters.AddWithValue("$contextWindowOverride", conversation.ContextWindowOverride.HasValue ? conversation.ContextWindowOverride.Value : (object)DBNull.Value);
         conversationCommand.Parameters.AddWithValue("$toolOverrideJson", conversation.ToolOverrideJson is null ? (object)DBNull.Value : conversation.ToolOverrideJson);
         // #2338: deliberately NOT in the upsert's DO UPDATE SET list - the parent edge and the
@@ -1960,6 +2051,7 @@ public sealed class SqliteConversationStore : IConversationStore
             ModelOverride = conversation.ModelOverride,
             ThinkingOverride = conversation.ThinkingOverride,
             ContextWindowOverride = conversation.ContextWindowOverride,
+            CompactionTokenCeiling = conversation.CompactionTokenCeiling,
             // #2523: same reasoning - an overlay omitted from the clone would be NULLed by every
             // full save, silently lifting a blast-radius restriction the operator set.
             ToolOverrideJson = conversation.ToolOverrideJson,
@@ -1997,7 +2089,7 @@ public sealed class SqliteConversationStore : IConversationStore
     // Dictionary<string, object?> we fall back to an empty dictionary rather than letting the clone
     // (and therefore every list/cache-seed path that clones) abort. This method is static and has no
     // instance logger; the row is degraded silently to a safe default which is acceptable because the
-    // authoritative on-disk read path (ConversationRowMapper.DeserializeMetadata) already logs.
+    // authoritative on-disk read path (SqliteDataReaderExtensions.DeserializeMetadata) already logs.
     private static Dictionary<string, object?> CloneMetadata(IReadOnlyDictionary<string, object?> metadata)
     {
         try
@@ -2106,7 +2198,7 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
 
-        await using var connection = new SqliteConnection(_connectionString);
+        await using var connection = CreateConnection();
         await connection.OpenAsync(ct).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
@@ -2122,7 +2214,7 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         await EnsureCreatedAsync(ct).ConfigureAwait(false);
 
-        await using var connection = new SqliteConnection(_connectionString);
+        await using var connection = CreateConnection();
         await connection.OpenAsync(ct).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();

@@ -2,8 +2,10 @@ using System.Collections.Concurrent;
 using BotNexus.Domain.Primitives;
 using BotNexus.Domain.World;
 using BotNexus.Gateway.Abstractions.Conversations;
+using BotNexus.Gateway.Abstractions.Events;
 using BotNexus.Gateway.Abstractions.Models;
 using BotNexus.Gateway.Api.Controllers;
+using BotNexus.Gateway.Channels;
 using BotNexus.Gateway.Conversations;
 using BotNexus.Gateway.Sessions;
 using Microsoft.AspNetCore.Http;
@@ -75,17 +77,27 @@ public sealed class ConversationBindingManagementTests
     // ── Attach ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task AddBinding_NotifiesAndAudits()
+    public async Task AddBinding_PublishesTypedEventAndAudits()
     {
-        var controller = CreateController();
+        var sink = new BindingEventSink();
+        await using var publisher = new ConversationEventPublisher([sink]);
+        var controller = new ConversationsController(
+            _store, new InMemorySessionStore(), [_notifier],
+            NullLogger<ConversationsController>.Instance, auditLog: _audit,
+            conversationEventPublisher: publisher);
         var id = await NewConversationAsync("attach target");
 
         var bindingId = await AttachAsync(controller, id, "1234567890");
+        await publisher.WaitForDrainAsync();
 
-        var loaded = await _store.GetAsync(id);
-        loaded!.ChannelBindings.Single().BindingId.Value.ShouldBe(bindingId);
+        var loaded = (await _store.GetAsync(id)).ShouldNotBeNull();
+        loaded.ChannelBindings.Single().BindingId.Value.ShouldBe(bindingId);
 
-        _notifier.Events.ShouldContain(e => e.ChangeType == "updated" && e.ConversationId == id.Value);
+        var attached = sink.Events.ShouldHaveSingleItem();
+        attached.ConversationId.ShouldBe(id);
+        attached.Binding.BindingId.Value.ShouldBe(bindingId);
+        attached.Bindings.ShouldBe(ConversationBindingSnapshot.FromMany(loaded.ChannelBindings), ignoreOrder: false);
+        _notifier.Events.ShouldBeEmpty();
 
         var entry = _audit.Entries.SingleOrDefault(e => e.Action == "binding_added");
         entry.ShouldNotBeNull();
@@ -156,18 +168,28 @@ public sealed class ConversationBindingManagementTests
     // ── Detach ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RemoveBinding_NotifiesAndAudits()
+    public async Task RemoveBinding_PublishesTypedEventAndAudits()
     {
-        var controller = CreateController();
+        var sink = new BindingRemovalEventSink();
+        await using var publisher = new ConversationEventPublisher([sink]);
+        var controller = new ConversationsController(
+            _store, new InMemorySessionStore(), [_notifier],
+            NullLogger<ConversationsController>.Instance, auditLog: _audit,
+            conversationEventPublisher: publisher);
         var id = await NewConversationAsync("detach target");
         var bindingId = await AttachAsync(controller, id, "1234567890");
-        _notifier.Events.Clear();
+        await publisher.WaitForDrainAsync();
 
         var result = await controller.RemoveBinding(id.Value, bindingId, CancellationToken.None);
+        await publisher.WaitForDrainAsync();
 
         result.ShouldBeOfType<NoContentResult>();
         (await _store.GetAsync(id))!.ChannelBindings.ShouldBeEmpty();
-        _notifier.Events.ShouldContain(e => e.ChangeType == "updated" && e.ConversationId == id.Value);
+        var detached = sink.Events.ShouldHaveSingleItem();
+        detached.ConversationId.ShouldBe(id);
+        detached.Binding.BindingId.Value.ShouldBe(bindingId);
+        detached.Bindings.ShouldBeEmpty();
+        _notifier.Events.ShouldBeEmpty();
 
         var entry = _audit.Entries.SingleOrDefault(e => e.Action == "binding_removed");
         entry.ShouldNotBeNull();
@@ -361,6 +383,30 @@ public sealed class ConversationBindingManagementTests
     }
 
     // ── Test doubles ──────────────────────────────────────────────────────────
+
+    private sealed class BindingEventSink : IConversationEventSink
+    {
+        public List<ConversationBindingAddedEvent> Events { get; } = [];
+
+        public Task OnConversationEventAsync(ConversationEvent conversationEvent, CancellationToken cancellationToken = default)
+        {
+            if (conversationEvent is ConversationBindingAddedEvent added)
+                Events.Add(added);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class BindingRemovalEventSink : IConversationEventSink
+    {
+        public List<ConversationBindingRemovedEvent> Events { get; } = [];
+
+        public Task OnConversationEventAsync(ConversationEvent conversationEvent, CancellationToken cancellationToken = default)
+        {
+            if (conversationEvent is ConversationBindingRemovedEvent removed)
+                Events.Add(removed);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed record NotificationEvent(string ChangeType, string AgentId, string ConversationId);
 

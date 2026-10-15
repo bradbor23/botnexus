@@ -141,12 +141,91 @@ public sealed class GatewayAuthManager
             return entry.Endpoint;
 
         if (_platformConfig.CurrentValue.Providers is not null &&
-            TryGetProviderConfig(_platformConfig.CurrentValue.Providers, provider, out var providerConfig) &&
-            !string.IsNullOrWhiteSpace(providerConfig?.BaseUrl))
-            return providerConfig.BaseUrl;
+            TryGetProviderConfig(_platformConfig.CurrentValue.Providers, provider, out var providerConfig))
+        {
+            const string AuthPrefix = "auth:";
+            if (providerConfig?.ApiKey?.StartsWith(AuthPrefix, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                var referenceProvider = providerConfig.ApiKey[AuthPrefix.Length..].Trim();
+                if (!string.IsNullOrWhiteSpace(referenceProvider) &&
+                    TryGetAuthEntry(referenceProvider, out var referencedEntry) &&
+                    !string.IsNullOrWhiteSpace(referencedEntry.Endpoint))
+                {
+                    return referencedEntry.Endpoint;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(providerConfig?.BaseUrl))
+                return providerConfig.BaseUrl;
+        }
 
         return null;
     }
+
+    /// <summary>
+    /// Returns the GitHub OAuth refresh credential for the Copilot account without refreshing it
+    /// or exposing the short-lived Copilot session access token. This is for read-only account
+    /// discovery endpoints that require the original OAuth credential.
+    /// </summary>
+    public Task<string?> GetCopilotOAuthTokenAsync(CancellationToken cancellationToken = default)
+        => GetCopilotOAuthTokenAsync("github-copilot", cancellationToken);
+
+    /// <summary>Resolves only the selected configured Copilot account; unknown instances never use the default.</summary>
+    public Task<string?> GetCopilotOAuthTokenAsync(string instance, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ResolveCopilotAccountCredential(instance)?.OAuthToken);
+    }
+
+    private readonly byte[] _quotaGenerationKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+    /// <summary>Reads local auth state without token exchange. Unsupported authorities are unavailable.</summary>
+    public CopilotAccountCredential? ResolveCopilotAccountCredential(string instance)
+    {
+        if (string.IsNullOrWhiteSpace(instance) || instance.Length > 128) return null;
+        var selected = instance.Trim();
+        var providers = _platformConfig.CurrentValue.Providers;
+        ProviderConfig? config = null;
+        if (providers is not null)
+        {
+            var match = providers.FirstOrDefault(p => string.Equals(p.Key, selected, StringComparison.OrdinalIgnoreCase));
+            if (match.Value is null && IsCopilotType(selected))
+            {
+                var alias = string.Equals(selected, "copilot", StringComparison.OrdinalIgnoreCase) ? "github-copilot" : "copilot";
+                match = providers.FirstOrDefault(p => string.Equals(p.Key, alias, StringComparison.OrdinalIgnoreCase));
+            }
+            if (match.Value is not null) { selected = match.Key; config = match.Value; }
+        }
+        var canonical = string.Equals(selected, "copilot", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(selected, "github-copilot", StringComparison.OrdinalIgnoreCase);
+        if (config is null && !canonical) return null;
+        if (config is not null && (!config.Enabled ||
+            !IsCopilotType(config.Type ?? selected) || !IsPublicCopilotEndpoint(config.BaseUrl))) return null;
+        var authKey = canonical ? "copilot" : selected;
+        if (config?.ApiKey is not null)
+        {
+            if (!config.ApiKey.StartsWith("auth:", StringComparison.OrdinalIgnoreCase)) return null;
+            authKey = config.ApiKey[5..].Trim();
+            if (authKey.Length == 0) return null;
+        }
+        LoadAuthEntries();
+        if (!TryGetAuthEntry(authKey, out var entry) ||
+            !string.Equals(entry.Type, "oauth", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(entry.Refresh) || !IsPublicCopilotEndpoint(entry.Endpoint)) return null;
+        var scope = canonical ? "github-copilot" : selected.ToLowerInvariant();
+        var generation = Convert.ToHexString(System.Security.Cryptography.HMACSHA256.HashData(
+            _quotaGenerationKey, System.Text.Encoding.UTF8.GetBytes(authKey + "\n" + entry.Refresh)));
+        return new CopilotAccountCredential(scope, generation, entry.Refresh);
+    }
+
+    private static bool IsCopilotType(string type) =>
+        string.Equals(type, "copilot", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPublicCopilotEndpoint(string? endpoint) => string.IsNullOrWhiteSpace(endpoint) ||
+        (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
+         (uri.Host == "api.githubcopilot.com" || uri.Host == "api.individual.githubcopilot.com") &&
+         uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo));
 
     // #1797: the individual/fallback GitHub Copilot MCP host. Distinct from the chat BaseUrl host
     // (api.individual.githubcopilot.com) - the MCP surface lives on api.githubcopilot.com.
@@ -206,76 +285,86 @@ public sealed class GatewayAuthManager
             return authKey;
         }
 
-        // #2807: declared provider configuration must be consulted BEFORE the process environment.
-        // The previous order let an ambient variable win over an explicitly declared credential, and
-        // let a declared-but-blank credential fall through to whatever the environment happened to
-        // hold. Ambient admission is now gated on nothing having been declared at all.
-        var declaredKey = await ResolveProviderConfigApiKeyAsync(provider, cancellationToken).ConfigureAwait(false);
-        if (declaredKey is not null)
-        {
-            return declaredKey;
-        }
-
-        var credential = ProviderCredentialResolver.Resolve(provider, declaredApiKey: null, _logger);
-        return credential.HasValue ? credential.Value : null;
+        // #2807/#4043: ambient admission is gated on whether provider configuration declared a
+        // credential, not whether that declaration happened to resolve to a usable value. Keep the
+        // declaration bit when auth: lookup is empty, missing, unusable, or refresh-failed so those
+        // states cannot silently substitute an unrelated process credential.
+        var configuredCredential = await ResolveProviderConfigApiKeyAsync(provider, cancellationToken).ConfigureAwait(false);
+        var credential = ProviderCredentialResolver.Resolve(
+            provider,
+            configuredCredential.IsDeclared ? configuredCredential.ApiKey ?? string.Empty : null,
+            _logger);
+        return credential.Source == CredentialSource.Declared
+            ? credential.Value
+            : credential.HasValue ? credential.Value : null;
     }
 
     /// <summary>
-    /// #2025: the single credential-threading seam for background (non-agent-loop) LLM callers.
-    /// Resolves the provider API key via <see cref="GetApiKeyAsync"/> and returns a
-    /// <see cref="SimpleStreamOptions"/> carrying it, mirroring what the foreground agent loop
-    /// (<c>AgentLoopRunner.BuildStreamOptionsAsync</c>) does for interactive turns. Background
-    /// callers (auto-title, compaction) route through this instead of rolling their own
-    /// key-resolution + options-building, so every LLM call authenticates the same way.
+    /// Creates the provider-owned execution policy used by foreground and background LLM calls.
+    /// The resolved credential and configured stream-idle timeout are applied without overwriting
+    /// explicit base options. A blank credential sentinel is preserved to suppress ambient fallback.
     /// </summary>
-    /// <param name="provider">The model's provider (e.g. <c>github-copilot</c>).</param>
-    /// <param name="baseOptions">Optional caller-supplied options to preserve (timeouts, cancellation,
-    /// stream-setup watchdog). A copy is returned with <see cref="SimpleStreamOptions.ApiKey"/> set;
-    /// the caller's instance is not mutated. When null a fresh options instance is created.</param>
-    /// <param name="sessionId">
-    /// #3417: the identity of the session this background call is acting on. Threading it HERE - at
-    /// the shared seam - rather than at each call site is deliberate: <c>SessionId</c> is what drives
-    /// the Copilot Responses <c>prompt_cache_key</c>, and the two existing background callers
-    /// (compaction, auto-title) had each independently omitted it, leaving that branch dead for the
-    /// largest prompt the gateway ever sends. A third background caller now inherits the behaviour by
-    /// construction instead of having to remember.
-    /// <para>
-    /// Typed as <see cref="SessionId"/> rather than a raw string (#3099 primitive-ID fence): the value
-    /// object cannot hold a blank, so "no session identity" is representable only as <c>null</c> and
-    /// an empty cache key cannot be constructed at this seam at all. A null value is inert - the
-    /// caller's <paramref name="baseOptions"/> value, if any, survives untouched.
-    /// </para>
-    /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>
-    /// Options with the resolved key applied. A null/blank resolved key leaves <c>ApiKey</c> null so
-    /// the provider falls back to environment keys - behaviour-preserving for callers that previously
-    /// passed no options at all.
-    /// </returns>
-    public async Task<SimpleStreamOptions> CreateAuthenticatedOptionsAsync(
+    /// <param name="provider">The model provider whose execution policy is required.</param>
+    /// <param name="baseOptions">Optional provider policy to copy and enrich.</param>
+    /// <param name="cancellationToken">Cancellation for credential resolution.</param>
+    /// <returns>A fresh execution-policy value with gateway authentication and timeout policy applied.</returns>
+    public async Task<ProviderExecutionOptions> CreateExecutionOptionsAsync(
         string provider,
-        SimpleStreamOptions? baseOptions = null,
-        SessionId? sessionId = null,
+        ProviderExecutionOptions? baseOptions = null,
         CancellationToken cancellationToken = default)
     {
         var apiKey = await GetApiKeyAsync(provider, cancellationToken).ConfigureAwait(false);
-        var options = baseOptions ?? new SimpleStreamOptions();
-
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
+        var options = baseOptions ?? new ProviderExecutionOptions();
+        if (options.StreamIdleTimeoutMs is null)
+            options = options with { StreamIdleTimeoutMs = ResolveStreamIdleTimeoutMs(provider) };
+        if (apiKey is not null)
             options = options with { ApiKey = apiKey };
-        }
-
-        // A null id must leave SessionId exactly as the caller left it. Writing null through would
-        // erase a value the caller had already set, and an empty string would become an empty
-        // prompt_cache_key on the wire - a different (and worse) failure than the absent key this
-        // fix removes.
-        if (sessionId is { } resolvedSessionId)
+        var metadata = options.Metadata is null ? new Dictionary<string, object>() : new Dictionary<string, object>(options.Metadata);
+        // Never retain caller attribution after resolving a different credential. Unsupported or
+        // ambiguous paths are explicitly unavailable, not legacy calls attributed to the default.
+        metadata[BotNexus.Agent.Providers.Copilot.Headers.CopilotHeaderScope.MetadataKey] =
+            (object?)ResolveHeaderScope(provider, options.ApiKey) ??
+            BotNexus.Agent.Providers.Copilot.Headers.CopilotHeaderAttribution.Unavailable;
+        return options with { Metadata = metadata };
+    }
+    private BotNexus.Agent.Providers.Copilot.Headers.CopilotHeaderScope? ResolveHeaderScope(string provider, string? apiKey)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey)) return null;
+        var account = ResolveCopilotAccountCredential(provider);
+        if (account is null) return null;
+        var providers = _platformConfig.CurrentValue.Providers;
+        ProviderConfig? config = null;
+        if (providers is not null) TryGetProviderConfig(providers, provider, out config);
+        var authKey = config?.ApiKey?.StartsWith("auth:", StringComparison.OrdinalIgnoreCase) == true
+            ? config.ApiKey[5..].Trim()
+            : IsCopilotType(provider) ? "copilot" : provider;
+        lock (_sync)
         {
-            options = options with { SessionId = resolvedSessionId.Value };
+            if (!TryGetAuthEntry(authKey, out var selected) ||
+                !string.Equals(selected.Access, apiKey, StringComparison.Ordinal) ||
+                !string.Equals(selected.Refresh, account.OAuthToken, StringComparison.Ordinal)) return null;
+            // GetApiKeyAsync gives an exact auth entry precedence over a configured auth: reference.
+            // Even equal access tokens cannot prove the selected OAuth account supplied the key.
+            if (TryGetAuthEntry(provider, out var exact) && !string.IsNullOrWhiteSpace(exact.Access) &&
+                (!string.Equals(exact.Access, apiKey, StringComparison.Ordinal) ||
+                 !string.Equals(exact.Refresh, selected.Refresh, StringComparison.Ordinal))) return null;
+            return new(account.Instance, account.Generation);
+        }
+    }
+
+    private int? ResolveStreamIdleTimeoutMs(string provider)
+    {
+        var providers = _platformConfig.CurrentValue.Providers;
+        if (providers is null)
+            return null;
+
+        foreach (var (name, providerConfig) in providers)
+        {
+            if (string.Equals(name, provider, StringComparison.OrdinalIgnoreCase))
+                return providerConfig.ResolveStreamIdleTimeoutMs();
         }
 
-        return options;
+        return null;
     }
 
     /// <summary>
@@ -322,25 +411,24 @@ public sealed class GatewayAuthManager
         return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
-    private async Task<string?> ResolveProviderConfigApiKeyAsync(string provider, CancellationToken cancellationToken)
+    private async Task<ConfiguredCredentialResolution> ResolveProviderConfigApiKeyAsync(
+        string provider,
+        CancellationToken cancellationToken)
     {
-        if (_platformConfig.CurrentValue.Providers is null)
-        {
-            return null;
-        }
-
-        if (!TryGetProviderConfig(_platformConfig.CurrentValue.Providers, provider, out var providerConfig) ||
+        if (_platformConfig.CurrentValue.Providers is null ||
+            !TryGetProviderConfig(_platformConfig.CurrentValue.Providers, provider, out var providerConfig) ||
             providerConfig?.ApiKey is null)
         {
-            return null;
+            return ConfiguredCredentialResolution.Undeclared;
         }
 
-        // #2807: a declared-but-blank apiKey is still a declaration. Returning null here would let the
-        // caller widen into the ambient environment, which is exactly the substitution being prevented,
-        // so the blank value is returned as-is and fails the caller's own emptiness guard instead.
+        // Declaration presence is policy state independent of credential resolution. In particular,
+        // an auth: reference remains declared when its target is blank, absent, unusable, or cannot
+        // be refreshed; the caller must not reinterpret any of those outcomes as permission to use
+        // ambient credentials.
         if (string.IsNullOrWhiteSpace(providerConfig.ApiKey))
         {
-            return providerConfig.ApiKey;
+            return ConfiguredCredentialResolution.Declared(providerConfig.ApiKey);
         }
 
         const string AuthPrefix = "auth:";
@@ -349,13 +437,21 @@ public sealed class GatewayAuthManager
             var referenceProvider = providerConfig.ApiKey[AuthPrefix.Length..].Trim();
             if (string.IsNullOrWhiteSpace(referenceProvider))
             {
-                return null;
+                return ConfiguredCredentialResolution.Declared(apiKey: null);
             }
 
-            return await GetApiKeyFromAuthEntryAsync(referenceProvider, cancellationToken).ConfigureAwait(false);
+            var outcome = await ResolveAuthEntryCredentialAsync(referenceProvider, cancellationToken).ConfigureAwait(false);
+            return ConfiguredCredentialResolution.Declared(outcome.ApiKey);
         }
 
-        return providerConfig.ApiKey;
+        return ConfiguredCredentialResolution.Declared(providerConfig.ApiKey);
+    }
+
+    private readonly record struct ConfiguredCredentialResolution(bool IsDeclared, string? ApiKey)
+    {
+        public static ConfiguredCredentialResolution Undeclared => new(false, null);
+
+        public static ConfiguredCredentialResolution Declared(string? apiKey) => new(true, apiKey);
     }
 
     private async Task<string?> GetApiKeyFromAuthEntryAsync(string provider, CancellationToken cancellationToken)
@@ -625,9 +721,10 @@ public sealed class GatewayAuthManager
                         _entries[key] = value;
                     }
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    _logger.LogWarning(ex, "Failed to parse auth file '{AuthPath}'.", candidatePath);
+                    // Auth paths and parser diagnostics can contain private data; log neither.
+                    _logger.LogWarning("Failed to parse auth file.");
                 }
             }
 
@@ -662,9 +759,10 @@ public sealed class GatewayAuthManager
                     builder.Append("absent");
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                _logger.LogDebug(ex, "Failed to stat auth file '{AuthPath}' for staleness detection.", candidatePath);
+                // Auth paths and filesystem exceptions can contain private data; log neither.
+                _logger.LogDebug("Failed to stat auth file for staleness detection.");
                 builder.Append("unknown");
             }
 

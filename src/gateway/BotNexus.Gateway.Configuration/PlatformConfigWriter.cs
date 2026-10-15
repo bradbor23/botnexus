@@ -82,6 +82,9 @@ public sealed class PlatformConfigWriter
     /// </remarks>
     private readonly Writers.IConfigurationWriter _writer;
 
+    /// <summary>The exact persistence backends registered for this writer.</summary>
+    public IReadOnlyList<Writers.ConfigurationBackendDescriptor> Backends => _writer.Backends;
+
     /// <summary>
     /// Store consulted for the pristine document when no config file exists. Null for file-only
     /// installations, which is every caller that has not been given a store.
@@ -209,7 +212,12 @@ public sealed class PlatformConfigWriter
     /// full authoritative section from disk (e.g. LocationsController, which must be
     /// able to delete entries by omission) get a straight replace.
     /// </param>
-    public async Task UpdateSectionAsync(string sectionName, JsonNode value, CancellationToken ct = default, bool merge = true)
+    public async Task UpdateSectionAsync(
+        string sectionName,
+        JsonNode value,
+        CancellationToken ct = default,
+        bool merge = true,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
         => await MutateAsync(
             root =>
             {
@@ -230,17 +238,18 @@ public sealed class PlatformConfigWriter
                 //    symmetric restore walks the same paths RedactSecrets uses.
                 var existingWrapper = new JsonObject { [sectionName] = existing.DeepClone() };
                 var incomingWrapper = new JsonObject { [sectionName] = incoming.DeepClone() };
-                ConfigSecretMerge.RestoreSecrets(existingWrapper, incomingWrapper);
+                existingWrapper.RestoreSecrets(incomingWrapper);
                 var restoredIncoming = incomingWrapper[sectionName] as JsonObject ?? incoming;
 
                 // 2) Deep-merge restored payload over existing so omitted subtrees survive.
-                ConfigSecretMerge.DeepMerge(merged, restoredIncoming);
+                merged.DeepMerge(restoredIncoming);
 
                 root[sectionName] = merged;
             },
             $"before-{sectionName}-update",
             ct,
-            namedSections: [sectionName]);
+            namedSections: [sectionName],
+            additionalValidation: additionalValidation);
 
     /// <summary>
     /// Reads the current platform configuration together with the revision token it was read at.
@@ -490,7 +499,8 @@ public sealed class PlatformConfigWriter
         IReadOnlyList<ConfigPatchOperation> operations,
         string reason,
         string? expectedRevision = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
     {
         ArgumentNullException.ThrowIfNull(operations);
 
@@ -514,11 +524,11 @@ public sealed class PlatformConfigWriter
                 // Apply to a candidate first: a failure part-way through must not leave the live
                 // root half-mutated, because MutateCoreAsync's guard compares against it.
                 var candidate = root.DeepClone().AsObject();
-                var applyError = ConfigPatchApplier.Apply(candidate, operations);
+                var applyError = candidate.Apply(operations);
                 if (applyError is not null)
                     return Task.FromResult<string?>(applyError);
 
-                ConfigSecretMerge.RestoreSecrets(root, candidate);
+                root.RestoreSecrets(candidate);
 
                 root.Clear();
                 foreach (var kvp in candidate)
@@ -530,7 +540,8 @@ public sealed class PlatformConfigWriter
             reason,
             validateCandidate: true,
             ConfigPatchApplier.DeclaredSections(operations),
-            ct);
+            ct,
+            additionalValidation);
 
         return errors.Count > 0
             ? new ConfigPatchResult(false, null, errors)
@@ -577,7 +588,12 @@ public sealed class PlatformConfigWriter
     /// <summary>
     /// Updates a keyed entry within a section (e.g., providers.github-copilot).
     /// </summary>
-    public async Task UpdateSectionEntryAsync(string sectionName, string key, JsonNode value, CancellationToken ct = default)
+    public async Task UpdateSectionEntryAsync(
+        string sectionName,
+        string key,
+        JsonNode value,
+        CancellationToken ct = default,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
         => await MutateAsync(root =>
         {
             if (root[sectionName] is not JsonObject section)
@@ -595,18 +611,18 @@ public sealed class PlatformConfigWriter
             {
                 var existingWrapper = new JsonObject { [sectionName] = new JsonObject { [key] = existing.DeepClone() } };
                 var incomingWrapper = new JsonObject { [sectionName] = new JsonObject { [key] = incoming.DeepClone() } };
-                ConfigSecretMerge.RestoreSecrets(existingWrapper, incomingWrapper);
+                existingWrapper.RestoreSecrets(incomingWrapper);
                 var restoredIncoming = incomingWrapper[sectionName]![key] as JsonObject ?? incoming;
 
                 var merged = existing.DeepClone().AsObject();
-                ConfigSecretMerge.DeepMerge(merged, restoredIncoming);
+                merged.DeepMerge(restoredIncoming);
                 section[key] = merged;
             }
             else
             {
                 section[key] = value;
             }
-        }, $"before-{sectionName}-update", ct, namedSections: [sectionName]);
+        }, $"before-{sectionName}-update", ct, namedSections: [sectionName], additionalValidation: additionalValidation);
 
     /// <summary>
     /// Atomically mutates the config document and persists the result.
@@ -620,14 +636,15 @@ public sealed class PlatformConfigWriter
         Action<JsonObject> mutation,
         string reason,
         CancellationToken ct = default,
-        IReadOnlyCollection<string>? namedSections = null)
+        IReadOnlyCollection<string>? namedSections = null,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
     {
         ArgumentNullException.ThrowIfNull(mutation);
         await MutateAsync(root =>
         {
             mutation(root);
             return Task.CompletedTask;
-        }, reason, ct, namedSections);
+        }, reason, ct, namedSections, additionalValidation);
     }
 
     /// <summary>
@@ -645,7 +662,8 @@ public sealed class PlatformConfigWriter
         Func<JsonObject, Task> mutation,
         string reason,
         CancellationToken ct = default,
-        IReadOnlyCollection<string>? namedSections = null)
+        IReadOnlyCollection<string>? namedSections = null,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
     {
         ArgumentNullException.ThrowIfNull(mutation);
 
@@ -658,7 +676,8 @@ public sealed class PlatformConfigWriter
             reason,
             validateCandidate: false,
             namedSections,
-            ct);
+            ct,
+            additionalValidation);
 
         // This overload has no error channel in its signature, so a guard rejection must throw or
         // it would be indistinguishable from a successful write - which is precisely the silent
@@ -747,7 +766,8 @@ public sealed class PlatformConfigWriter
         string reason,
         bool validateCandidate,
         IReadOnlyCollection<string>? namedSections,
-        CancellationToken ct)
+        CancellationToken ct,
+        Func<JsonObject, JsonObject, IReadOnlyList<string>>? additionalValidation = null)
     {
         // Lock order is always semaphore -> cross-process file lock (#2134). See
         // CrossProcessConfigLock for the ordering/deadlock argument: the semaphore keeps this
@@ -771,6 +791,19 @@ public sealed class PlatformConfigWriter
             if (destroyed.Count > 0)
                 return [ConfigSectionGuard.FormatRejection(_configPath, destroyed)];
 
+            if (additionalValidation is not null)
+            {
+                var additionalErrors = additionalValidation(pristine, root);
+                if (additionalErrors.Count > 0)
+                    return additionalErrors;
+            }
+
+            // Ceiling constraints apply even to legacy raw mutation paths. Validate only this
+            // new policy here; unrelated legacy configuration remains load-tolerated.
+            var ceilingErrors = ValidateCompactionCeilings(root);
+            if (ceilingErrors.Count > 0)
+                return ceilingErrors;
+
             if (validateCandidate)
             {
                 // Validate the complete candidate document, not just the mutated fragment: a
@@ -788,6 +821,47 @@ public sealed class PlatformConfigWriter
         finally
         {
             WriteLock.Release();
+        }
+    }
+
+    private static IReadOnlyList<string> ValidateCompactionCeilings(JsonObject root)
+    {
+        List<string> errors = [];
+        var worlds = Matches(root, "world");
+        var agentSections = Matches(root, "agents");
+        // Reject scope ambiguity only when this policy is present (including explicit null).
+        // Unrelated legacy duplicate casing remains load-tolerated on raw mutation paths.
+        if (worlds.Length > 1 && worlds.Any(entry => HasCeiling(entry.Value)))
+            errors.Add("world has ambiguous case-insensitive duplicate keys for compactionTokenCeiling policy.");
+        if (agentSections.Length > 1 && agentSections.Any(entry =>
+                entry.Value is JsonObject agents && agents.Any(agent => HasCeiling(agent.Value))))
+            errors.Add("agents has ambiguous case-insensitive duplicate keys for compactionTokenCeiling policy.");
+        foreach (var entry in worlds)
+            if (entry.Value is JsonObject world)
+                Check(world, entry.Key);
+        foreach (var section in agentSections)
+            if (section.Value is JsonObject agents)
+                foreach (var entry in agents)
+                    if (entry.Value is JsonObject agent)
+                        Check(agent, section.Key + "." + entry.Key);
+        return errors;
+
+        static KeyValuePair<string, JsonNode?>[] Matches(JsonObject scope, string name)
+            => scope.Where(entry => string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        static bool HasCeiling(JsonNode? node)
+            => node is JsonObject scope && Matches(scope, "compactionTokenCeiling").Length > 0;
+
+        void Check(JsonObject scope, string path)
+        {
+            var ceilings = Matches(scope, "compactionTokenCeiling");
+            if (ceilings.Length > 1)
+                errors.Add(path + ".compactionTokenCeiling has ambiguous case-insensitive duplicate keys.");
+            // Validate all occurrences: null or a valid first key must not hide an invalid alias.
+            foreach (var entry in ceilings)
+                if (entry.Value is { } value
+                    && (value is not JsonValue scalar || !scalar.TryGetValue<int>(out var tokens) || tokens <= 0))
+                    errors.Add(path + "." + entry.Key + " must be a positive 32-bit integer or null.");
         }
     }
 

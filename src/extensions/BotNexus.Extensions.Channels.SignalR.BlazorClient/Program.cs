@@ -50,6 +50,7 @@ builder.Services.AddScoped<MemoryApiClient>();
 builder.Services.AddScoped<NavOrderApiClient>();
 builder.Services.AddScoped<NotificationsApiClient>();
 builder.Services.AddScoped<DesktopNotifier>();
+builder.Services.AddScoped<ReleaseHistoryClient>();
 builder.Services.AddScoped<IPortalPreferencesService, PortalPreferencesService>();
 
 await builder.Build().RunAsync();

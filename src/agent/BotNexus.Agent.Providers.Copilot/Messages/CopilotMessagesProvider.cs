@@ -24,7 +24,7 @@ namespace BotNexus.Agent.Providers.Copilot.Messages;
 /// Optional secret redactor applied to a non-2xx error body before it is interpolated into an
 /// exception message that the agent loop persists as the session-visible <c>ErrorMessage</c> (#2881).
 /// </param>
-public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecretRedactor? secretRedactor = null) : IApiProvider
+public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecretRedactor? secretRedactor = null, Headers.ICopilotHeaderSink? headerSink = null) : IApiProvider
 {
     private const string ApiVersion = "2023-06-01";
     public const string ApiId = "github-copilot-messages";
@@ -37,6 +37,11 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
     private const long ErrorBodyLimitBytes = 64L * 1024;
 
     private readonly HttpClient _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+    private readonly CopilotEffortCapabilityCache _effortCapabilities = new();
+
+    // Instance-local seam lets tests control queued dispatch without thread-pool timing.
+    internal Func<Func<Task>, CancellationToken, Task> ScheduleProducer { get; init; }
+        = static (producer, token) => Task.Run(producer, token);
 
     public string Api => ApiId;
 
@@ -53,10 +58,13 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
 
     public LlmStream Stream(LlmModel model, Context context, StreamOptions? options = null)
     {
+        var capture = Headers.CopilotHeaderCapture.Begin(headerSink, model, options);
         var stream = new LlmStream();
         var ct = options?.CancellationToken ?? CancellationToken.None;
 
-        _ = Task.Run(async () =>
+        // The producer owns terminal completion even when cancellation precedes dispatch.
+        // Never let scheduling cancellation prevent its protected cancellation handler from running.
+        _ = ScheduleProducer(async () =>
         {
             var usage = Usage.Empty();
             string? responseId = null;
@@ -69,7 +77,8 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
 
             try
             {
-                await StreamCoreAsync(model, context, options, stream,
+                ct.ThrowIfCancellationRequested();
+                await StreamCoreAsync(model, context, options, capture, stream,
                     contentBlocks, usage,
                     updatedUsage => usage = updatedUsage,
                     id => responseId = id,
@@ -94,7 +103,7 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
                 stream.End(msg);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             }
-        }, ct);
+        }, CancellationToken.None);
 
         return stream;
     }
@@ -119,6 +128,7 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
             MaxRetryDelayMs = baseOptions.MaxRetryDelayMs,
             Metadata = baseOptions.Metadata,
             StreamSetupTimeoutMs = baseOptions.StreamSetupTimeoutMs,
+            StreamIdleTimeoutMs = baseOptions.StreamIdleTimeoutMs,
         };
 
         if (options?.Reasoning is { } reasoning)
@@ -169,7 +179,7 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
 
     private async Task StreamCoreAsync(
         LlmModel model, Context context, StreamOptions? options,
-        LlmStream stream, List<ContentBlock> contentBlocks, Usage initialUsage,
+        Headers.CopilotHeaderCapture capture, LlmStream stream, List<ContentBlock> contentBlocks, Usage initialUsage,
         Action<Usage> setUsage,
         Action<string?> setResponseId, Action<StopReason> setStopReason,
         CancellationToken ct)
@@ -182,8 +192,6 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
             throw new InvalidOperationException(
                 $"No API key for {model.Provider}. Set credentials before using model '{model.Id}'.");
         }
-
-        var baseUrl = model.BaseUrl.TrimEnd('/');
 
         var requestBody = CopilotMessagesRequestBuilder.BuildRequestBody(
             model,
@@ -199,18 +207,15 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
                 requestBody = modifiedObject;
         }
 
-        var json = requestBody.ToJsonString();
+        var requestedEffort = requestBody["output_config"]?["effort"]?.GetValue<string>();
+        if (requestedEffort is not null)
+        {
+            var clamped = _effortCapabilities.Clamp(model.Id, model.Name, requestedEffort);
+            requestBody["output_config"]!["effort"] = clamped;
+            requestedEffort = clamped;
+        }
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
-        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        ConfigureRequestHeaders(httpRequest, apiKey, copilotOpts, model);
-
-        // Copilot transport always applies the dynamic vision/intent headers.
-        var hasImages = CopilotHeaders.HasVisionInput(context.Messages);
-        var headerOptions = Headers.CopilotInteractionId.WithResolvedInteractionId(copilotOpts?.HeaderOptions);
-        foreach (var (key, value) in CopilotHeaders.BuildDynamicHeaders(context.Messages, hasImages, headerOptions))
-            httpRequest.Headers.TryAddWithoutValidation(key, value);
-
+        var baseUrl = model.BaseUrl.TrimEnd('/');
         var setupTimeoutMs = options?.StreamSetupTimeoutMs ?? 0;
         using var setupTimeoutCts = setupTimeoutMs > 0
             ? new CancellationTokenSource(setupTimeoutMs)
@@ -219,60 +224,121 @@ public sealed partial class CopilotMessagesProvider(HttpClient httpClient, ISecr
             ? CancellationTokenSource.CreateLinkedTokenSource(ct, setupTimeoutCts.Token)
             : null;
         var effectiveCt = linkedCts?.Token ?? ct;
+        var hasImages = CopilotHeaders.HasVisionInput(context.Messages);
+        var headerOptions = Headers.CopilotInteractionId.WithResolvedInteractionId(copilotOpts?.HeaderOptions);
 
-        using var response = await _httpClient.SendAsync(
-            httpRequest, HttpCompletionOption.ResponseHeadersRead, effectiveCt);
-
-        // Surface Copilot response correlation IDs + quota snapshots before the
-        // success check so error responses are still observable.
-        Headers.CopilotResponseHeaders.EmitToActivity(response, Activity.Current);
-
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage? response = null;
+        try
         {
-            // Bound the untrusted error body so a hostile/malfunctioning endpoint cannot stream a
-            // huge body on the failure path (OOM-DoS guard, #1653). A truncation here must not mask
-            // the real HTTP failure -- on over-cap, fall back to a short placeholder so
-            // ThrowForFailedResponse still surfaces the status code.
-            string errorBody;
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                errorBody = await BoundedHttpContent.ReadStringWithLimitAsync(
-                    response.Content, ErrorBodyLimitBytes, effectiveCt);
-            }
-            catch (ResponseContentTooLargeException)
-            {
-                errorBody = $"<error body exceeded {ErrorBodyLimitBytes} bytes and was discarded>";
+                using var httpRequest = BuildHttpRequest(
+                    requestBody, baseUrl, apiKey, copilotOpts, model, context, hasImages, headerOptions);
+                response = await _httpClient.SendAsync(
+                    httpRequest, HttpCompletionOption.ResponseHeadersRead, effectiveCt);
+
+                capture.Observe(response);
+                Headers.CopilotResponseHeaders.EmitToActivity(response, Activity.Current);
+                if (response.IsSuccessStatusCode)
+                    break;
+
+                var errorBody = await ReadErrorBodyAsync(response, effectiveCt);
+                if (attempt == 0 &&
+                    response.StatusCode == System.Net.HttpStatusCode.BadRequest &&
+                    requestedEffort is not null &&
+                    CopilotEffortCapabilityCache.TryParseRejection(
+                        errorBody, requestedEffort, out var authoritativeModelId, out var supported) &&
+                    CopilotEffortCapabilityCache.SelectClosest(requestedEffort, supported) is { } selected &&
+                    !string.Equals(selected, requestedEffort, StringComparison.Ordinal))
+                {
+                    _effortCapabilities.Remember(authoritativeModelId, model.Id, supported);
+                    _effortCapabilities.Remember(authoritativeModelId, model.Name, supported);
+                    Activity.Current?.AddEvent(new ActivityEvent(
+                        "copilot.messages.effort_fallback",
+                        tags: new ActivityTagsCollection
+                        {
+                            ["botnexus.model"] = model.Id,
+                            ["botnexus.copilot.authoritative_model"] = authoritativeModelId,
+                            ["botnexus.copilot.requested_effort"] = requestedEffort,
+                            ["botnexus.copilot.selected_effort"] = selected,
+                        }));
+                    requestBody["output_config"]!["effort"] = selected;
+                    requestedEffort = selected;
+                    response.Dispose();
+                    response = null;
+                    continue;
+                }
+
+                ProviderHttpErrorHelper.ThrowForFailedResponse(response, errorBody, "Copilot Messages", secretRedactor);
             }
 
-            ProviderHttpErrorHelper.ThrowForFailedResponse(response, errorBody, "Copilot Messages", secretRedactor);
+            using var responseStream = await response.Content.ReadAsStreamAsync(effectiveCt);
+            Action? onFirstToken = setupTimeoutCts is not null
+                ? () =>
+                {
+                    try { setupTimeoutCts.Cancel(); }
+                    catch (ObjectDisposedException) { }
+                }
+                : null;
+
+            var result = await CopilotMessagesStreamParser.ProcessStreamAsync(
+                responseStream,
+                model,
+                stream,
+                contentBlocks,
+                initialUsage,
+                BuildMessage,
+                MapStopReason,
+                ct,
+                onFirstToken,
+                StreamIdleTimeout.Resolve(options),
+                secretRedactor);
+
+            // Publish parsed metadata before reporting incomplete EOF so the terminal error
+            // retains the response identity and usage, rather than losing parser-local state.
+            setUsage(result.Usage);
+            setResponseId(result.ResponseId);
+            setStopReason(result.StopReason);
+            if (!result.MessageStopped)
+                throw new InvalidOperationException("Copilot streaming error: stream ended before message_stop.");
         }
+        finally
+        {
+            response?.Dispose();
+        }
+    }
 
-        using var responseStream = await response.Content.ReadAsStreamAsync(effectiveCt);
+    private static HttpRequestMessage BuildHttpRequest(
+        JsonObject requestBody,
+        string baseUrl,
+        string apiKey,
+        CopilotMessagesOptions? copilotOpts,
+        LlmModel model,
+        Context context,
+        bool hasImages,
+        CopilotHeaderOptions? headerOptions)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages")
+        {
+            Content = new StringContent(requestBody.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        ConfigureRequestHeaders(request, apiKey, copilotOpts, model);
+        foreach (var (key, value) in CopilotHeaders.BuildDynamicHeaders(context.Messages, hasImages, headerOptions))
+            request.Headers.TryAddWithoutValidation(key, value);
+        return request;
+    }
 
-        Action? onFirstToken = setupTimeoutCts is not null
-            ? () =>
-            {
-                try { setupTimeoutCts.Cancel(); }
-                catch (ObjectDisposedException) { }
-            }
-            : null;
-
-        // The parser owns the streaming byte guard (#1668): hand it the raw response stream and it
-        // wraps it in a ByteCountingStream before reading, bounding the untrusted SSE body.
-        var (usage, responseId, stopReason) = await CopilotMessagesStreamParser.ProcessStreamAsync(
-            responseStream,
-            model,
-            stream,
-            contentBlocks,
-            initialUsage,
-            BuildMessage,
-            MapStopReason,
-            ct,
-            onFirstToken);
-
-        setUsage(usage);
-        setResponseId(responseId);
-        setStopReason(stopReason);
+    private static async Task<string> ReadErrorBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await BoundedHttpContent.ReadStringWithLimitAsync(
+                response.Content, ErrorBodyLimitBytes, cancellationToken);
+        }
+        catch (ResponseContentTooLargeException)
+        {
+            return $"<error body exceeded {ErrorBodyLimitBytes} bytes and was discarded>";
+        }
     }
 
     private static void ConfigureRequestHeaders(

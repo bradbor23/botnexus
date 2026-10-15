@@ -17,6 +17,52 @@ window.BotNexus.splitter = (function () {
         var leftPane = splitter.previousElementSibling;
         if (!leftPane) return;
 
+        var containerWidth = container.getBoundingClientRect().width;
+
+        // Restore persisted width, else use default.
+        // defaultFraction allows preserving legacy proportional defaults
+        // (for example 33% capped by a px value) on first load.
+        var defaultFromFraction = defaultPx;
+        if (typeof defaultFraction === 'number' && defaultFraction > 0 && defaultFraction <= 1) {
+            defaultFromFraction = Math.min(defaultPx, Math.floor(containerWidth * defaultFraction));
+        }
+
+        var savedPx = parseInt(localStorage.getItem(storageKey), 10);
+        var preferredPx = (!isNaN(savedPx) && savedPx > 0) ? savedPx : defaultFromFraction;
+
+        // Clean up before replacing an existing instance so re-initialization cannot accumulate
+        // document handlers or container observers.
+        if (_instances[containerId]) {
+            _instances[containerId]();
+        }
+
+        if (!leftPane.id) {
+            leftPane.id = containerId + '-start-pane';
+        }
+        splitter.setAttribute('tabindex', '0');
+        splitter.setAttribute('aria-controls', leftPane.id);
+        splitter.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight Home End');
+
+        function updateAccessibleValues(currentPx) {
+            var maxPx = Math.max(0, Math.floor(container.getBoundingClientRect().width * maxFraction));
+            splitter.setAttribute('aria-valuemin', String(Math.min(minPx, maxPx)));
+            splitter.setAttribute('aria-valuemax', String(maxPx));
+            splitter.setAttribute('aria-valuenow', String(currentPx));
+            splitter.setAttribute('aria-valuetext', currentPx + ' pixels');
+        }
+
+        function resizeAndPersist(desiredPx) {
+            preferredPx = applyWidth(container, leftPane, desiredPx, minPx, maxFraction);
+            localStorage.setItem(storageKey, String(preferredPx));
+            // A width the user set by hand: a later container resize must not override it.
+            userSized = true;
+            updateAccessibleValues(preferredPx);
+            return preferredPx;
+        }
+
+        var initialPx = applyWidth(container, leftPane, preferredPx, minPx, maxFraction);
+        updateAccessibleValues(initialPx);
+
         var dragging = false;
         var startX = 0;
         var startWidth = 0;
@@ -68,14 +114,13 @@ window.BotNexus.splitter = (function () {
                 if (container.getBoundingClientRect().width <= 0) return;
 
                 if (userSized) {
-                    var stored = parseInt(localStorage.getItem(storageKey), 10);
-                    if (!isNaN(stored) && stored > 0) {
-                        // Re-clamp only; the stored value is left alone so widening the window
-                        // restores the width the user picked rather than the squeezed one.
-                        applyWidth(container, leftPane, stored, minPx, maxFraction);
-                    }
+                    // Re-clamp only. preferredPx is the width the user picked and is never
+                    // overwritten here, so widening the window restores it rather than the
+                    // squeezed width. The ARIA values follow the visible width.
+                    updateAccessibleValues(applyWidth(container, leftPane, preferredPx, minPx, maxFraction));
                 } else {
                     applyDefault();
+                    updateAccessibleValues(leftPane.getBoundingClientRect().width);
                 }
             });
 
@@ -97,10 +142,7 @@ window.BotNexus.splitter = (function () {
         function onMouseMove(e) {
             if (!dragging) return;
             var delta = e.clientX - startX;
-            var newPx = Math.round(startWidth + delta);
-            newPx = applyWidth(container, leftPane, newPx, minPx, maxFraction);
-            localStorage.setItem(storageKey, String(newPx));
-            userSized = true;
+            resizeAndPersist(Math.round(startWidth + delta));
         }
 
         function onMouseUp() {
@@ -123,10 +165,7 @@ window.BotNexus.splitter = (function () {
         function onTouchMove(e) {
             if (!dragging || e.touches.length !== 1) return;
             var delta = e.touches[0].clientX - startX;
-            var newPx = Math.round(startWidth + delta);
-            newPx = applyWidth(container, leftPane, newPx, minPx, maxFraction);
-            localStorage.setItem(storageKey, String(newPx));
-            userSized = true;
+            resizeAndPersist(Math.round(startWidth + delta));
             e.preventDefault();
         }
 
@@ -135,17 +174,37 @@ window.BotNexus.splitter = (function () {
             splitter.classList.remove('dragging');
         }
 
+        function onKeyDown(e) {
+            var currentPx = leftPane.getBoundingClientRect().width;
+            var desiredPx;
+            switch (e.key) {
+                case 'ArrowLeft':
+                    desiredPx = currentPx - 10;
+                    break;
+                case 'ArrowRight':
+                    desiredPx = currentPx + 10;
+                    break;
+                case 'Home':
+                    desiredPx = minPx;
+                    break;
+                case 'End':
+                    desiredPx = Math.max(0, Math.floor(container.getBoundingClientRect().width * maxFraction));
+                    break;
+                default:
+                    return;
+            }
+            resizeAndPersist(desiredPx);
+            e.preventDefault();
+        }
+
         splitter.addEventListener('mousedown', onMouseDown);
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
         splitter.addEventListener('touchstart', onTouchStart, { passive: true });
         document.addEventListener('touchmove', onTouchMove, { passive: false });
         document.addEventListener('touchend', onTouchEnd);
+        splitter.addEventListener('keydown', onKeyDown);
 
-        // Clean up on re-init for the same container
-        if (_instances[containerId]) {
-            _instances[containerId]();
-        }
         _instances[containerId] = function () {
             if (observer) observer.disconnect();
             splitter.removeEventListener('mousedown', onMouseDown);
@@ -154,13 +213,15 @@ window.BotNexus.splitter = (function () {
             splitter.removeEventListener('touchstart', onTouchStart);
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
+            splitter.removeEventListener('keydown', onKeyDown);
         };
     }
 
     function applyWidth(container, leftPane, desiredPx, minPx, maxFraction) {
         var containerWidth = container.getBoundingClientRect().width;
-        var maxPx = Math.floor(containerWidth * maxFraction);
-        var clamped = Math.max(minPx, Math.min(desiredPx, maxPx));
+        var maxPx = Math.max(0, Math.floor(containerWidth * maxFraction));
+        // If a container is too narrow to satisfy both bounds, containment wins over minPx.
+        var clamped = Math.min(Math.max(minPx, desiredPx), maxPx);
         leftPane.style.flex = '0 0 ' + clamped + 'px';
         leftPane.style.width = clamped + 'px';
         return clamped;

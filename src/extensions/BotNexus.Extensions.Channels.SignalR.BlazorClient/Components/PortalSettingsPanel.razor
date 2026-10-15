@@ -21,6 +21,16 @@
                     Textarea grows as you type, up to @Prefs.Current.ExpandingInputMaxLines rows.
                 </div>
                 <div class="portal-settings-row">
+                    <label class="portal-settings-label">Animate active-run indicator</label>
+                    <input type="checkbox"
+                           data-testid="animate-active-run-toggle"
+                           checked="@Prefs.Current.AnimateActiveRunIndicator"
+                           @onchange="ToggleAnimateActiveRunIndicator" />
+                </div>
+                <div class="portal-settings-hint">
+                    Gently pulses the bottom edge of the message input while an agent is working.
+                </div>
+                <div class="portal-settings-row">
                     <label class="portal-settings-label">Debug Mode</label>
                     <input type="checkbox"
                            data-testid="debug-mode-toggle"
@@ -54,6 +64,21 @@
                 <div class="portal-settings-hint">
                     Dark is the default. The choice is stored in this browser and applied before the
                     page paints, so it does not flash on reload.
+                </div>
+                <div class="portal-settings-row">
+                    <label class="portal-settings-label" for="portal-shell-select">Portal shell <strong>Experimental</strong></label>
+                    <select id="portal-shell-select"
+                            class="portal-settings-select"
+                            data-testid="shell-select"
+                            value="@PortalShell.Normalize(Prefs.Current.Shell)"
+                            @onchange="ChangeShell">
+                        <option value="classic">Classic</option>
+                        <option value="simplified">Simplified</option>
+                    </select>
+                </div>
+                <div class="portal-settings-hint">
+                    Classic preserves the current portal. Simplified opts into shell and Home layout
+                    experiments as they become available. Applies immediately and is stored in this browser.
                 </div>
                 <div class="portal-settings-row">
                     <label class="portal-settings-label" for="portal-density-select">Interface density</label>
@@ -107,6 +132,12 @@
         await Prefs.SetExpandingInputAsync(enabled);
     }
 
+    private async Task ToggleAnimateActiveRunIndicator(ChangeEventArgs e)
+    {
+        var enabled = e.Value is bool b ? b : bool.Parse(e.Value?.ToString() ?? "false");
+        await Prefs.SetAnimateActiveRunIndicatorAsync(enabled);
+    }
+
     private async Task ToggleDebugMode(ChangeEventArgs e)
     {
         var enabled = e.Value is bool b ? b : bool.Parse(e.Value?.ToString() ?? "false");
@@ -121,6 +152,11 @@
     private async Task ChangeDensity(ChangeEventArgs e)
     {
         await Prefs.SetDensityAsync(e.Value?.ToString() ?? PortalDensity.Compact);
+    }
+
+    private async Task ChangeShell(ChangeEventArgs e)
+    {
+        await Prefs.SetShellAsync(e.Value?.ToString() ?? PortalShell.Classic);
     }
 
     private async Task ToggleArchiveConfirm(ChangeEventArgs e)

@@ -22,10 +22,11 @@ public sealed class SkillTool(
     string? workspaceSkillsDir,
     SkillsConfig? config,
     ISkillUsageTelemetry? telemetry = null,
-    string? pluginRootDir = null) : IAgentTool
+    string? pluginRootDir = null) : IAgentTool, IContextReplacementAwareTool
 {
     private readonly IFileSystem _fileSystem = new FileSystem();
-    private readonly ConcurrentDictionary<string, byte> _sessionLoaded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _contextLoaded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _evictedLoads = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Creates a SkillTool with a static skill list (for testing).</summary>
     internal SkillTool(IReadOnlyList<SkillDefinition> allSkills, SkillsConfig? config, ISkillUsageTelemetry? telemetry = null)
@@ -104,17 +105,26 @@ public sealed class SkillTool(
             """).RootElement.Clone());
 
     /// <summary>Gets the set of skill names explicitly loaded during this session.</summary>
-    public IReadOnlySet<string> SessionLoadedSkills => _sessionLoaded.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> SessionLoadedSkills => _contextLoaded.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
     public SkillsConfig? Config => config;
     public (string? Global, string? Agent, string? Workspace) DiscoveryPaths
         => (globalSkillsDir, agentSkillsDir, workspaceSkillsDir);
+
+    /// <inheritdoc />
+    public void OnContextReplaced()
+    {
+        foreach (var skillName in _contextLoaded.Keys)
+            _evictedLoads.TryAdd(skillName, 0);
+
+        _contextLoaded.Clear();
+    }
 
     public bool TryUnload(string skillName)
     {
         if (string.IsNullOrWhiteSpace(skillName))
             return false;
 
-        return _sessionLoaded.TryRemove(skillName, out _);
+        return _contextLoaded.TryRemove(skillName, out _);
     }
 
     public Task<IReadOnlyDictionary<string, object?>> PrepareArgumentsAsync(
@@ -144,7 +154,7 @@ public sealed class SkillTool(
     private async Task<AgentToolResult> ListSkillsAsync(CancellationToken cancellationToken)
     {
         var currentSkills = DiscoverSkills();
-        var resolution = SkillResolver.Resolve(currentSkills, config, explicitlyLoaded: _sessionLoaded.Keys.ToList());
+        var resolution = SkillResolver.Resolve(currentSkills, config, explicitlyLoaded: _contextLoaded.Keys.ToList());
 
         var lines = new List<string>();
         if (resolution.Loaded.Count > 0)
@@ -197,34 +207,91 @@ public sealed class SkillTool(
         if (skill is null)
             return TextResult($"Skill '{skillName}' not found. Use action 'list' to see available skills.");
 
-        if (_sessionLoaded.ContainsKey(skill.Name))
-            return TextResult($"Skill '{skill.Name}' is already loaded.");
+        // Before the payload: a refused load must leave the session exactly as it was, or a retry
+        // with corrected values reports "already loaded" and the caller never gets the content.
+        if (!TryResolveParameters(skill, arguments, out var parameterValues, out var parameterError))
+            return TextResult(parameterError);
 
-        // Delegate access checks to the resolver - it handles deny, allow, and limits
-        var resolution = SkillResolver.Resolve(currentSkills, config, explicitlyLoaded: [skill.Name]);
+        var payload = RenderSkill(skill, parameterValues);
+        var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload)));
+        if (_contextLoaded.TryGetValue(skill.Name, out var loadedFingerprint)
+            && string.Equals(loadedFingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            await RecordAsync(t => t.RecordSuppressedLoadAsync(skill.Name, cancellationToken)).ConfigureAwait(false);
+            return TextResult($"Skill '{skill.Name}' is already loaded in the current context.");
+        }
+
+        // Delegate access checks to the resolver - it handles deny, allow, and limits. Include
+        // skills already loaded in the current context so the next load is measured against real
+        // usage. Put them first so discovery order cannot let a new request displace prior usage.
+        var requestedSkills = _contextLoaded.Keys.Append(skill.Name).ToList();
+        var loadOrder = currentSkills
+            .OrderByDescending(candidate => _contextLoaded.ContainsKey(candidate.Name))
+            .ToList();
+        var resolution = SkillResolver.Resolve(loadOrder, config, explicitlyLoaded: requestedSkills);
         if (resolution.Denied.Any(s => string.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase)))
             return TextResult($"Skill '{skillName}' is not available for this agent.");
 
         if (!resolution.Loaded.Any(s => string.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase)))
-            return TextResult($"Skill '{skillName}' cannot be loaded (budget exceeded).");
+        {
+            var rejection = resolution.Rejections.FirstOrDefault(r =>
+                string.Equals(r.Skill.Name, skillName, StringComparison.OrdinalIgnoreCase));
+            return TextResult(rejection is null
+                ? $"Skill '{skillName}' cannot be loaded."
+                : RenderBudgetRejection(rejection));
+        }
 
-        // Parameter substitution runs BEFORE the skill is marked loaded: a refused load must leave
-        // the session exactly as it was, or a retry with the corrected values reports "already
-        // loaded" and the caller never gets the content.
-        if (!TryResolveParameters(skill, arguments, out var parameterValues, out var parameterError))
-            return TextResult(parameterError);
+        if (!TryMarkContextLoaded(skill.Name, fingerprint))
+        {
+            await RecordAsync(t => t.RecordSuppressedLoadAsync(skill.Name, cancellationToken)).ConfigureAwait(false);
+            return TextResult($"Skill '{skill.Name}' is already loaded in the current context.");
+        }
 
-        if (!_sessionLoaded.TryAdd(skill.Name, 0))
-            return TextResult($"Skill '{skill.Name}' is already loaded.");
-
-        // Record the load as a use once it has actually been added to the session (#1833).
+        // Record the full payload separately from cheap acknowledgements and post-compaction reloads.
         await RecordAsync(t => t.RecordUseAsync(skill.Name, cancellationToken)).ConfigureAwait(false);
+        if (_evictedLoads.TryRemove(skill.Name, out _))
+            await RecordAsync(t => t.RecordContextReloadAsync(skill.Name, cancellationToken)).ConfigureAwait(false);
 
-        var body = parameterValues.Count > 0
+        return TextResult(payload);
+    }
+
+    private bool TryMarkContextLoaded(string skillName, string fingerprint)
+    {
+        while (true)
+        {
+            if (_contextLoaded.TryGetValue(skillName, out var existing))
+            {
+                if (string.Equals(existing, fingerprint, StringComparison.Ordinal))
+                    return false;
+
+                if (_contextLoaded.TryUpdate(skillName, fingerprint, existing))
+                    return true;
+
+                continue;
+            }
+
+            if (_contextLoaded.TryAdd(skillName, fingerprint))
+                return true;
+        }
+    }
+
+    /// <summary>
+    /// Renders the load payload, with any declared parameters already substituted.
+    /// </summary>
+    /// <remarks>
+    /// Substitution happens here rather than at the call site so the context fingerprint is taken
+    /// over the text the caller actually receives: the same skill loaded with different values is a
+    /// different payload and must not be suppressed as a repeat load.
+    /// </remarks>
+    private static string RenderSkill(
+        SkillDefinition skill,
+        IReadOnlyDictionary<string, string>? parameterValues = null)
+    {
+        var body = parameterValues is { Count: > 0 }
             ? SkillDraftValidator.Substitute(skill.Content, parameterValues)
             : skill.Content;
 
-        return TextResult($"""
+        return $"""
             ## Skill: {skill.Name}
             **Path:** {skill.SourcePath}
             {RenderAppliedParameters(parameterValues)}
@@ -235,7 +302,7 @@ public sealed class SkillTool(
 
             {body}
             {RenderLinkedFiles(skill)}
-            """);
+            """;
     }
 
     /// <summary>
@@ -381,9 +448,9 @@ public sealed class SkillTool(
     /// reader can tell which words in the instructions came from the caller and which were written
     /// into the skill.
     /// </summary>
-    private static string RenderAppliedParameters(IReadOnlyDictionary<string, string> values)
+    private static string RenderAppliedParameters(IReadOnlyDictionary<string, string>? values)
     {
-        if (values.Count == 0)
+        if (values is null || values.Count == 0)
             return string.Empty;
 
         var lines = values
@@ -415,6 +482,31 @@ public sealed class SkillTool(
     /// pointing at the <c>view_file</c> action. Returns an empty string when the skill has
     /// no bundled support files so plain skills render unchanged.
     /// </summary>
+    private static string RenderBudgetRejection(SkillLoadRejection rejection)
+    {
+        var reason = rejection.Reason switch
+        {
+            SkillLoadRejectionReason.CountLimit => "count_limit",
+            SkillLoadRejectionReason.ContentLimit => "content_limit",
+            _ => throw new ArgumentOutOfRangeException(nameof(rejection))
+        };
+        var skill = rejection.Skill;
+        var recovery = skill.LinkedFiles.Count == 0
+            ? "No authorized linked support files were discovered for bounded recovery."
+            : $"""
+              Authorized bounded recovery:
+              **Path:** {skill.SourcePath}
+              **Resolved from:** {DescribeRoot(skill.Source)} skill root
+              {RenderLinkedFiles(skill).TrimStart()}
+              """;
+
+        return $"""
+            Skill '{skill.Name}' cannot be loaded because its configured skill budget was exceeded.
+            reason={reason}; configured={rejection.ConfiguredLimit}; current={rejection.Current}; requested={rejection.Requested}
+            {recovery}
+            """;
+    }
+
     private static string RenderLinkedFiles(SkillDefinition skill)
     {
         if (skill.LinkedFiles.Count == 0)

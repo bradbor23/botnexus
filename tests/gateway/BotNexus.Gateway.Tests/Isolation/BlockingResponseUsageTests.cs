@@ -7,6 +7,13 @@ namespace BotNexus.Gateway.Tests.Isolation;
 /// The blocking path must report the same four usage components the streaming path does.
 ///
 /// <para>
+/// Asserted through <c>ProjectLastTurnUsage</c>, the seam both response paths project through.
+/// It used to go through <c>BuildResponse</c>, which upstream has since made a private instance
+/// method taking a completion result; the guarantee is about the usage projection, not about how
+/// a response is assembled around it.
+/// </para>
+///
+/// <para>
 /// It used to build the four-field <c>AgentResponseUsage</c> from two of them, silently dropping
 /// CacheRead and CacheWrite. On a cache-aware provider those are the two components that GROW: the
 /// last cache breakpoint sits on the newest user message, so system prompt, tools and the entire
@@ -22,47 +29,47 @@ namespace BotNexus.Gateway.Tests.Isolation;
 public sealed class BlockingResponseUsageTests
 {
     [Fact]
-    public void BuildResponse_CarriesTheCacheComponents()
+    public void ProjectLastTurnUsage_CarriesTheCacheComponents()
     {
-        var response = InProcessAgentHandle.BuildResponse(
+        var usage = InProcessAgentHandle.ProjectLastTurnUsage(
             [Assistant(new AgentUsage(InputTokens: 1222, OutputTokens: 4, CacheRead: 9100, CacheWrite: 640))]);
 
-        response.Usage.ShouldNotBeNull();
-        response.Usage!.InputTokens.ShouldBe(1222);
-        response.Usage.OutputTokens.ShouldBe(4);
+        usage.ShouldNotBeNull();
+        usage!.InputTokens.ShouldBe(1222);
+        usage.OutputTokens.ShouldBe(4);
         // The two that were dropped. Without these the caller sees 1222 for an ~11,000-token prompt.
-        response.Usage.CacheRead.ShouldBe(9100);
-        response.Usage.CacheWrite.ShouldBe(640);
+        usage.CacheRead.ShouldBe(9100);
+        usage.CacheWrite.ShouldBe(640);
     }
 
     [Fact]
-    public void BuildResponse_ReadsTheLastAssistantTurn()
+    public void ProjectLastTurnUsage_ReadsTheLastAssistantTurn()
     {
-        var response = InProcessAgentHandle.BuildResponse(
+        var usage = InProcessAgentHandle.ProjectLastTurnUsage(
         [
             Assistant(new AgentUsage(InputTokens: 1, OutputTokens: 1, CacheRead: 1, CacheWrite: 1)),
             Assistant(new AgentUsage(InputTokens: 2, OutputTokens: 2, CacheRead: 2, CacheWrite: 2)),
         ]);
 
-        response.Usage!.CacheRead.ShouldBe(2);
+        usage!.CacheRead.ShouldBe(2);
     }
 
     [Fact]
-    public void BuildResponse_PreservesAbsentCountsAsNullRatherThanZero()
+    public void ProjectLastTurnUsage_PreservesAbsentCountsAsNullRatherThanZero()
     {
         // A provider that reports nothing must stay distinguishable from one reporting a real zero,
         // or "no cache activity" and "not measured" collapse into the same number.
-        var response = InProcessAgentHandle.BuildResponse(
+        var usage = InProcessAgentHandle.ProjectLastTurnUsage(
             [Assistant(new AgentUsage(InputTokens: 10, OutputTokens: 2))]);
 
-        response.Usage!.CacheRead.ShouldBeNull();
-        response.Usage.CacheWrite.ShouldBeNull();
+        usage!.CacheRead.ShouldBeNull();
+        usage.CacheWrite.ShouldBeNull();
     }
 
     [Fact]
-    public void BuildResponse_WithNoAssistantTurn_ReportsNoUsage()
+    public void ProjectLastTurnUsage_WithNoAssistantTurn_ReportsNoUsage()
     {
-        InProcessAgentHandle.BuildResponse([]).Usage.ShouldBeNull();
+        InProcessAgentHandle.ProjectLastTurnUsage([]).ShouldBeNull();
     }
 
     private static AssistantAgentMessage Assistant(AgentUsage usage) => new("ok", Usage: usage);

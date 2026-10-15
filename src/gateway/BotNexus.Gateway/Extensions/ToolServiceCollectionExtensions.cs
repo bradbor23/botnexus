@@ -19,12 +19,17 @@ public static class ToolServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddBotNexusTools(this IServiceCollection services)
     {
-        // One source of truth for both spawn sites: the built-in shell tool below and the exec
-        // extension, which injects this same interface. See IToolEnvironmentPolicy for why they
-        // must not be allowed to answer differently.
-        services.AddSingleton<IToolEnvironmentPolicy>(sp =>
-            new ConfiguredToolEnvironmentPolicy(
-                sp.GetService<IOptions<PlatformConfig>>()?.Value?.Gateway?.ToolEnvironmentPassThrough));
+        // One source of truth for both spawn sites: the built-in shell tool and the exec extension
+        // read this same policy. See LocalChildEnvironment for why they must not answer differently.
+        // Honours the older gatewayExtensions toolEnvironmentPassThrough key as well as
+        // localChildEnvironmentPassThrough, so an operator who set either keeps their pass-through.
+        services.AddSingleton<LocalChildEnvironmentPolicy>(sp =>
+        {
+            var gateway = sp.GetService<IOptions<PlatformConfig>>()?.Value.Gateway;
+            var names = gateway?.LocalChildEnvironmentPassThrough
+                ?? gateway?.ToolEnvironmentPassThrough;
+            return new LocalChildEnvironmentPolicy(names);
+        });
 
         services.AddSingleton<IAgentToolFactory>(sp =>
         {
@@ -33,13 +38,8 @@ public static class ToolServiceCollectionExtensions
             var shellCommand = config?.Gateway?.ShellCommand;
             // Resolve the platform config path so file tools can deny direct writes to it (issue #633).
             var configPath = PlatformConfigLoader.GetDefaultConfigPath(new System.IO.Abstractions.FileSystem());
-            var passThrough = sp.GetRequiredService<IToolEnvironmentPolicy>().PassThroughVariables;
-            return new DefaultAgentToolFactory(
-                preference,
-                configPath,
-                shellCommand,
-                BuildReadToolOptions(config),
-                passThrough);
+            return new DefaultAgentToolFactory(preference, configPath, shellCommand, BuildReadToolOptions(config),
+                sp.GetRequiredService<LocalChildEnvironmentPolicy>());
         });
 
         // Tool registry collects extension IAgentTool registrations.

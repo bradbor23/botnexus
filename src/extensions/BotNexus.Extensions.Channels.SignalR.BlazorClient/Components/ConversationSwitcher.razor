@@ -103,7 +103,7 @@
                                to this agent: two agents can hold conversations with the same id only
                                by coincidence, but the owning agent is what makes the match meaningful. *@
                             var isActive = !row.IsOtherAgent
-                                && string.Equals(conversation.ConversationId, ActiveConversationId, StringComparison.Ordinal);
+                                && string.Equals(conversation.ConversationId, SelectedConversationId, StringComparison.Ordinal);
                             var isReadOnly = ConversationSwitcherModel.IsReadOnlyRow(conversation, group.Label);
                             <button type="button"
                                     class="conversation-switcher-row @(index == _highlight ? "highlighted" : "") @(isActive ? "active" : "")"
@@ -163,7 +163,7 @@
     /// its trigger with a different conversation than the one the transcript is showing.
     /// </summary>
     [Parameter]
-    public string? ActiveConversationId { get; set; }
+    public string? SelectedConversationId { get; set; }
 
     private bool _open;
     private string _query = "";
@@ -212,7 +212,7 @@
     {
         get
         {
-            var title = ActiveConversationId is string id
+            var title = SelectedConversationId is string id
                 ? Agent?.Conversations.GetValueOrDefault(id)?.Title
                 : null;
             return string.IsNullOrWhiteSpace(title) ? "Conversations" : PortalText.SingleLine(title);
@@ -402,14 +402,14 @@
 
     private int IndexOfActive(ConversationSwitcherView view)
     {
-        if (ActiveConversationId is null)
+        if (SelectedConversationId is null)
             return 0;
 
         for (var i = 0; i < view.Flattened.Count; i++)
         {
             var row = view.Flattened[i];
             if (!row.IsOtherAgent
-                && string.Equals(row.Conversation.ConversationId, ActiveConversationId, StringComparison.Ordinal))
+                && string.Equals(row.Conversation.ConversationId, SelectedConversationId, StringComparison.Ordinal))
                 return i;
         }
 

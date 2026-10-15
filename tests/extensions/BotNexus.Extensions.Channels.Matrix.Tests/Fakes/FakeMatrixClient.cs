@@ -16,6 +16,27 @@ public sealed record SentMessage(string RoomId, MatrixMessageContent Content);
 /// <param name="Typing">Whether typing was turned on or off.</param>
 public sealed record TypingCall(string RoomId, bool Typing);
 
+/// <summary>A read receipt the adapter sent to the fake homeserver.</summary>
+/// <param name="RoomId">Room containing the handled event.</param>
+/// <param name="EventId">Handled event acknowledged as read.</param>
+public sealed record ReadReceiptCall(string RoomId, string EventId);
+
+/// <summary>A bounded media download requested by the adapter.</summary>
+public sealed class MediaDownloadCall
+{
+    /// <summary>Matrix media origin parsed from the MXC URI.</summary>
+    public required string ServerName { get; init; }
+
+    /// <summary>Opaque media identifier parsed from the MXC URI.</summary>
+    public required string MediaId { get; init; }
+
+    /// <summary>Maximum body size supplied to the client.</summary>
+    public required long MaxBytes { get; init; }
+
+    /// <summary>Whether the adapter-owned media budget cancelled the operation.</summary>
+    public bool CancellationObserved { get; set; }
+}
+
 /// <summary>
 /// In-memory <see cref="IMatrixClient"/> standing in for a homeserver. Sync responses are supplied
 /// as a scripted queue so a test can drive the adapter's loop deterministically, and every write is
@@ -34,11 +55,21 @@ public sealed class FakeMatrixClient : IMatrixClient
     /// <summary>Typing-state calls the adapter made, in order.</summary>
     public List<TypingCall> TypingCalls { get; } = [];
 
+    /// <summary>Read receipts the adapter sent, in order.</summary>
+    public List<ReadReceiptCall> ReadReceiptCalls { get; } = [];
+
     /// <summary>The <c>since</c> tokens the adapter supplied on each sync, in order.</summary>
     public List<string?> SinceTokens { get; } = [];
 
     /// <summary>The <c>timeout</c> values the adapter supplied on each sync, in order.</summary>
     public List<int> SyncTimeouts { get; } = [];
+
+    /// <summary>Media downloads the adapter requested, in order.</summary>
+    public List<MediaDownloadCall> MediaDownloadCalls { get; } = [];
+
+    /// <summary>Script invoked for media downloads.</summary>
+    public Func<string, string, long, CancellationToken, Task<byte[]>> DownloadMedia { get; set; } =
+        (_, _, _, _) => Task.FromResult(Array.Empty<byte>());
 
     /// <summary>Number of event IDs minted so far, used to make each send's ID unique.</summary>
     private int _eventCounter;
@@ -51,6 +82,9 @@ public sealed class FakeMatrixClient : IMatrixClient
 
     /// <summary>When set, <see cref="SetTypingAsync"/> throws this on every call.</summary>
     public Exception? TypingFailure { get; set; }
+
+    /// <summary>When set, <see cref="SendReadReceiptAsync"/> throws this on every call.</summary>
+    public Exception? ReadReceiptFailure { get; set; }
 
     /// <summary>Queues one scripted sync response.</summary>
     /// <param name="response">The response to return.</param>
@@ -91,6 +125,40 @@ public sealed class FakeMatrixClient : IMatrixClient
     }
 
     /// <inheritdoc />
+    public Task<string> UploadMediaAsync(
+        byte[] data,
+        string contentType,
+        string fileName,
+        CancellationToken cancellationToken) =>
+        Task.FromResult("mxc://fake.example.com/uploaded");
+
+    /// <inheritdoc />
+    public async Task<byte[]> DownloadMediaAsync(
+        string serverName,
+        string mediaId,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        var call = new MediaDownloadCall
+        {
+            ServerName = serverName,
+            MediaId = mediaId,
+            MaxBytes = maxBytes,
+        };
+        MediaDownloadCalls.Add(call);
+
+        try
+        {
+            return await DownloadMedia(serverName, mediaId, maxBytes, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            call.CancellationObserved = true;
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
     public Task JoinRoomAsync(string roomId, CancellationToken cancellationToken)
     {
         if (JoinFailure is not null)
@@ -100,6 +168,17 @@ public sealed class FakeMatrixClient : IMatrixClient
             JoinedRooms.Add(roomId);
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task SendReadReceiptAsync(string roomId, string eventId, CancellationToken cancellationToken)
+    {
+        lock (ReadReceiptCalls)
+            ReadReceiptCalls.Add(new ReadReceiptCall(roomId, eventId));
+
+        return ReadReceiptFailure is null
+            ? Task.CompletedTask
+            : Task.FromException(ReadReceiptFailure);
     }
 
     /// <inheritdoc />

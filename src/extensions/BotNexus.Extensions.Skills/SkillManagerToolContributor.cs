@@ -40,8 +40,7 @@ public sealed class SkillManagerToolContributor(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var config = ResolveExtensionConfig<SkillsConfig>(context.Descriptor, "botnexus-skills")
-                     ?? new SkillsConfig();
+        var config = SkillsConfigResolver.Resolve(context.Descriptor) ?? new SkillsConfig();
 
         // Only contribute the write tools when creation is explicitly enabled
         if (!config.AllowSkillCreation)

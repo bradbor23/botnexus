@@ -100,12 +100,6 @@ public sealed class ChannelKnowledgeFenceArchitectureTests : ArchitectureTest
     [
         // ---- Rule 2: concrete channel key literals inside generic orchestration ----
 
-        // GatewayHost hard-codes "signalr" three times to decide whether the primary terminal
-        // channel is SignalR and to filter observer bindings down to SignalR ones (#332 legacy).
-        // Deleted when SignalR becomes an ordinary conversation event projection.
-        new("R2", Path.Combine("gateway", "BotNexus.Gateway", "GatewayHost.cs"),
-            "hard-coded \"signalr\" terminal-channel comparison and observer-binding filter", "#2089"),
-
         // WorkspaceContextBuilder stamps Channel = "signalr" onto the synthetic workspace context.
         // Deleted when SignalR context is projected from the generic event seam.
         new("R2", Path.Combine("gateway", "BotNexus.Gateway", "Agents", "WorkspaceContextBuilder.cs"),
@@ -130,22 +124,13 @@ public sealed class ChannelKnowledgeFenceArchitectureTests : ArchitectureTest
 
         // ---- Rule 3: concrete channel resolved for observer/fan-out behaviour ----
 
-        // `signalRObservers` is literally the coupling epic #2084 exists to remove: generic
-        // orchestration resolving a SignalR-specific observer set for cross-channel live update.
-        new("R3", Path.Combine("gateway", "BotNexus.Gateway", "GatewayHost.cs"),
-            "resolves a `signalRObservers` set for stream fan-out (#332 legacy)", "#2089"),
-
         // ---- Rule 5: direct IChannelAdapter send calls outside channel extensions ----
 
         // Agent-loop streaming deltas/events and turn replies pushed straight at adapters.
         new("R5", Path.Combine("gateway", "BotNexus.Gateway", "GatewayHost.cs"),
             "direct SendStreamDeltaAsync/SendStreamEventAsync/SendAsync from the agent loop", "#2087"),
 
-        // Session lifecycle notifications delivered by direct adapter send.
-        new("R5", Path.Combine("gateway", "BotNexus.Gateway", "Sessions", "InterruptedTurnNotificationService.cs"),
-            "direct adapter SendAsync for the interrupted-turn notice", "#2088"),
-        new("R5", Path.Combine("gateway", "BotNexus.Gateway", "Sessions", "SessionCompactionCoordinator.cs"),
-            "direct adapter SendAsync for the compaction notice", "#2088"),
+        // Session lifecycle notifications still delivered by direct adapter send.
 
         // Legacy direct delivery / outbound binding fan-out.
         new("R5", Path.Combine("gateway", "BotNexus.Gateway", "OutboundResponseDeliverer.cs"),
@@ -187,6 +172,33 @@ public sealed class ChannelKnowledgeFenceArchitectureTests : ArchitectureTest
     [Fact]
     public void Rule7_ChannelExtensions_CanReachTheGenericEventSinkContract()
         => AssertRule("R7", FindRule7Violations());
+
+    /// <summary>
+    /// #2090: every installed channel extension owns its projection decision. Merely referencing
+    /// the event contract is insufficient: the concrete adapter must consume the event stream so
+    /// filtering and rendering cannot silently fall back to gateway-selected delivery.
+    /// </summary>
+    [Fact]
+    public void InstalledChannelExtensions_OwnConversationEventProjection()
+    {
+        var violations = ChannelExtensionProjects()
+            .Select(project => new
+            {
+                Project = project,
+                AdapterSources = CsFiles(Path.GetDirectoryName(project)!)
+                    .Where(IsChannelAdapterSource)
+                    .ToList(),
+            })
+            .Where(extension => extension.AdapterSources.Count == 0
+                || extension.AdapterSources.All(source => !DeclaresConversationEventSink(File.ReadAllText(source))))
+            .Select(extension => Rel(Repository.SourceRoot, extension.Project))
+            .ToList();
+
+        violations.ShouldBeEmpty(
+            "#2090: every installed channel extension must project conversation events in its own adapter; " +
+            "gateway-selected delivery is not a substitute. Missing IConversationEventSink adapters:\n  " +
+            string.Join("\n  ", violations));
+    }
 
     // ---------------------------------------------------------------------------------------
     // Baseline integrity
@@ -501,6 +513,18 @@ public sealed class ChannelKnowledgeFenceArchitectureTests : ArchitectureTest
 
     private static readonly Regex s_channelExtensionRef =
         new(@"BotNexus\.Extensions\.Channels\.", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool IsChannelAdapterSource(string path)
+        => Path.GetFileName(path).EndsWith("ChannelAdapter.cs", StringComparison.Ordinal)
+           && !Path.GetFileName(path).Equals("IChannelAdapter.cs", StringComparison.Ordinal);
+
+    private static bool DeclaresConversationEventSink(string source)
+    {
+        var code = StripComments(source);
+        return code.Contains("ChannelAdapterBase", StringComparison.Ordinal)
+               && code.Contains("IConversationEventSink", StringComparison.Ordinal)
+               && code.Contains("OnConversationEventAsync", StringComparison.Ordinal);
+    }
 
     private static bool HasChannelExtensionReference(string projectXml)
         => s_channelExtensionRef.IsMatch(projectXml);

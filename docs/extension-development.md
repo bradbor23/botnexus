@@ -16,7 +16,8 @@
 12. [Webhook Handlers](#webhook-handlers)
 13. [Testing Extensions in Isolation](#testing-extensions-in-isolation)
 14. [Build Pipeline & Output](#build-pipeline--output)
-15. [Troubleshooting](#troubleshooting)
+15. [Out-of-tree extension repositories](#out-of-tree-extension-repositories)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,7 +40,7 @@ path.
 - The manifest is the contract. No manifest, no extension — see [The `botnexus-extension.json` manifest](#the-botnexus-extensionjson-manifest).
 - Extensions are loaded into their own `AssemblyLoadContext`. Extensions declaring `endpoint-contributor` or `api-contributor` are loaded **non-collectible** (ASP.NET uses `Reflection.Emit` for typed hub proxies).
 - Discovery is one level deep: `<extensions root>/<extension-folder>/botnexus-extension.json`.
-- Extension **configuration** is keyed by the manifest `id` (e.g. `botnexus-exec`), under `gateway.extensions.defaults` or an agent's `extensions` block.
+- Extension **configuration** is keyed by manifest `id` in the concrete scope declared by `configurationScopes`.
 
 ---
 
@@ -197,8 +198,8 @@ One flat folder per extension, named by the manifest `id`. An actual
 └── botnexus-web/
 ```
 
-The extensions root is `gateway.extensions.path` in `config.json`, defaulting to
-`~/.botnexus/extensions`. Set `gateway.extensions.enabled` to `false` to disable dynamic loading
+The extensions root is `gateway.extensionLoader.path` in `config.json`, defaulting to
+`~/.botnexus/extensions`. Set `gateway.extensionLoader.enabled` to `false` to disable dynamic loading
 entirely.
 
 ### Source layout
@@ -942,28 +943,18 @@ public void Register(IServiceCollection services, IConfiguration configuration)
 
 ### Configuration Shape in config.json
 
-Extension config is keyed by the manifest `id` — there are no `channels:`/`providers:`/`tools:`
-prefixes. World-level defaults live under `gateway.extensions.defaults`; per-agent overrides live under
-`agents.<id>.extensions`.
+Runtime settings are keyed by manifest `id`. Loader settings are separate from extension-owned settings:
 
 ```json
 {
+  "world": { "extensions": { "example-policy": { "mode": "restricted" } } },
   "gateway": {
-    "extensions": {
-      "path": "~/.botnexus/extensions",
-      "enabled": true,
-      "defaults": {
-        "botnexus-exec": { "enabled": true },
-        "botnexus-web": { "enabled": true, "search.provider": "brave" }
-      }
-    }
+    "extensionLoader": { "path": "~/.botnexus/extensions", "enabled": true },
+    "extensions": { "example-transport": { "listen": true } }
   },
   "agents": {
-    "my-agent": {
-      "extensions": {
-        "botnexus-web": { "search.maxResults": 10 }
-      }
-    }
+    "defaults": { "extensions": { "botnexus-web": { "search": { "provider": "brave", "apiKey": "${env:WEB_KEY}" } } } },
+    "my-agent": { "extensions": { "botnexus-web": { "search": { "maxResults": 10 } } } }
   }
 }
 ```
@@ -985,147 +976,9 @@ public sealed class MyTool
 
 ---
 
-## World-Level Extension Defaults
+## Agent extension defaults
 
-To avoid repeating extension configuration across multiple agents, operators can define shared extension defaults at the gateway level. This is particularly useful when many agents need identical extension settings.
-
-### Configuration Structure
-
-Extension defaults are defined in the `gateway.extensions.defaults` section of `config.json`:
-
-```json
-{
-  "gateway": {
-    "extensions": {
-      "defaults": {
-        "botnexus-skills": { "enabled": true, "maxLoadedSkills": 20 },
-        "botnexus-exec": { "enabled": true }
-      }
-    }
-  },
-  "agents": {
-    "my-agent": {
-      "extensions": {
-        "botnexus-skills": { "maxLoadedSkills": 30 }
-      }
-    },
-    "assistant": {}
-  }
-}
-```
-
-### Before and After Example
-
-**Before (duplicated per agent):**
-```json
-{
-  "agents": {
-    "my-agent": {
-      "extensions": {
-        "botnexus-skills": { "enabled": true, "maxLoadedSkills": 20 },
-        "botnexus-exec": { "enabled": true }
-      }
-    },
-    "assistant": {
-      "extensions": {
-        "botnexus-skills": { "enabled": true, "maxLoadedSkills": 20 },
-        "botnexus-exec": { "enabled": true }
-      }
-    }
-  }
-}
-```
-
-**After (DRY with world defaults):**
-```json
-{
-  "gateway": {
-    "extensions": {
-      "defaults": {
-        "botnexus-skills": { "enabled": true, "maxLoadedSkills": 20 },
-        "botnexus-exec": { "enabled": true }
-      }
-    }
-  },
-  "agents": {
-    "my-agent": {
-      "extensions": {
-        "botnexus-skills": { "maxLoadedSkills": 30 }
-      }
-    },
-    "assistant": {}
-  }
-}
-```
-
-### Merge Semantics
-
-When an agent's extension configuration is merged with world defaults:
-
-- **Objects merge recursively** — Keys from both default and agent are combined, with agent values taking precedence on conflicts
-- **Scalars and arrays are replaced wholesale** — If an agent provides a scalar or array value, it completely replaces the default (no partial merging)
-- **Inheritance is tri-state** - each key in an agent's extension configuration is in exactly one of three states:
-
-| Agent-side shape | Meaning | Merged result |
-| --- | --- | --- |
-| Key absent | Inherit | The world-level default value |
-| Key present with explicit `null` | Suppress | The key is **removed** - it does not appear in the merged output at all |
-| Key present with a value | Override | The agent's value |
-
-This matches the semantics of agent configuration sections (`memory`, `search`, `heartbeat`, and friends), so `null`
-means the same thing everywhere: *do not inherit this*. It never means "set this to null".
-
-```json
-{
-  "gateway": {
-    "extensions": {
-      "defaults": {
-        "botnexus-skills": { "enabled": true, "maxLoadedSkills": 20, "skillsPath": "~/.botnexus/skills" }
-      }
-    }
-  },
-  "agents": {
-    "my-agent": {
-      "extensions": {
-        "botnexus-skills": {
-          "maxLoadedSkills": 30,
-          "skillsPath": null
-        }
-      }
-    }
-  }
-}
-```
-
-`my-agent` resolves to `{ "enabled": true, "maxLoadedSkills": 30 }` - `enabled` is inherited, `maxLoadedSkills` is
-overridden, and `skillsPath` is suppressed so the extension falls back to its own built-in default.
-
-Suppression works at every depth, including the extension id itself. Setting `"botnexus-skills": null` on an agent
-drops that extension's inherited configuration entirely. An explicit `null` for a key that has no world-level
-counterpart is a no-op rather than a null leaf.
-
-> **Extension authors:** because `null` is reserved for suppression, a bare JSON `null` will never reach your
-> configuration binder. If your extension needs to persist a genuine null-valued setting, model it explicitly
-> (for example as an object with a discriminator) instead of relying on `null` surviving the merge.
-- **Missing agent config inherits defaults** — Agents without an `extensions` block receive all world defaults unchanged
-- **Explicit disabling** — An agent can disable a world-default extension by setting `"enabled": false`
-- **Null overrides** — An explicit `null` from an agent removes a value from the merged result
-
-### Merge Examples
-
-| World Default | Agent Override | Effective Config |
-|---|---|---|
-| `{ "a": 1, "b": 2 }` | `{ "b": 3, "c": 4 }` | `{ "a": 1, "b": 3, "c": 4 }` |
-| `{ "a": 1 }` | (absent) | `{ "a": 1 }` |
-| (absent) | `{ "b": 2 }` | `{ "b": 2 }` |
-| `{ "nested": { "x": 1 } }` | `{ "nested": { "y": 2 } }` | `{ "nested": { "x": 1, "y": 2 } }` |
-| `[1, 2]` | `[3, 4]` | `[3, 4]` (arrays replace) |
-
-### Backward Compatibility
-
-Existing configurations without a `gateway.extensions.defaults` section continue to work unchanged. World-level defaults are entirely optional and do not affect deployments that don't use them.
-
----
+`agents.defaults.extensions.<id>` stores shared agent values. A consumer binds that entry and the named `agents.<agentId>.extensions.<id>` entry separately, then chooses named-agent, agent-default, and code fallback for each property. This intentionally is not a deep merge: world and gateway settings never flow into agent settings.
 
 ## OAuth Providers
 
@@ -1503,6 +1356,117 @@ botnexus serve
 
 ---
 
+## Out-of-tree extension repositories
+
+Use the public [BotNexus extension template](https://github.com/Sytone/botnexus-extension-template) when the extension belongs in its own Git repository. The template contains a manifest, one deterministic `IAgentTool`, tests, packaging scripts, `CopyLocalLockFileAssemblies=true`, and both supported checkout reference shapes.
+
+### Repository layout
+
+```text
+src/BotNexus.Extensions.Reference/
+  BotNexus.Extensions.Reference.csproj
+  ReferenceEchoTool.cs
+  botnexus-extension.json
+tests/BotNexus.Extensions.Reference.Tests/
+scripts/
+```
+
+Keep the manifest beside the extension project. Packaged output remains one flat folder named by the manifest `id`; the repository may contain source, tests, automation and documentation around that folder.
+
+### Reference the BotNexus checkout
+
+Pass the local checkout as the `BotNexusRepoRoot` MSBuild property. The template also reads the `BOTNEXUS_REPO_ROOT` environment variable.
+
+The default source shape uses `ProjectReference` entries below `$(BotNexusRepoRoot)`. Use it for normal development because contract changes compile with the extension. The binary shape uses `Reference` and `HintPath` entries for BotNexus assemblies already built from the same checkout. Select it with `-p:BotNexusReferenceShape=binary`; build the required BotNexus projects first and use `BotNexusBinaryConfiguration` when they were not built in `Release`.
+
+Both shapes must fail with the resolved missing path. Neither shape may search another machine path, download an unversioned DLL, or commit BotNexus contract assemblies to the extension repository. Pin the BotNexus revision in continuous integration and release automation.
+
+### Register the repository
+
+**Main branch:** the lifecycle below is implemented on `main` at `a753ffe23` (including [#4505](https://github.com/Sytone/botnexus/pull/4505)). Check that your installed version includes it before using these commands.
+
+> [!WARNING]
+> A compiled extension runs inside the gateway with full gateway trust and the gateway process's operating-system permissions. Its build can also execute repository-defined MSBuild tasks with the build process's permissions. Registration is not a sandbox or code-signing decision. Review the repository, dependencies and requested revision before enabling it. Enabled registrations participate in later lifecycle operations, not only an explicit sync.
+
+#### Before you start
+
+- Install Git and the .NET SDK required by the BotNexus checkout and the extension project. The reconciler invokes `git` and `dotnet` on the host and passes the resolved BotNexus checkout as `BotNexusRepoRoot` to extension builds.
+- Make the repository reachable from that host. For a private repository, configure Git credentials or SSH authentication for the operating-system account that runs the CLI or gateway. Git operations set `GIT_TERMINAL_PROMPT=0`; arrange noninteractive authentication, including any SSH host-key trust, before syncing. A portal session or an agent's GitHub tool credentials do not configure host Git authentication. Do not put credentials in the repository URL.
+- Use a compatible extension revision and keep a record of the requested ref and resolved commit. The registration ID identifies a source repository; each deployed extension uses its own manifest `id`.
+
+#### CLI method
+
+The URL below is fictional. Replace it with a repository you have reviewed and can access. Run these commands on the BotNexus host, using the same BotNexus home as the gateway:
+
+```powershell
+# Save repository metadata; this does not fetch or execute repository content.
+botnexus extensions add --id reference-extension --url https://git.example.com/extensions/reference-extension.git --ref main
+botnexus extensions list
+
+# Clone/update, resolve the ref, build and deploy all enabled registrations.
+botnexus extensions sync
+
+# Restart interrupts active gateway work and loads the deployed assemblies.
+botnexus gateway restart
+```
+
+`extensions reconcile` is an alias for `extensions sync`. Adding, updating, enabling, disabling or removing a registration changes metadata only; synchronization is a separate operation. To review a registration before it participates in lifecycle work, add it with `--disabled` and enable it later with `botnexus extensions enable --id reference-extension`.
+
+`--ref` accepts a branch, tag or commit. A commit gives the most reproducible registration; a tag is readable but can be moved by a repository owner; a branch follows future commits. Use `--no-updates` on `add` or `update` to stop fetching an existing clone; it does not disable builds or deployment, and a missing clone is still cloned. Use `update --updates` to restore fetching. For example:
+
+```powershell
+botnexus extensions update --id reference-extension --ref v1.0.0
+botnexus extensions sync
+botnexus gateway restart
+```
+
+#### UI method
+
+The Configuration page exposes the same registry and requires an explicit trust acknowledgement when adding a repository. **Sync Now** is available for enabled registrations and runs the shared clone/ref/build/deploy pipeline for the selected repository. Deployment still reconciles all enabled repository sources and in-tree sources, using previous staged output for repositories not rebuilt by that request. Sync does not restart the running gateway or grant tools to an agent.
+
+### Lifecycle, failure and removal
+
+#### What synchronization does
+
+`ExtensionLifecycleReconciler` performs these steps under a lock scoped to the BotNexus home. A process-local semaphore and an exclusive file lock serialize overlapping CLI and API passes across processes.
+
+1. **Materialize source.** Clone a missing repository under `<BotNexus home>/extension-repositories/<registration-id>/repository`. For an existing clean clone, fetch when updates are enabled, resolve the requested branch, tag or commit to an exact SHA, and check out that commit detached.
+2. **Discover and build.** Recursively find every `.csproj` with a `botnexus-extension.json` in the same directory. A repository can contain multiple extension projects; test or helper projects without an adjacent manifest are not selected. Build each selected project in `Release`, with `BotNexusRepoRoot` and a separate output directory inside a candidate generation. No selected projects is a named failure.
+3. **Validate and deploy.** Once all selected projects build, validate their outputs and reconcile them with in-tree outputs and other enabled registered sources into `<BotNexus home>/extensions/<manifest-id>`. Deployment checks manifests, entry assemblies and extension-ID collisions before activation. Each extension directory uses atomic replacement with retry/rollback handling; this is not an all-repositories atomic switch.
+4. **Record the result.** Promote the candidate to the repository's `staged` directory and record lifecycle success only after deployment is accepted for that repository. The registry also stores the clone path, attempt time, resolved commit and bounded named failure details.
+
+The same pipeline runs from `botnexus build`, `botnexus update`, `botnexus serve`, and gateway start/restart. Where those paths build BotNexus, reconciliation follows a successful platform build. Repository failures are reported but do not by themselves fail the platform build or prevent update/startup from continuing. Explicit `extensions sync` returns a non-zero exit code if an enabled repository fails; the API reports a failed selected sync to the caller.
+
+#### Failure and last-known-good output
+
+Source reconciliation never resets, cleans or deletes the managed clone. A dirty clone, a current commit that is not an ancestor of the requested commit, a missing or mismatched `origin`, or an invalid ref produces a named failure. With `--no-updates`, an existing clone resolves refs from locally available Git objects without fetching. Preserve local work and resolve the reported condition explicitly rather than expecting sync to discard it.
+
+A clone or build failure does not promote a partial candidate generation: the previous staged generation remains a deployment source for an enabled registration. Registered-source validation failures preserve source-owned last-known-good live directories when available. Activation failures attempt to restore the previous live directory; rollback can also fail, so inspect the named diagnostic before relying on that deployment. Other repositories can continue. A first-time failure has no previous deployment to fall back to, and a successful pass can remove obsolete output. Last-known-good handling is not a guarantee of extension compatibility or a backup of operator data.
+
+Registered output is included in normal deployment reconciliation; it is not treated as an unrelated manual installation and blindly pruned on the next serve or update. Unregistered manual package installations can still be pruned as stale. Keep the source and package if using the template's local-install scripts for development.
+
+#### Disable or remove
+
+```powershell
+# Retain metadata but exclude this repository from future builds/deployment sources.
+botnexus extensions disable --id reference-extension
+botnexus extensions sync
+botnexus gateway restart
+
+# Alternatively, remove its registration metadata.
+botnexus extensions remove --id reference-extension
+```
+
+Disable/remove does not immediately unload code, delete the managed clone, or delete its staged files. A later deployment pass excludes disabled or removed registrations and can prune their live extension directories. When at least one registration remains (even if all are disabled), maintenance sync runs that deployment pass. If removing the final registration leaves the registry empty, `extensions sync` and `botnexus build` perform no deployment work. Host-startup reconciliation used by serve, update and gateway start/restart still refreshes in-tree deployment and prunes stale live output with an empty registry. Restart is required to stop using assemblies already loaded in a running gateway. Delete preserved clone/staging data only as a separate explicit action after checking for local work.
+
+#### Configure, grant and verify
+
+Registration, deployment, loading, extension configuration and an agent's tool grants are separate decisions. Configure values by each manifest `id` in its declared [configuration scopes](#explicit-extension-configuration-scopes), and grant the intended tool IDs through the agent's [tool configuration](user-guide/agents.md). A successful sync does not supply extension secrets, change tool grants, or hot-reload assemblies in the running gateway.
+
+After deployment and gateway restart, verify `GET /api/extensions`, the intended agent's available tools, and one fresh conversation. Check the persisted reconciliation status and gateway logs when something is missing. A directory on disk proves only that files were copied; a resolved SHA alone does not prove the latest build and deployment succeeded.
+
+---
+
 ## Troubleshooting
 
 ### Extension Not Loading
@@ -1515,7 +1479,7 @@ botnexus serve
 
 2. Is `enabled` `true` in the manifest, and is the extension enabled in config by its manifest `id`?
    ```json
-   "gateway": { "extensions": { "defaults": { "botnexus-discord": { "enabled": true } } } }
+   "agents": { "defaults": { "extensions": { "botnexus-discord": { "enabled": true } } } }
    ```
 
 3. Does the file named by `entryAssembly` exist in that same folder? A missing entry assembly logs a
@@ -1621,3 +1585,9 @@ To create a BotNexus extension:
 8. **Enable in config** and the Gateway loads it at startup
 
 Happy extending!
+
+## Explicit extension configuration scopes
+
+A manifest with `configSchema` must declare `configurationScopes` using only `world`, `gateway`, and `agent`. Values are stored independently at `world.extensions.<id>`, `gateway.extensions.<id>`, `agents.defaults.extensions.<id>`, and `agents.<agentId>.extensions.<id>`. Gateway loader settings live at `gateway.extensionLoader`; the former `gateway.extensions.defaults` shape is rejected with migration guidance.
+
+Binding reads one raw scope at a time. Agent consumers may read both agent-default and named-agent bags, but must choose precedence explicitly for each property: named agent first, agent default second, then the code default. World and gateway values never flow into agent configuration implicitly.

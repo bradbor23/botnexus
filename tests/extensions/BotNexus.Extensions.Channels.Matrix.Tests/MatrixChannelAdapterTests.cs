@@ -1,7 +1,10 @@
+using System.Collections.Immutable;
 using BotNexus.Domain.Primitives;
 using BotNexus.Extensions.Channels.Matrix.Tests.Fakes;
 using BotNexus.Gateway.Abstractions.Channels;
+using BotNexus.Gateway.Abstractions.Events;
 using BotNexus.Gateway.Abstractions.Models;
+using BotNexus.Gateway.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -66,7 +69,11 @@ public sealed class MatrixChannelAdapterTests
         string msgType = "m.text",
         string room = Room,
         MatrixRelatesTo? relatesTo = null,
-        string nextBatch = "batch-1") =>
+        string nextBatch = "batch-1",
+        string? mediaUrl = null,
+        string? fileName = null,
+        string? mimeType = null,
+        long? size = null) =>
         new()
         {
             NextBatch = nextBatch,
@@ -91,6 +98,11 @@ public sealed class MatrixChannelAdapterTests
                                         MsgType = msgType,
                                         Body = body,
                                         RelatesTo = relatesTo,
+                                        Url = mediaUrl,
+                                        FileName = fileName,
+                                        Info = mimeType is null && size is null
+                                            ? null
+                                            : new MatrixMediaInfo { MimeType = mimeType, Size = size },
                                     },
                                 },
                             ],
@@ -107,16 +119,23 @@ public sealed class MatrixChannelAdapterTests
     private static async Task<Mock<IChannelDispatcher>> ProcessAsync(
         MatrixChannelAdapter adapter,
         MatrixSyncResponse response,
-        string accountName = "farnsworth")
+        string accountName = "farnsworth",
+        Mock<IChannelDispatcher>? dispatcher = null)
     {
-        var dispatcher = CreateDispatcher();
+        dispatcher ??= CreateDispatcher();
         await adapter.StartAsync(dispatcher.Object);
 
         var runtime = adapter.GetAccount(accountName);
         runtime.ShouldNotBeNull();
 
-        await adapter.ProcessSyncResponseAsync(runtime!, response, CancellationToken.None);
-        await adapter.StopAsync();
+        try
+        {
+            await adapter.ProcessSyncResponseAsync(runtime!, response, CancellationToken.None);
+        }
+        finally
+        {
+            await adapter.StopAsync();
+        }
 
         return dispatcher;
     }
@@ -252,13 +271,117 @@ public sealed class MatrixChannelAdapterTests
     }
 
     [Fact]
-    public async Task Inbound_ImageMessage_IsSkippedBecauseMediaIsDeferred()
+    public async Task Inbound_ImageMessage_DispatchesCaptionAndBinaryContentPart()
     {
-        var adapter = CreateAdapter(BuildOptions(), new FakeMatrixClientFactory());
+        byte[] bytes = [0x89, 0x50, 0x4E, 0x47];
+        var factory = new FakeMatrixClientFactory();
+        factory.ClientFor("farnsworth").DownloadMedia = (_, _, _, _) => Task.FromResult(bytes);
+        var adapter = CreateAdapter(BuildOptions(), factory);
 
-        var dispatcher = await ProcessAsync(adapter, SyncWithMessage(HumanUser, "photo.png", msgType: "m.image"));
+        var dispatcher = await ProcessAsync(
+            adapter,
+            SyncWithMessage(
+                HumanUser,
+                "diagram caption",
+                msgType: "m.image",
+                mediaUrl: "mxc://media.example.com/image-1",
+                fileName: "diagram.png",
+                mimeType: "image/png",
+                size: bytes.Length));
 
-        Dispatched(dispatcher).ShouldBeEmpty();
+        var message = Dispatched(dispatcher).ShouldHaveSingleItem();
+        message.Content.ShouldBe("diagram caption");
+        var part = message.ContentParts.ShouldNotBeNull().ShouldHaveSingleItem().ShouldBeOfType<BinaryContentPart>();
+        part.MimeType.ShouldBe("image/png");
+        part.Data.ShouldBe(bytes);
+        part.FileName.ShouldBe("diagram.png");
+
+        var download = factory.ClientFor("farnsworth").MediaDownloadCalls.ShouldHaveSingleItem();
+        download.ServerName.ShouldBe("media.example.com");
+        download.MediaId.ShouldBe("image-1");
+    }
+
+    [Fact]
+    public async Task Inbound_FileMessage_DispatchesBodyAndBinaryContentPart()
+    {
+        byte[] bytes = [0x25, 0x50, 0x44, 0x46];
+        var factory = new FakeMatrixClientFactory();
+        factory.ClientFor("farnsworth").DownloadMedia = (_, _, _, _) => Task.FromResult(bytes);
+        var adapter = CreateAdapter(BuildOptions(), factory);
+
+        var dispatcher = await ProcessAsync(
+            adapter,
+            SyncWithMessage(
+                HumanUser,
+                "quarterly report",
+                msgType: "m.file",
+                mediaUrl: "mxc://media.example.com/report-7",
+                fileName: "report.pdf",
+                mimeType: "application/pdf",
+                size: bytes.Length));
+
+        var message = Dispatched(dispatcher).ShouldHaveSingleItem();
+        message.Content.ShouldBe("quarterly report");
+        var part = message.ContentParts.ShouldNotBeNull().ShouldHaveSingleItem().ShouldBeOfType<BinaryContentPart>();
+        part.MimeType.ShouldBe("application/pdf");
+        part.Data.ShouldBe(bytes);
+        part.FileName.ShouldBe("report.pdf");
+    }
+
+    [Fact]
+    public async Task Inbound_MediaAdvertisedAboveCap_DoesNotDownloadAndStillDispatchesText()
+    {
+        var options = BuildOptions();
+        options.MaxMediaBytes = 3;
+        var factory = new FakeMatrixClientFactory();
+        var adapter = CreateAdapter(options, factory);
+
+        var dispatcher = await ProcessAsync(
+            adapter,
+            SyncWithMessage(
+                HumanUser,
+                "oversized attachment",
+                msgType: "m.file",
+                mediaUrl: "mxc://media.example.com/large-1",
+                fileName: "large.bin",
+                mimeType: "application/octet-stream",
+                size: 4));
+
+        factory.ClientFor("farnsworth").MediaDownloadCalls.ShouldBeEmpty();
+        var message = Dispatched(dispatcher).ShouldHaveSingleItem();
+        message.Content.ShouldBe("oversized attachment");
+        message.ContentParts.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Inbound_MediaDownloadExceedingAdapterBudget_StillDispatchesTextWithoutContentParts()
+    {
+        var options = BuildOptions();
+        options.MediaDownloadTimeoutSeconds = 1;
+        var factory = new FakeMatrixClientFactory();
+        var client = factory.ClientFor("farnsworth");
+        client.DownloadMedia = async (_, _, _, cancellationToken) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return [];
+        };
+        var adapter = CreateAdapter(options, factory);
+
+        var dispatcher = await ProcessAsync(
+            adapter,
+            SyncWithMessage(
+                HumanUser,
+                "slow attachment",
+                msgType: "m.image",
+                mediaUrl: "mxc://media.example.com/slow-1",
+                fileName: "slow.png",
+                mimeType: "image/png",
+                size: 4));
+
+        client.MediaDownloadCalls.ShouldHaveSingleItem().CancellationObserved.ShouldBeTrue();
+        var message = Dispatched(dispatcher).ShouldHaveSingleItem();
+        message.Content.ShouldBe("slow attachment");
+        message.ContentParts.ShouldBeNull();
     }
 
     [Fact]
@@ -351,6 +474,80 @@ public sealed class MatrixChannelAdapterTests
         var dispatcher = await ProcessAsync(adapter, SyncWithMessage(HumanUser, "still arrives"));
 
         Dispatched(dispatcher).ShouldHaveSingleItem().Content.ShouldBe("still arrives");
+    }
+
+    [Fact]
+    public async Task Inbound_SuccessfulDispatch_SendsReadReceiptForExactRoomAndEvent()
+    {
+        var factory = new FakeMatrixClientFactory();
+        var adapter = CreateAdapter(BuildOptions(), factory);
+
+        var dispatcher = await ProcessAsync(adapter, SyncWithMessage(HumanUser, "handled"));
+
+        Dispatched(dispatcher).ShouldHaveSingleItem();
+        factory.ClientFor("farnsworth").ReadReceiptCalls.ShouldBe([new ReadReceiptCall(Room, "$evt1")]);
+    }
+
+    [Fact]
+    public async Task Inbound_RejectedMessage_DoesNotSendReadReceipt()
+    {
+        var options = BuildOptions(a => a.AllowedUserIds.Add("@someone-else:example.com"));
+        var factory = new FakeMatrixClientFactory();
+        var adapter = CreateAdapter(options, factory);
+
+        await ProcessAsync(adapter, SyncWithMessage(HumanUser, "rejected"));
+
+        factory.ClientFor("farnsworth").ReadReceiptCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Inbound_FailedDispatch_DoesNotSendReadReceipt()
+    {
+        var factory = new FakeMatrixClientFactory();
+        var adapter = CreateAdapter(BuildOptions(), factory);
+        var dispatcher = CreateDispatcher();
+        dispatcher
+            .Setup(d => d.DispatchAsync(It.IsAny<InboundMessage>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("dispatch failed"));
+
+        Func<Task> act = () => ProcessAsync(adapter, SyncWithMessage(HumanUser, "fails"), dispatcher: dispatcher);
+
+        await Should.ThrowAsync<InvalidOperationException>(act);
+        factory.ClientFor("farnsworth").ReadReceiptCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Inbound_CancelledDispatch_DoesNotSendReadReceipt()
+    {
+        var factory = new FakeMatrixClientFactory();
+        var adapter = CreateAdapter(BuildOptions(), factory);
+        var dispatcher = CreateDispatcher();
+        dispatcher
+            .Setup(d => d.DispatchAsync(It.IsAny<InboundMessage>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        Func<Task> act = () => ProcessAsync(adapter, SyncWithMessage(HumanUser, "cancelled"), dispatcher: dispatcher);
+
+        await Should.ThrowAsync<OperationCanceledException>(act);
+        factory.ClientFor("farnsworth").ReadReceiptCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Inbound_ReadReceiptFailure_DoesNotReplaySuccessfulDispatch()
+    {
+        var factory = new FakeMatrixClientFactory();
+        factory.ClientFor("farnsworth").ReadReceiptFailure = new InvalidOperationException("receipt failed");
+        var adapter = CreateAdapter(BuildOptions(), factory);
+        var dispatcher = CreateDispatcher();
+        await adapter.StartAsync(dispatcher.Object);
+        var runtime = adapter.GetAccount("farnsworth").ShouldNotBeNull();
+        var response = SyncWithMessage(HumanUser, "handled once");
+
+        await adapter.ProcessSyncResponseAsync(runtime, response, CancellationToken.None);
+        await adapter.StopAsync();
+
+        Dispatched(dispatcher).ShouldHaveSingleItem().Content.ShouldBe("handled once");
+        factory.ClientFor("farnsworth").ReadReceiptCalls.ShouldBe([new ReadReceiptCall(Room, "$evt1")]);
     }
 
     // ── Auto-join ──────────────────────────────────────────────────────────────
@@ -678,6 +875,96 @@ public sealed class MatrixChannelAdapterTests
             ChannelAddress.From(string.Empty))).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task Publisher_ProjectsOnlyApplicableMatrixBinding_AndIgnoresUnsupportedEvents()
+    {
+        var factory = new FakeMatrixClientFactory();
+        var options = BuildOptions();
+        options.StreamingBufferMs = 60_000;
+        var adapter = CreateAdapter(options, factory);
+        await adapter.StartAsync(CreateDispatcher().Object);
+
+        var conversationId = ConversationId.From("c_matrix");
+        var sessionId = SessionId.From("s_matrix");
+        var bindings = ImmutableArray.Create(
+            Binding("matrix-active", "matrix", MatrixChannelAddress.Encode(Room), BindingMode.Interactive),
+            Binding("matrix-muted", "matrix", MatrixChannelAddress.Encode("!muted:example.com"), BindingMode.Muted),
+            Binding("telegram-active", "telegram", ChannelAddress.From("chat-1"), BindingMode.Interactive));
+
+        await using var publisher = new ConversationEventPublisher(
+            [(IConversationEventSink)adapter],
+            logger: NullLogger<ConversationEventPublisher>.Instance);
+
+        foreach (var streamEvent in new[]
+                 {
+                     new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "Hello " },
+                     new AgentStreamEvent { Type = AgentStreamEventType.ContentDelta, ContentDelta = "world" },
+                     new AgentStreamEvent { Type = AgentStreamEventType.RunEnded },
+                 })
+        {
+            (await publisher.PublishAsync(new ConversationAgentEvent
+            {
+                AgentId = AgentId.From("farnsworth"),
+                ConversationId = conversationId,
+                SessionId = sessionId,
+                Bindings = bindings,
+                StreamEvent = streamEvent with
+                {
+                    AgentId = AgentId.From("farnsworth"),
+                    ConversationId = conversationId,
+                    SessionId = sessionId,
+                },
+            })).ShouldBeTrue();
+        }
+
+        (await publisher.PublishAsync(new ConversationCreatedEvent
+        {
+            AgentId = AgentId.From("farnsworth"),
+            ConversationId = conversationId,
+            Bindings = bindings,
+        })).ShouldBeTrue();
+        (await publisher.PublishAsync(new ConversationAgentEvent
+        {
+            AgentId = AgentId.From("farnsworth"),
+            ConversationId = ConversationId.From("c_unrelated"),
+            SessionId = SessionId.From("s_unrelated"),
+            Bindings = ImmutableArray.Create(
+                Binding("telegram-only", "telegram", ChannelAddress.From("chat-2"), BindingMode.Interactive)),
+            StreamEvent = new AgentStreamEvent
+            {
+                Type = AgentStreamEventType.ContentDelta,
+                ContentDelta = "ignored",
+                AgentId = AgentId.From("farnsworth"),
+                ConversationId = ConversationId.From("c_unrelated"),
+                SessionId = SessionId.From("s_unrelated"),
+            },
+        })).ShouldBeTrue();
+
+        await publisher.WaitForDrainAsync(CancellationToken.None);
+
+        var sent = factory.ClientFor("farnsworth").SentMessages;
+        sent.Count.ShouldBe(2);
+        sent[0].RoomId.ShouldBe(Room);
+        sent[0].Content.Body.ShouldBe("Hello ");
+        sent[1].RoomId.ShouldBe(Room);
+        var finalContent = sent[1].Content.NewContent;
+        finalContent.ShouldNotBeNull();
+        finalContent.Body.ShouldBe("Hello world");
+    }
+
+    private static ConversationBindingSnapshot Binding(
+        string id,
+        string channel,
+        ChannelAddress address,
+        BindingMode mode)
+        => new(
+            BindingId.From(id),
+            ChannelKey.From(channel),
+            AdapterId: null,
+            address,
+            mode,
+            ThreadingMode.Single);
+
     // ── Capabilities ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -688,9 +975,7 @@ public sealed class MatrixChannelAdapterTests
         adapter.ChannelType.ShouldBe(ChannelKey.From("matrix"));
         adapter.SupportsStreaming.ShouldBeTrue();
 
-        // Inbound media needs the content repository, which is deferred out of this slice, so the
-        // adapter must not advertise a capability it cannot honour.
-        adapter.SupportsInboundImages.ShouldBeFalse();
+        adapter.SupportsInboundImages.ShouldBeTrue();
         adapter.SupportsToolDisplay.ShouldBeFalse();
     }
 

@@ -83,6 +83,24 @@ public interface IChannelAdapter
     /// </remarks>
     bool SupportsInteractivePrompts => false;
 
+    /// <summary>
+    /// Whether a reply delivered through this adapter is already in front of the person who sent
+    /// the message, in the place they sent it from.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Read by the notification path: a chat whose replies land back in the sender's own inbox does
+    /// not also need a push saying the same words arrived. The question is a CAPABILITY of the
+    /// channel, which is why it lives here - the alternative was generic orchestration naming
+    /// Telegram, and that is the coupling ChannelKnowledgeFenceArchitectureTests exists to stop.
+    /// </para>
+    /// <para>
+    /// Defaults to <c>false</c>, the safe direction: an unknown channel is assumed NOT to echo, so
+    /// the notification is raised rather than silently withheld.
+    /// </para>
+    /// </remarks>
+    bool DeliversReplyToSender => false;
+
     /// <summary>Whether the adapter is currently running and accepting messages.</summary>
     bool IsRunning { get; }
 

@@ -44,7 +44,7 @@ public sealed class ConversationSwitcherLauncherTests : IDisposable
     private IRenderedComponent<ConversationSwitcher> RenderFor(string agentId) =>
         _ctx.Render<ConversationSwitcher>(p => p
             .Add(c => c.AgentId, agentId)
-            .Add(c => c.ActiveConversationId, "c-1"));
+            .Add(c => c.SelectedConversationId, "c-1"));
 
     private static IReadOnlyList<IElement> Panel(IRenderedComponent<ConversationSwitcher> cut) =>
         cut.FindAll("[data-testid='conversation-switcher-panel']");

@@ -58,6 +58,50 @@ public sealed class CanvasSubmitBridgeTests : IDisposable
         srcdoc.ShouldContain("clear:");
     }
 
+    [Fact]
+    public void Bridge_sdk_surfaces_submit_pending_success_and_error_without_agent_html_changes()
+    {
+        var agent = _store.GetAgent("agent-1")!;
+        agent.CanvasHtml = "<html><head></head><body><button>Submit</button></body></html>";
+
+        var cut = _ctx.Render<CanvasPanel>(p => p
+            .Add(x => x.AgentId, "agent-1")
+            .Add(x => x.ConversationId, BoundConversation));
+
+        var srcdoc = cut.Find("iframe[data-testid='canvas-iframe']").GetAttribute("srcdoc");
+        Assert.NotNull(srcdoc);
+        srcdoc.ShouldContain("document.activeElement");
+        srcdoc.ShouldContain("window.event");
+        srcdoc.ShouldContain("aria-busy");
+        srcdoc.ShouldContain("aria-describedby");
+        srcdoc.ShouldContain("aria-live");
+        srcdoc.ShouldContain("canvas-submit-status");
+        srcdoc.ShouldContain("canvasSubmitState");
+        srcdoc.ShouldContain("Submitting...");
+        srcdoc.ShouldContain("Submitted");
+        srcdoc.ShouldContain("Submission failed:");
+    }
+
+    [Fact]
+    public void Bridge_sdk_rejects_duplicate_submit_and_restores_retry_after_failure()
+    {
+        var agent = _store.GetAgent("agent-1")!;
+        agent.CanvasHtml = "<button>Submit</button>";
+
+        var cut = _ctx.Render<CanvasPanel>(p => p
+            .Add(x => x.AgentId, "agent-1")
+            .Add(x => x.ConversationId, BoundConversation));
+
+        var srcdoc = cut.Find("iframe[data-testid='canvas-iframe']").GetAttribute("srcdoc");
+        Assert.NotNull(srcdoc);
+        srcdoc.ShouldContain("_submitInFlight");
+        srcdoc.ShouldContain("Canvas submission already in progress");
+        srcdoc.ShouldContain("trigger.disabled = true");
+        srcdoc.ShouldContain("trigger.disabled = wasDisabled");
+        srcdoc.ShouldContain("_submitInFlight = null");
+        srcdoc.ShouldContain("return submission;");
+    }
+
     /// <summary>
     /// The security crux at the component seam: a canvas that puts a foreign conversation id in the
     /// postMessage payload must still be routed to the bound conversation.
@@ -127,15 +171,10 @@ public sealed class CanvasSubmitBridgeTests : IDisposable
             return Task.FromResult(CanvasSubmitResult.Ok());
         }
 
-        public Task SendMessageAsync(string agentId, string conversationId, string content) => throw new NotSupportedException();
-        public Task SendMessageAsync(string agentId, string conversationId, string content, IReadOnlyList<DraftAttachment> attachments) => throw new NotSupportedException();
-        public Task SteerAsync(string agentId, string conversationId, string content) => throw new NotSupportedException();
-        public Task SteerAsync(string agentId, string conversationId, string content, IReadOnlyList<DraftAttachment> attachments) => throw new NotSupportedException();
+        public Task DeliverMessageAsync(string agentId, string conversationId, string content, InboundDeliveryMode deliveryMode = InboundDeliveryMode.Auto, IReadOnlyList<DraftAttachment>? attachments = null) => throw new NotSupportedException();
         public Task FollowUpAsync(string agentId, string conversationId, string content) => throw new NotSupportedException();
         public Task FollowUpAsync(string agentId, string conversationId, string content, IReadOnlyList<DraftAttachment> attachments) => throw new NotSupportedException();
         public Task AbortAsync(string agentId, string conversationId) => throw new NotSupportedException();
-        public Task InterruptAndSteerAsync(string agentId, string conversationId, string message) => throw new NotSupportedException();
-        public Task InterruptAndSteerAsync(string agentId, string conversationId, string message, IReadOnlyList<DraftAttachment> attachments) => throw new NotSupportedException();
         public Task ResetSessionAsync(string agentId, string conversationId) => throw new NotSupportedException();
         public Task<bool> ExecuteGatewayCommandAsync(string agentId, string conversationId, string commandText) => throw new NotSupportedException();
         public Task<CompactSessionResult?> CompactSessionAsync(string agentId, string conversationId) => throw new NotSupportedException();

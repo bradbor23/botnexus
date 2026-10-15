@@ -128,12 +128,14 @@ exit 0
             [Parameter(Mandatory)][string]$Mode,
             [int]$PR = 9001,
             [string]$ScriptPath = $script:ScriptPath,
-            [string]$ActionsLiteral = "@('none')",
+            [string[]]$Actions = @('none'),
+            [int]$ChildTimeoutMilliseconds = 15000,
+            [int]$TerminationTimeoutMilliseconds = 5000,
             [switch]$KeepStubDir
         )
-        $stub    = New-GhStubDir -Mode $Mode
-        $outPath = [IO.Path]::GetTempFileName()
-        $errPath = [IO.Path]::GetTempFileName()
+        $stub = New-GhStubDir -Mode $Mode
+        $p = $null
+        $resourcesSafeToDelete = $true
         try {
             $psi = [Diagnostics.ProcessStartInfo]::new()
             $psi.FileName  = (Get-Process -Id $PID).Path
@@ -141,7 +143,7 @@ exit 0
             # script through -Command instead. `& script` sets $LASTEXITCODE
             # from the script's `exit`, so re-exiting with it reproduces the
             # exit-code propagation a real `pwsh -File` caller sees.
-            $psi.Arguments = "-NoProfile -Command `"& { `$rows = @([pscustomobject]@{name='core-tests';status='pass'}); & '$ScriptPath' -PR $PR -CheckRows `$rows -BehindBy 0 -Mergeable MERGEABLE -Actions $ActionsLiteral -Blockers @('None') }; exit `$LASTEXITCODE`""
+            $psi.Arguments = "-NoProfile -Command `"& { `$rows = @([pscustomobject]@{name='core-tests';status='pass'}); `$actions = @(ConvertFrom-Json `$env:CI_PR_COMMENT_STUB_ACTIONS); & '$ScriptPath' -PR $PR -CheckRows `$rows -BehindBy 0 -Mergeable MERGEABLE -Actions `$actions -Blockers @('None') }; exit `$LASTEXITCODE`""
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError  = $true
             $psi.UseShellExecute        = $false
@@ -149,18 +151,100 @@ exit 0
             $psi.Environment['CI_PR_COMMENT_STUB_MODE']  = $Mode
             $psi.Environment['CI_PR_COMMENT_STUB_PR']    = "$PR"
             $psi.Environment['CI_PR_COMMENT_STUB_DIR']   = $stub.Dir
+            $psi.Environment['CI_PR_COMMENT_STUB_ACTIONS'] = ConvertTo-Json -Compress -InputObject @($Actions)
 
             $p = [Diagnostics.Process]::Start($psi)
-            $stdout = $p.StandardOutput.ReadToEnd()
-            $stderr = $p.StandardError.ReadToEnd()
-            $p.WaitForExit()
+            $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+            $stderrTask = $p.StandardError.ReadToEndAsync()
+            $timedOut = -not $p.WaitForExit($ChildTimeoutMilliseconds)
+            $terminated = $true
+
+            if ($timedOut) {
+                try { $p.Kill($true) } catch { $terminated = $false }
+                if ($terminated) { $terminated = $p.WaitForExit($TerminationTimeoutMilliseconds) }
+            }
+
+            $streamsDrained = $terminated -and [Threading.Tasks.Task]::WaitAll(
+                [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask),
+                $TerminationTimeoutMilliseconds)
+            $resourcesSafeToDelete = $terminated -and $streamsDrained
+
+            if ($timedOut -or -not $resourcesSafeToDelete) {
+                $detail = if ($timedOut) {
+                    "CI comment child timed out after ${ChildTimeoutMilliseconds}ms; terminated=$terminated; streamsDrained=$streamsDrained."
+                } else {
+                    "CI comment child exited but redirected stream cleanup did not complete within ${TerminationTimeoutMilliseconds}ms; terminated=$terminated; streamsDrained=$streamsDrained."
+                }
+                $exception = if ($timedOut) { [TimeoutException]::new($detail) } else { [InvalidOperationException]::new($detail) }
+                $exception.Data['ChildId'] = $p.Id
+                $exception.Data['StubDir'] = $stub.Dir
+                $exception.Data['Terminated'] = $terminated
+                $exception.Data['StreamsDrained'] = $streamsDrained
+                throw $exception
+            }
+
+            $stdout = $stdoutTask.GetAwaiter().GetResult()
+            $stderr = $stderrTask.GetAwaiter().GetResult()
             [pscustomobject]@{ ExitCode = $p.ExitCode; StdOut = $stdout; StdErr = $stderr; StubDir = $stub.Dir }
         } finally {
-            Remove-Item -LiteralPath $outPath, $errPath -Force -ErrorAction SilentlyContinue
-            if (-not $KeepStubDir) {
+            if ($p) { $p.Dispose() }
+            if (-not $KeepStubDir -and $resourcesSafeToDelete) {
                 Remove-Item -LiteralPath $stub.Dir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+    }
+}
+
+Describe 'Invoke-CiPrComment owns redirected child lifetime (#4053)' {
+    BeforeAll {
+        $script:FloodScript = Join-Path ([IO.Path]::GetTempPath()) ("ci-comment-flood-" + [Guid]::NewGuid().ToString('N') + '.ps1')
+        $script:HangScript = Join-Path ([IO.Path]::GetTempPath()) ("ci-comment-hang-" + [Guid]::NewGuid().ToString('N') + '.ps1')
+        Set-Content -LiteralPath $script:FloodScript -Encoding UTF8 -Value @'
+[Console]::Error.Write('e' * 262144)
+[Console]::Out.Write('stdout-retained')
+exit 23
+'@
+        Set-Content -LiteralPath $script:HangScript -Encoding UTF8 -Value @'
+while ($true) { Start-Sleep -Milliseconds 100 }
+'@
+    }
+    AfterAll {
+        Remove-Item -LiteralPath $script:FloodScript, $script:HangScript -Force -ErrorAction SilentlyContinue
+        if ($script:TimeoutStubDir) {
+            Remove-Item -LiteralPath $script:TimeoutStubDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'concurrently retains both streams when stderr exceeds a pipe buffer' {
+        $result = Invoke-CiPrComment -Mode 'fixture' -ScriptPath $script:FloodScript -ChildTimeoutMilliseconds 5000
+        $result.ExitCode | Should -Be 23
+        $result.StdOut | Should -BeExactly 'stdout-retained'
+        $result.StdErr.Length | Should -Be 262144
+    }
+
+    It 'bounds a nonterminating child and reports completed termination and drain cleanup' {
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            Invoke-CiPrComment -Mode 'fixture' -ScriptPath $script:HangScript -ChildTimeoutMilliseconds 250 -KeepStubDir
+            throw 'Expected the nonterminating fixture to time out.'
+        } catch [TimeoutException] {
+            $stopwatch.Stop()
+            $script:TimeoutStubDir = $_.Exception.Data['StubDir']
+            $_.Exception.Message | Should -Match 'timed out after 250ms'
+            $_.Exception.Data['Terminated'] | Should -BeTrue
+            $_.Exception.Data['StreamsDrained'] | Should -BeTrue
+            Get-Process -Id $_.Exception.Data['ChildId'] -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+            $stopwatch.Elapsed.TotalSeconds | Should -BeLessThan 5
+        }
+    }
+
+    It 'pins concurrent drains, a bounded wait, process-tree termination, and disposal' {
+        $definition = (Get-Command Invoke-CiPrComment).Definition
+        $definition | Should -Match 'StandardOutput\.ReadToEndAsync\(\)'
+        $definition | Should -Match 'StandardError\.ReadToEndAsync\(\)'
+        $definition | Should -Match 'WaitForExit\(\$ChildTimeoutMilliseconds\)'
+        $definition | Should -Match 'Kill\(\$true\)'
+        $definition | Should -Match '\.Dispose\(\)'
     }
 }
 
@@ -228,8 +312,12 @@ Describe 'create path passes a multi-line body as a file, not an inline argument
         # Every one of these action entries is a line that gh would parse as a
         # positional if the body were split at the native boundary. The first is
         # verbatim the string from the live #3830 failure.
-        $script:Actions = "@('Merged origin/main (was behindBy=6) and pushed 9295ed7bd to re-trigger CI.','- leading dash line','| pipe | row |','<html-ish line>','*starred line*')"
-        $script:BodyFile = Invoke-CiPrComment -Mode 'create-body-file' -ActionsLiteral $script:Actions -KeepStubDir
+        $script:Actions = @(
+            'Merged origin/main (was behindBy=6) and pushed 9295ed7bd to re-trigger CI.'
+            '- leading dash line'
+            "multiline fixture lead`n| pipe | row |`n<html-ish line>`n*starred line*"
+        )
+        $script:BodyFile = Invoke-CiPrComment -Mode 'create-body-file' -Actions $script:Actions -KeepStubDir
     }
     AfterAll {
         if ($script:BodyFile) {
@@ -250,11 +338,31 @@ Describe 'create path passes a multi-line body as a file, not an inline argument
         $script:BodyFile.StdErr | Should -Not -Match 'Could not resolve to a Repository'
         $script:BodyFile.StdOut | Should -Not -Match 'create-failed'
     }
-    It 'delivers the body through --body-file with its content intact' {
+    It 'delivers the exact complete rendered body through --body-file' {
         $captured = Get-Content -LiteralPath (Join-Path $script:BodyFile.StubDir 'body.txt') -Raw
-        $captured | Should -Match '<!-- farnsworth:ci-monitor-9001 -->'
-        $captured | Should -Match 'was behindBy=6'
-        $captured | Should -Match '\|\s*core-tests\s*\|'
+        $nowUtc = [regex]::Match($captured, 'Last updated: (?<value>[^*]+)\*').Groups['value'].Value
+        $history = [regex]::Match($captured, '(?s)---\n(?<value>- .+?)\n---').Groups['value'].Value
+
+        . (Join-Path $script:RepoRoot 'scripts/repo/CiCommentRendering.ps1')
+        $expected = New-CiHealthCheckBody `
+            -PR 9001 `
+            -CheckRows @([pscustomobject]@{ name = 'core-tests'; status = 'pass' }) `
+            -BehindBy 0 `
+            -Mergeable 'MERGEABLE' `
+            -Actions $script:Actions `
+            -Blockers @('None') `
+            -HistoryBlock $history `
+            -NowUtc $nowUtc
+
+        $captured | Should -BeExactly $expected
+    }
+    It 'preserves every supplied positional-looking line exactly' {
+        $captured = Get-Content -LiteralPath (Join-Path $script:BodyFile.StubDir 'body.txt') -Raw
+        $lines = $captured -split "`r?`n"
+        $lines | Should -Contain '- - leading dash line'
+        $lines | Should -Contain '| pipe | row |'
+        $lines | Should -Contain '<html-ish line>'
+        $lines | Should -Contain '*starred line*'
     }
     It 'removes the temporary body file after the call' {
         $recorded = Join-Path $script:BodyFile.StubDir 'bodypath.txt'

@@ -173,12 +173,9 @@ public sealed class AgentExchangeService : IAgentExchangeService
 
         var targetDescriptor = isLocalTarget ? _registry.Get(request.TargetId) : null;
 
-        if (!_exchangeOptions.Value.IsOpen)
-        {
-            if (!DelegationPolicy.IsGranted(initiatorDescriptor, request.TargetId.Value, targetDescriptor))
-                throw new UnauthorizedAccessException(
-                    $"Agent '{request.InitiatorId}' is not allowed to converse with '{request.TargetId}'.");
-        }
+        if (!PeerAccessPolicy.IsAllowed(_exchangeOptions.Value, initiatorDescriptor, request.TargetId, targetDescriptor))
+            throw new UnauthorizedAccessException(
+                $"Agent '{request.InitiatorId}' is not allowed to converse with '{request.TargetId}'.");
 
         _logger.LogInformation(
             "Agent exchange initiated: {Initiator} -> {Target} (policy={Policy})",
@@ -533,8 +530,4 @@ public sealed class AgentExchangeService : IAgentExchangeService
         }
     }
 
-    /// <summary>
-    /// Returns true when the initiator's <c>SubAgentRoles</c> list contains at least one role
-    /// that matches the target's <c>metadata.role</c> value.
-    /// </summary>
 }

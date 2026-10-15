@@ -76,6 +76,23 @@ public sealed class EffectiveRuntimeContextTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithForbiddenPersistedModelOverride_UsesAgentDefault()
+    {
+        var (strategy, sessionId) = await CreateSeamAsync(
+            modelOverride: ConversationOverrideModel,
+            thinkingOverride: null,
+            contextWindowOverride: null);
+
+        var handle = await strategy.CreateAsync(
+            CreateDescriptor() with { AllowedModelIds = [AgentDefaultModel] },
+            new AgentExecutionContext { SessionId = sessionId });
+        var prompt = handle.ShouldBeOfType<InProcessAgentHandle>().RenderedSystemPrompt.ShouldNotBeNull();
+
+        prompt.ShouldContain($"| model={AgentDefaultModel}");
+        prompt.ShouldNotContain($"| model={ConversationOverrideModel}");
+    }
+
+    [Fact]
     public async Task CreateAsync_WithConversationThinkingOverride_RuntimeBlockReportsEffectiveReasoning()
     {
         var (strategy, sessionId) = await CreateSeamAsync(
@@ -153,7 +170,7 @@ public sealed class EffectiveRuntimeContextTests
         return handle.ShouldBeOfType<InProcessAgentHandle>().RenderedSystemPrompt.ShouldNotBeNull();
     }
 
-    private static SimpleStreamOptions GetGenerationSettings(IAgentHandle handle)
+    private static GenerationOptions GetGenerationSettings(IAgentHandle handle)
     {
         var agentField = handle.GetType().GetField("_agent", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         agentField.ShouldNotBeNull();
@@ -162,7 +179,7 @@ public sealed class EffectiveRuntimeContextTests
         var optionsField = typeof(BotNexus.Agent.Core.Agent).GetField("_options", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         optionsField.ShouldNotBeNull();
         var options = optionsField.GetValue(agent).ShouldBeOfType<BotNexus.Agent.Core.Configuration.AgentOptions>();
-        return options.GenerationSettings.ShouldBeOfType<SimpleStreamOptions>();
+        return options.GenerationSettings.ShouldBeOfType<GenerationOptions>();
     }
 
     private static async Task<(InProcessIsolationStrategy Strategy, SessionId SessionId)> CreateSeamAsync(

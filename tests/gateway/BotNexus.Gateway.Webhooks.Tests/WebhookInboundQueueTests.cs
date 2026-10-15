@@ -199,6 +199,76 @@ public sealed class WebhookInboundQueueTests
     }
 
     [Fact]
+    public async Task AbandonedQueuedTicket_ReturnsCapacity_WithoutDispatching()
+    {
+        var queue = CreateQueue(depth: 1);
+        using var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        var abandoned = queue.Admit(Target, Conversation);
+
+        abandoned.Dispose();
+
+        queue.WaitingCount(Target).ShouldBe(0);
+        var replacement = queue.Admit(Target, Conversation);
+        replacement.IsImmediate.ShouldBeFalse();
+        replacement.Dispose();
+    }
+
+    [Fact]
+    public async Task Abandonment_IsIdempotent_AndCannotReleaseAnotherLease()
+    {
+        var queue = CreateQueue(depth: 1);
+        using var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        var abandoned = queue.Admit(Target, Conversation);
+
+        abandoned.Dispose();
+        abandoned.Dispose();
+
+        queue.WaitingCount(Target).ShouldBe(0);
+        var replacement = queue.Admit(Target, Conversation);
+        replacement.IsImmediate.ShouldBeFalse(
+            "abandoning a waiter must not release the current holder's semaphore lease");
+        replacement.Dispose();
+    }
+
+    [Fact]
+    public async Task CancellationRacingAbandonment_ReleasesReservationExactlyOnce()
+    {
+        var queue = CreateQueue(depth: 1);
+        using var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        var ticket = queue.Admit(Target, Conversation);
+        using var cts = new CancellationTokenSource();
+
+        var wait = Task.Run(async () =>
+        {
+            try { using var lease = await ticket.WaitAsync(cts.Token); }
+            catch (WebhookNotDispatchedException) { }
+            catch (InvalidOperationException) { }
+        });
+        await Task.WhenAll(Task.Run(ticket.Dispose), cts.CancelAsync()).WaitAsync(TestTimeout);
+        await wait.WaitAsync(TestTimeout);
+
+        queue.WaitingCount(Target).ShouldBe(0);
+        var replacement = queue.Admit(Target, Conversation);
+        replacement.IsImmediate.ShouldBeFalse(
+            "the abandonment race must not release the current holder's semaphore lease");
+        replacement.Dispose();
+    }
+
+    [Fact]
+    public async Task AbandonedImmediateTicket_ReleasesItsLeaseExactlyOnce()
+    {
+        var queue = CreateQueue();
+        var ticket = queue.Admit(Target, Conversation);
+
+        ticket.Dispose();
+        ticket.Dispose();
+
+        var replacement = queue.Admit(Target, Conversation);
+        replacement.IsImmediate.ShouldBeTrue();
+        using var lease = await replacement.WaitAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Ticket_CannotBeConsumedTwice()
     {
         var queue = CreateQueue();
@@ -227,6 +297,132 @@ public sealed class WebhookInboundQueueTests
 
         var negative = new WebhookInboundQueueOptions { RunTimeout = TimeSpan.FromSeconds(-1) };
         negative.EffectiveRunTimeout.ShouldBe(WebhookInboundQueueOptions.DefaultRunTimeout);
+
+        var unsupported = new WebhookInboundQueueOptions { RunTimeout = TimeSpan.MaxValue };
+        unsupported.EffectiveRunTimeout.ShouldBe(WebhookInboundQueueOptions.DefaultRunTimeout);
+    }
+
+    [Fact]
+    public async Task AdmissionOrderWins_WhenLaterTicketStartsWaitingFirst()
+    {
+        var queue = CreateQueue(depth: 2);
+        var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        var firstTicket = queue.Admit(Target, Conversation);
+        var secondTicket = queue.Admit(Target, Conversation);
+
+        var secondWait = secondTicket.WaitAsync(CancellationToken.None);
+        var firstWait = firstTicket.WaitAsync(CancellationToken.None);
+
+        holder.Dispose();
+        var winner = await Task.WhenAny(firstWait, secondWait).WaitAsync(TestTimeout);
+
+        winner.ShouldBe(firstWait,
+            "execution ownership must follow admission order, not the order callers reach WaitAsync");
+        var firstLease = await firstWait.WaitAsync(TestTimeout);
+        secondWait.IsCompleted.ShouldBeFalse("only the first admitted ticket receives this handoff");
+        firstLease.Dispose();
+        (await secondWait.WaitAsync(TestTimeout)).Dispose();
+    }
+
+    [Fact]
+    public async Task CancellingFirstAdmittedTicket_RemovesItAndAdvancesSuccessor()
+    {
+        var queue = CreateQueue(depth: 2);
+        var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        var cancelledTicket = queue.Admit(Target, Conversation);
+        var successorTicket = queue.Admit(Target, Conversation);
+        using var cts = new CancellationTokenSource();
+
+        var cancelledWait = cancelledTicket.WaitAsync(cts.Token);
+        var successorWait = successorTicket.WaitAsync(CancellationToken.None);
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<WebhookNotDispatchedException>(
+            async () => await cancelledWait.WaitAsync(TestTimeout));
+        holder.Dispose();
+        using var successorLease = await successorWait.WaitAsync(TestTimeout);
+        queue.WaitingCount(Target).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task CompletedDeliveries_RetireIdleConversationAndAgentBookkeeping()
+    {
+        var queue = CreateQueue(depth: 2);
+
+        for (var index = 0; index < 100; index++)
+        {
+            var conversation = ConversationId.From($"conv-retired-{index}");
+            var holder = await queue.Admit(Target, conversation).WaitAsync(CancellationToken.None);
+            var queued = queue.Admit(Target, conversation);
+            var queuedWait = queued.WaitAsync(CancellationToken.None);
+
+            holder.Dispose();
+            (await queuedWait.WaitAsync(TestTimeout)).Dispose();
+        }
+
+        queue.RetainedSlotCount.ShouldBe(0,
+            "completed conversations must not remain in the singleton queue indefinitely");
+        queue.RetainedAgentDepthCount.ShouldBe(0,
+            "agents with no queued deliveries must not retain depth bookkeeping indefinitely");
+    }
+
+    [Fact]
+    public async Task RetirementRacingAdmission_PreservesSingleConversationHolder()
+    {
+        var queue = CreateQueue(depth: 2);
+        var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+        using var slotResolved = new ManualResetEventSlim();
+        using var continueAdmission = new ManualResetEventSlim();
+        var pauseOnce = 0;
+        queue.SlotResolvedForTesting = () =>
+        {
+            if (Interlocked.Exchange(ref pauseOnce, 1) != 0)
+                return;
+            slotResolved.Set();
+            continueAdmission.Wait(TestTimeout);
+        };
+
+        var contenderTask = Task.Run(() => queue.Admit(Target, Conversation));
+        slotResolved.Wait(TestTimeout).ShouldBeTrue(
+            "the contender must resolve the retiring slot before the holder releases it");
+        holder.Dispose();
+        queue.RetainedSlotCount.ShouldBe(0,
+            "the idle slot must retire while the contender still holds its stale reference");
+        continueAdmission.Set();
+
+        var contender = await contenderTask.WaitAsync(TestTimeout);
+        using var contenderLease = await contender.WaitAsync(CancellationToken.None).WaitAsync(TestTimeout);
+        var follower = queue.Admit(Target, Conversation);
+        follower.IsImmediate.ShouldBeFalse(
+            "the stale contender must retry against the replacement slot rather than bypass it");
+        follower.Dispose();
+
+        queue.SlotResolvedForTesting = null;
+        contenderLease.Dispose();
+        queue.RetainedSlotCount.ShouldBe(0);
+        queue.RetainedAgentDepthCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task CancelledRejectedAndAbandonedAdmissions_DoNotRetainBookkeeping()
+    {
+        var queue = CreateQueue(depth: 1);
+        var holder = await queue.Admit(Target, Conversation).WaitAsync(CancellationToken.None);
+
+        var cancelled = queue.Admit(Target, Conversation);
+        using var cts = new CancellationTokenSource();
+        var cancelledWait = cancelled.WaitAsync(cts.Token);
+        Should.Throw<WebhookBackpressureException>(() => queue.Admit(Target, Conversation));
+        await cts.CancelAsync();
+        await Should.ThrowAsync<WebhookNotDispatchedException>(
+            async () => await cancelledWait.WaitAsync(TestTimeout));
+
+        var abandoned = queue.Admit(Target, Conversation);
+        abandoned.Dispose();
+        holder.Dispose();
+
+        queue.RetainedSlotCount.ShouldBe(0);
+        queue.RetainedAgentDepthCount.ShouldBe(0);
     }
 
     [Fact]
