@@ -47,6 +47,28 @@ public sealed class InMemoryConversationStore : IConversationStore
     }
 
     /// <inheritdoc />
+    public Task<ConversationOwnership?> GetOwnershipAsync(ConversationId conversationId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_conversations.TryGetValue(conversationId.Value, out var conversation)
+            ? new ConversationOwnership(conversation.ConversationId, conversation.AgentId) : null);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<ConversationOwnership>> ListOwnershipAsync(AgentId? agentId = null, CancellationToken ct = default)
+    {
+        var result = new List<ConversationOwnership>();
+        foreach (var conversation in _conversations.Values)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (agentId is null || conversation.AgentId == agentId.Value)
+                result.Add(new(conversation.ConversationId, conversation.AgentId));
+        }
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<ConversationOwnership>>(result);
+    }
+
+    /// <inheritdoc />
     public Task<Conversation?> GetAsync(ConversationId conversationId, CancellationToken ct = default)
     {
         var conversation = _conversations.GetValueOrDefault(conversationId.Value);
@@ -374,6 +396,22 @@ public sealed class InMemoryConversationStore : IConversationStore
         return Task.FromResult(summaries);
     }
 
+    /// <inheritdoc />
+    public Task<IReadOnlyList<ConversationSummary>> GetSummariesAsync(
+        DateTimeOffset? activitySince, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        IReadOnlyList<ConversationSummary> summaries = [.. _conversations.Values
+            .Where(c => c.Status == ConversationStatus.Active && c.ParentConversationId is null)
+            .Select(c => (Conversation: c, Activity: ConversationStoreShared.EffectiveActivity(c)))
+            .Where(x => activitySince is null || x.Activity >= activitySince.Value)
+            .OrderByDescending(x => x.Conversation.IsPinned)
+            .ThenByDescending(x => x.Conversation.PinnedAt)
+            .ThenByDescending(x => x.Activity)
+            .ThenBy(x => x.Conversation.ConversationId.Value, StringComparer.Ordinal)
+            .Select(x => ToSummary(x.Conversation) with { UpdatedAt = x.Activity })];
+        return Task.FromResult(summaries);
+    }
     /// <inheritdoc />
     public Task<IReadOnlyList<ConversationRetentionCandidate>> GetRetentionCandidatesAsync(
         ConversationSource? source = null,

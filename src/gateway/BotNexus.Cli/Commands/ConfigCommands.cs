@@ -105,6 +105,7 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
     private static Command BuildStoreCommand(Option<string?> targetOption)
     {
         var storeCommand = new Command("store", "Manage the SQLite configuration store.");
+        static string ResolveConfigPath(string? target) => Path.Combine(CliPaths.ResolveTarget(target), "config.json");
 
         var enableCommand = new Command(
             "enable",
@@ -112,7 +113,7 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
         enableCommand.SetHandler(async context =>
         {
             var target = context.ParseResult.GetValueForOption(targetOption);
-            var configPath = Path.Combine(CliPaths.ResolveTarget(target), "config.json");
+            var configPath = ResolveConfigPath(target);
             context.ExitCode = await ExecuteStoreEnableAsync(configPath, CancellationToken.None);
         });
 
@@ -120,7 +121,7 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
         statusCommand.SetHandler(async context =>
         {
             var target = context.ParseResult.GetValueForOption(targetOption);
-            var configPath = Path.Combine(CliPaths.ResolveTarget(target), "config.json");
+            var configPath = ResolveConfigPath(target);
             context.ExitCode = await ExecuteStoreStatusAsync(configPath, CancellationToken.None);
         });
 
@@ -130,14 +131,126 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
         disableCommand.SetHandler(context =>
         {
             var target = context.ParseResult.GetValueForOption(targetOption);
-            var configPath = Path.Combine(CliPaths.ResolveTarget(target), "config.json");
+            var configPath = ResolveConfigPath(target);
             context.ExitCode = ExecuteStoreDisable(configPath);
         });
 
+        var parityCommand = new Command("parity", "Compare complete SQL and compatibility documents without changing configuration. Reports counts only, never keys or values.");
+        parityCommand.SetHandler(async context =>
+        {
+            var target = context.ParseResult.GetValueForOption(targetOption);
+            var configPath = ResolveConfigPath(target);
+            context.ExitCode = await ExecuteStoreParityAsync(configPath, CancellationToken.None);
+        });
+
+        var applyOption = new Option<bool>("--apply", "Persist the validated complete union. Without this option, only preview.");
+        var reconcileCommand = new Command("reconcile", "Preview a complete SQL-first union with compatibility-only fields preserved; use --apply to persist.")
+        {
+            applyOption
+        };
+        reconcileCommand.SetHandler(async context =>
+        {
+            var configPath = ResolveConfigPath(context.ParseResult.GetValueForOption(targetOption));
+            context.ExitCode = await ExecuteStoreReconcileAsync(configPath,
+                context.ParseResult.GetValueForOption(applyOption), CancellationToken.None);
+        });
+
+        storeCommand.AddCommand(reconcileCommand);
         storeCommand.AddCommand(enableCommand);
         storeCommand.AddCommand(statusCommand);
         storeCommand.AddCommand(disableCommand);
+        storeCommand.AddCommand(parityCommand);
         return storeCommand;
+    }
+
+    /// <summary>
+    /// Previews reconciliation by default; only explicit apply constructs the canonical writer.
+    /// Diagnostics omit configuration data and exception payloads, including in verbose mode.
+    /// Preview permits SQLite WAL/SHM coordination, not configuration/schema/revision/permission/migration writes.
+    /// </summary>
+    public static async Task<int> ExecuteStoreReconcileAsync(string configPath, bool apply, CancellationToken cancellationToken)
+    {
+        var preview = await PlatformConfigWriter.PreviewReconciliationAsync(configPath, cancellationToken);
+        if (!preview.CanApply)
+        {
+            AnsiConsole.WriteLine("Reconciliation: refused");
+            AnsiConsole.WriteLine(preview.Outcome);
+            return 1;
+        }
+        if (!apply)
+        {
+            AnsiConsole.WriteLine("Reconciliation: preview");
+            AnsiConsole.WriteLine("Complete SQL-first union validated. No configuration was changed; use --apply to persist.");
+            AnsiConsole.WriteLine("SQLite may update WAL/SHM coordination files; preview does not change configuration values, schema, revision, permissions or migration state.");
+            return 0;
+        }
+        try
+        {
+            var writer = BotNexus.Gateway.Configuration.Writers.ConfigWriterFactory.Create(configPath, new System.IO.Abstractions.FileSystem());
+            var errors = await writer.ApplyReconciliationAsync(preview, cancellationToken);
+            if (errors.Count > 0)
+            {
+                AnsiConsole.WriteLine("Reconciliation: refused");
+                AnsiConsole.WriteLine("State changed or safety validation failed. No configuration was written; preview again.");
+                return 1;
+            }
+            AnsiConsole.WriteLine("Reconciliation: applied");
+            AnsiConsole.WriteLine("The complete union was persisted to both backends. Keys and values are omitted.");
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            AnsiConsole.WriteLine("Reconciliation: interrupted");
+            AnsiConsole.WriteLine("Persistence may be partial. Inspect parity before retrying; no cross-store atomicity is guaranteed.");
+            throw;
+        }
+        catch (Exception)
+        {
+            AnsiConsole.WriteLine("Reconciliation: failed");
+            AnsiConsole.WriteLine("Persistence may be partial. Inspect parity before retrying; no cross-store atomicity is guaranteed.");
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Explicit read-only compatibility diagnostic. Exit codes: 0 clean, 2 drift, 3 not compared,
+    /// 1 unreadable. No output path, key, value, or exception payload is emitted, even in verbose mode.
+    /// SQLite WAL/SHM bookkeeping is permitted, never application configuration mutations.
+    /// </summary>
+    public static async Task<int> ExecuteStoreParityAsync(string configPath, CancellationToken cancellationToken)
+    {
+        var report = await ConfigStoreParityDiagnostic.InspectAsync(configPath, cancellationToken);
+        var status = report.Status switch
+        {
+            ConfigStoreParityStatus.Clean => "clean",
+            ConfigStoreParityStatus.Drift => "drift",
+            ConfigStoreParityStatus.Disabled => "disabled",
+            ConfigStoreParityStatus.Absent => "absent",
+            ConfigStoreParityStatus.SqlOnly => "sql-only",
+            _ => "unreadable"
+        };
+        AnsiConsole.WriteLine($"Parity: {status}");
+        AnsiConsole.WriteLine($"SQL: {report.SqlBackend.ToString().ToLowerInvariant()}");
+        AnsiConsole.WriteLine($"Compatibility: {report.CompatibilityBackend.ToString().ToLowerInvariant()}");
+        if (report.Status is ConfigStoreParityStatus.Clean or ConfigStoreParityStatus.Drift)
+        {
+            AnsiConsole.WriteLine($"SQL-only: {report.SqlOnlyCount}");
+            AnsiConsole.WriteLine($"Compatibility-only: {report.CompatibilityOnlyCount}");
+            AnsiConsole.WriteLine($"Changed: {report.ChangedCount}");
+        }
+        else
+        {
+            AnsiConsole.WriteLine("Documents not compared; parity is not established.");
+        }
+        AnsiConsole.WriteLine("Read-only inspection; no configuration was changed. Keys and values are omitted.");
+        AnsiConsole.WriteLine("SQLite may update WAL/SHM coordination files; configuration values, schema, revision, permissions and migration state are unchanged.");
+        return report.Status switch
+        {
+            ConfigStoreParityStatus.Clean => 0,
+            ConfigStoreParityStatus.Drift => 2,
+            ConfigStoreParityStatus.Unreadable => 1,
+            _ => 3
+        };
     }
 
     /// <summary>
@@ -404,6 +517,22 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
         if (config is null)
             return 1;
 
+        // Shape recognition is not agent existence. Check before the typed resolver can
+        // materialize dictionary entries, then recheck against the locked latest document.
+        // Unrecognised paths retain the resolver's existing property/type diagnostics.
+        var agentIds = ConfigPathBinding.TryRecognise(keyPath, out _)
+            ? GetTargetAgentIds(keyPath, rawValue)
+            : [];
+        if (agentIds.Count > 0)
+        {
+            var document = await CliConfigMutation.ReadAsync(configPath, cancellationToken);
+            if (CheckAgentExistence(document, keyPath, agentIds) is { } existenceError)
+            {
+                AnsiConsole.MarkupLine($"[red]Error:[/] {CliText.SafeDisplay(existenceError)}");
+                return 1;
+            }
+        }
+
         // The typed graph is used only to type-check and coerce the incoming string against the
         // declared shape of the key. It is deliberately NOT written back: re-serializing the typed
         // object would drop everything the graph does not model (#2057).
@@ -421,7 +550,8 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
 
         var saveCode = await CliConfigMutation.ApplyAsync(
             configPath,
-            document => document.TrySetFrom(keyPath, coerced, out var setError) ? null : setError,
+            document => CheckAgentExistence(document, keyPath, agentIds)
+                ?? (document.TrySetFrom(keyPath, coerced, out var setError) ? null : setError),
             "before-config-set",
             verbose,
             cancellationToken);
@@ -431,6 +561,46 @@ internal sealed class ConfigCommands(IConfigPathResolver configPathResolver)
         AnsiConsole.MarkupLine($"[green]\u2713[/] Set [green]{CliText.SafeDisplay(keyPath)}[/].");
         saveCode.PrintReceipt();
         return 0;
+    }
+
+    private static IReadOnlyList<string> GetTargetAgentIds(string keyPath, string rawValue)
+    {
+        // Recognition above has already validated the path. Only the first two dictionary
+        // segments matter; settings beneath the agent (including opaque JSON) remain open.
+        var segments = keyPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0 || !segments[0].Equals("agents", StringComparison.OrdinalIgnoreCase))
+            return [];
+        if (segments.Length > 1)
+            return [segments[1]];
+
+        // Whole-collection replacement must not be an alternate agent creation command.
+        // Invalid JSON/value kinds are left to the existing typed coercion diagnostics.
+        try
+        {
+            using var replacement = JsonDocument.Parse(rawValue);
+            return replacement.RootElement.ValueKind == JsonValueKind.Object
+                ? replacement.RootElement.EnumerateObject().Select(entry => entry.Name).ToArray()
+                : [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string? CheckAgentExistence(ConfigDocument document, string keyPath, IReadOnlyList<string> agentIds)
+    {
+        foreach (var agentId in agentIds)
+        {
+            // defaults is a reserved settings scope, not a lifecycle-managed named agent.
+            if (!agentId.Equals("defaults", StringComparison.OrdinalIgnoreCase)
+                && document.FindEntryKey("agents", agentId) is null)
+            {
+                return $"Configuration path '{keyPath}' targets unknown agent '{agentId}'. "
+                    + "Run 'botnexus agents list' to list agents or 'botnexus agents add' to create one.";
+            }
+        }
+        return null;
     }
 
     public Task<int> ExecuteSchemaAsync(string outputPath, bool verbose, CancellationToken cancellationToken)

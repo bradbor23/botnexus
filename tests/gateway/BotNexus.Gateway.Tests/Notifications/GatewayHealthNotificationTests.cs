@@ -25,7 +25,7 @@ public sealed class GatewayHealthNotificationTests
             new StubProbe(probeResponsive),
             Options.Create(new LivenessWatchdogOptions()),
             NullLogger<LivenessWatchdogService>.Instance,
-            publisher);
+            notificationPublisher: publisher);
 
     // An unresponsive scheduler with a long silence is the critical case.
     private static readonly TimeSpan LongSilence = TimeSpan.FromHours(2);
@@ -69,7 +69,7 @@ public sealed class GatewayHealthNotificationTests
             probe,
             Options.Create(new LivenessWatchdogOptions()),
             NullLogger<LivenessWatchdogService>.Instance,
-            publisher);
+            notificationPublisher: publisher);
 
         await service.CheckLivenessAsync(CancellationToken.None);
 
@@ -106,7 +106,7 @@ public sealed class GatewayHealthNotificationTests
             new StubProbe(false),
             Options.Create(new LivenessWatchdogOptions()),
             NullLogger<LivenessWatchdogService>.Instance,
-            new ThrowingPublisher());
+            notificationPublisher: new ThrowingPublisher());
 
         var thrown = await Record.ExceptionAsync(() => service.CheckLivenessAsync(CancellationToken.None));
 

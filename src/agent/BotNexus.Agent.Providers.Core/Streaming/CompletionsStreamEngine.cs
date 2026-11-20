@@ -145,6 +145,8 @@ public static class CompletionsStreamEngine
                 payload = obj;
         }
 
+        payload.EnforceToolFree(options?.ToolChoiceMode, compat.SupportsTools != false);
+
         var url = $"{model.BaseUrl.TrimEnd('/')}/chat/completions";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -209,7 +211,7 @@ public static class CompletionsStreamEngine
             reader,
             model,
             profile.Api,
-            ParseUsage,
+            (usageElement, usage, usageModel) => usageElement.ParseUsage(usage, usageModel),
             MapStopReason,
             ExtractProviderErrorMessage,
             (s, m, msg, partial) => EmitError(s, profile.Api, m, msg, partial),
@@ -259,7 +261,7 @@ public static class CompletionsStreamEngine
     /// <see cref="Usage.Reasoning"/> for attribution (#3297). The separate field stays <c>null</c>
     /// when the provider reported no breakdown — absent is never coerced to a measured zero.
     /// </remarks>
-    public static Usage ParseUsage(JsonElement usageElement, Usage usage, LlmModel model)
+    public static Usage ParseUsage(this JsonElement usageElement, Usage usage, LlmModel model)
     {
         var promptTokens = usage.Input + usage.CacheRead + usage.CacheWrite;
         var completionTokens = usage.Output;

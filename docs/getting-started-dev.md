@@ -145,7 +145,7 @@ Two things make a skipped or partial publish hard to spot:
 
 ```powershell
 # Authoritative remote validation (required for code changes)
-scripts/repo/Validate-PreCommit.ps1
+scripts/repo/Invoke-PreCommitValidation.ps1
 
 # Direct remote runner for a named worktree
 scripts/repo/Invoke-AzureBuildTest.ps1 -Mode core -WorktreePath <worktree>
@@ -388,7 +388,7 @@ All scripts live in `scripts/`.
 | Portal change does not appear after a restart | The portal is served from a deployed copy. Publish `BlazorClient` and replace it — see [Portal changes need a publish](#portal-changes-need-a-publish-not-just-a-build). |
 | WebUI shows "Disconnected" | Check the gateway first. On a dedicated development host, stop the previous development instance before running `.\scripts\dev-loop.ps1 -SkipTests`; do not start a second instance against a live home. |
 | Config changes ignored | Most settings hot-reload. `listenUrl` changes require restart. |
-| Tests fail | `dotnet clean dirs.proj; dotnet build dirs.proj --nologo --tl:off; scripts/repo/Validate-PreCommit.ps1` |
+| Tests fail | `dotnet clean dirs.proj; dotnet build dirs.proj --nologo --tl:off; scripts/repo/Invoke-PreCommitValidation.ps1` |
 
 ---
 

@@ -86,6 +86,9 @@ public interface IToolAuditSink
     /// <param name="response">The blocking-run response.</param>
     /// <returns>The tool timeline in execution order; empty when no tools ran.</returns>
     IReadOnlyList<ToolInvocationRecord> CaptureBlockingRun(AgentResponse response);
+
+    /// <summary>Sanitises incomplete non-thinking prose with the sink's configured result policy.</summary>
+    string? SanitizePartialText(string? text);
 }
 
 /// <summary>
@@ -110,6 +113,14 @@ public sealed class DefaultToolAuditSink : IToolAuditSink
         => string.IsNullOrWhiteSpace(toolCallId) ? null : agentRunId is { } run
             ? $"{ToolStartPersistenceKeyPrefix}agent-run:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{run.Value.Length}:{run.Value}:{toolCallId}"))).ToLowerInvariant()
             : $"{ToolStartPersistenceKeyPrefix}{toolCallId}";
+
+    /// <summary>
+    /// Stable run-scoped result identity shared by terminal write-ahead and blocking projection.
+    /// Without run identity, retain legacy behavior rather than merging reused provider call IDs.
+    /// </summary>
+    public static string? GetInterruptedToolPersistenceKey(string? toolCallId, BotNexus.Domain.Primitives.AgentRunId? agentRunId)
+        => agentRunId is null ? null : GetToolStartPersistenceKey(toolCallId, agentRunId)?.Replace(
+            ToolStartPersistenceKeyPrefix, "tool-result:", StringComparison.Ordinal);
 
     /// <summary>
     /// The canonical serialization of "this tool was invoked with no arguments" (#2906). Persisting
@@ -166,8 +177,9 @@ public sealed class DefaultToolAuditSink : IToolAuditSink
             ToolName = toolName,
             ToolCallId = toolCallId,
             ToolIsError = isError,
-            // #2906 AC1/AC2: the result row is self-describing. The caller re-supplies the same
-            // arguments the start row carried, so no consumer needs a self-join on tool_call_id.
+            // Carry execution arguments to the persistence boundary (also used by result-only
+            // blocking runs). SQLite stores them on the invocation, never on result history.
+            // Arguments are execution input, not a second post-execution projection.
             ToolArgs = NormalizeArguments(serializedArguments),
             Kind = MessageKind.ToolResult,
             PersistenceKey = toolName is "spawn_subagent" or "manage_subagent" && !string.IsNullOrWhiteSpace(toolCallId)
@@ -204,7 +216,11 @@ public sealed class DefaultToolAuditSink : IToolAuditSink
         foreach (var record in invocations)
         {
             rows.Add(record.IsIncomplete
-                ? ProjectIncomplete(record.ToolCallId, record.ToolName, record.Arguments) with { AgentRunId = record.AgentRunId }
+                ? ProjectIncomplete(record.ToolCallId, record.ToolName, record.Arguments) with
+                {
+                    AgentRunId = record.AgentRunId,
+                    PersistenceKey = GetInterruptedToolPersistenceKey(record.ToolCallId, record.AgentRunId)
+                }
                 : ProjectResult(
                     record.ToolCallId,
                     record.ToolName,
@@ -215,6 +231,15 @@ public sealed class DefaultToolAuditSink : IToolAuditSink
         }
 
         return rows;
+    }
+
+    /// <inheritdoc/>
+    public string? SanitizePartialText(string? text)
+    {
+        var sanitized = _policy.Create(0, "partial", "agent_converse", null, text, false, false, null, null).ResultContent;
+        // Receipt metadata is always bounded, even when tool-result retention is unlimited.
+        return sanitized is null ? null : StreamingSessionHelper.TruncateToolResult(
+            sanitized, ToolInvocationRecordPolicy.DefaultMaxBytes);
     }
 
     /// <inheritdoc/>

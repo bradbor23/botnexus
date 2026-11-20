@@ -19,6 +19,16 @@ namespace BotNexus.Gateway.Abstractions.Conversations;
 /// </remarks>
 public interface IConversationStore
 {
+    /// <summary>Reads current canonical ownership without hydrating aggregate state or using a cache.
+    /// Missing conversations return null. Unsupported implementations fail closed.</summary>
+    Task<ConversationOwnership?> GetOwnershipAsync(ConversationId conversationId, CancellationToken ct = default)
+        => throw new NotSupportedException("This store does not support ownership-only reads.");
+
+    /// <summary>Projects only canonical IDs and owners, optionally filtered by owner, in any status.
+    /// This enumeration is not a bounded page; it must never hydrate conversation aggregates.</summary>
+    Task<IReadOnlyList<ConversationOwnership>> ListOwnershipAsync(AgentId? agentId = null, CancellationToken ct = default)
+        => throw new NotSupportedException("This store does not support ownership-only reads.");
+
     /// <summary>
     /// Gets a specific conversation by ID. Returns <c>null</c> if not found.
     /// </summary>
@@ -261,6 +271,48 @@ public interface IConversationStore
     /// <param name="ct">Cancellation token.</param>
     Task<IReadOnlyList<ConversationSummary>> GetSummariesAsync(CancellationToken ct = default);
 
+    /// <summary>Returns active, top-level Activity summaries using the inclusive maximum of
+    /// creation, update, and binding inbound/outbound timestamps. Null explicitly requests all
+    /// history; the token-only overload retains its legacy semantics.</summary>
+    /// <remarks>The compatibility fallback reads aggregates via ListAsync and filters before
+    /// summary and participant projection. Stores may override it with an optimized query.</remarks>
+    async Task<IReadOnlyList<ConversationSummary>> GetSummariesAsync(
+        DateTimeOffset? activitySince, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var conversations = await ListAsync(ct: ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        return [.. conversations
+            .Where(c => c.Status == ConversationStatus.Active && c.ParentConversationId is null)
+            .Select(c => (Conversation: c, Activity: c.ChannelBindings
+                .SelectMany(b => new[] { b.LastInboundAt, b.LastOutboundAt })
+                .Append(c.CreatedAt).Append(c.UpdatedAt)
+                .Where(at => at.HasValue).Max(at => at.GetValueOrDefault())))
+            .Where(x => activitySince is null || x.Activity >= activitySince.Value)
+            .OrderByDescending(x => x.Conversation.IsPinned)
+            .ThenByDescending(x => x.Conversation.PinnedAt)
+            .ThenByDescending(x => x.Activity)
+            .ThenBy(x => x.Conversation.ConversationId.Value, StringComparer.Ordinal)
+            .Select(x => new ConversationSummary(
+                x.Conversation.ConversationId.Value,
+                x.Conversation.AgentId.Value,
+                x.Conversation.Title,
+                x.Conversation.IsDefault,
+                x.Conversation.Status.ToString(),
+                x.Conversation.ActiveSessionId?.Value,
+                x.Conversation.ChannelBindings.Count,
+                x.Conversation.CreatedAt,
+                x.Activity,
+                x.Conversation.Purpose,
+                x.Conversation.Kind.ToString(),
+                x.Conversation.Source.ToString(),
+                x.Conversation.Visibility.ToString(),
+                x.Conversation.IsPinned,
+                x.Conversation.PinnedAt,
+                x.Conversation.Participants.Select(p => new ParticipantSummary(
+                    p.CitizenId.Kind.ToString(), p.CitizenId.Value, p.Role)).ToList(),
+                x.Conversation.SourceId))];
+    }
     /// <summary>
     /// Returns active retention candidates using only lifecycle, ownership, timestamp, pin, and
     /// source provenance fields. Implementations must not hydrate bindings, participants, or blobs.

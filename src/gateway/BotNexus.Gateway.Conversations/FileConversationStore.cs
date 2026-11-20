@@ -74,6 +74,56 @@ public sealed class FileConversationStore : IConversationStore
         _fileSystem.Directory.CreateDirectory(rootPath);
     }
 
+    private static readonly HashSet<string> OwnershipFields = new(StringComparer.Ordinal) { "conversationId", "agentId" };
+
+    /// <inheritdoc />
+    public async Task<ConversationOwnership?> GetOwnershipAsync(ConversationId conversationId, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var dir in _fileSystem.Directory.EnumerateDirectories(_rootPath))
+            {
+                ct.ThrowIfCancellationRequested();
+                var path = Path.Combine(dir, $"{conversationId.Value}.json");
+                if (!_fileSystem.File.Exists(path)) continue;
+                var ownership = await ReadOwnershipAsync(path, ct).ConfigureAwait(false);
+                if (ownership?.ConversationId == conversationId) return ownership;
+            }
+            return null;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConversationOwnership>> ListOwnershipAsync(AgentId? agentId = null, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var result = new List<ConversationOwnership>();
+            foreach (var dir in _fileSystem.Directory.EnumerateDirectories(_rootPath))
+            foreach (var path in _fileSystem.Directory.EnumerateFiles(dir, "*.json"))
+            {
+                ct.ThrowIfCancellationRequested();
+                var ownership = await ReadOwnershipAsync(path, ct).ConfigureAwait(false);
+                if (ownership is not null && (agentId is null || ownership.AgentId == agentId.Value)) result.Add(ownership);
+            }
+            return result;
+        }
+        finally { _lock.Release(); }
+    }
+
+    private async Task<ConversationOwnership?> ReadOwnershipAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            await using var stream = _fileSystem.FileStream.New(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return await BoundedJsonProjection.ReadAsync<ConversationOwnership>(stream, JsonOptions, OwnershipFields, ct).ConfigureAwait(false);
+        }
+        catch (FileNotFoundException) { return null; }
+    }
+
     /// <inheritdoc />
     public async Task<Conversation?> GetAsync(ConversationId conversationId, CancellationToken ct = default)
     {
@@ -417,6 +467,22 @@ public sealed class FileConversationStore : IConversationStore
             .Select(ToSummary)];
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConversationSummary>> GetSummariesAsync(
+        DateTimeOffset? activitySince, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var all = await ListAsync(ct: ct).ConfigureAwait(false);
+        return [.. all
+            .Where(c => c.Status == ConversationStatus.Active && c.ParentConversationId is null)
+            .Select(c => (Conversation: c, Activity: ConversationStoreShared.EffectiveActivity(c)))
+            .Where(x => activitySince is null || x.Activity >= activitySince.Value)
+            .OrderByDescending(x => x.Conversation.IsPinned)
+            .ThenByDescending(x => x.Conversation.PinnedAt)
+            .ThenByDescending(x => x.Activity)
+            .ThenBy(x => x.Conversation.ConversationId.Value, StringComparer.Ordinal)
+            .Select(x => ToSummary(x.Conversation) with { UpdatedAt = x.Activity })];
+    }
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConversationRetentionCandidate>> GetRetentionCandidatesAsync(
         ConversationSource? source = null,

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace BotNexus.Testing;
 
 /// <summary>
@@ -141,7 +139,8 @@ internal static class TestAwait
         TimeSpan? timeout = null,
         TimeSpan? pollInterval = null,
         CancellationToken cancellationToken = default,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(condition);
 
@@ -151,7 +150,8 @@ internal static class TestAwait
             timeout,
             pollInterval,
             cancellationToken,
-            delayAsync);
+            delayAsync,
+            timeProvider);
     }
 
     /// <summary>
@@ -164,7 +164,8 @@ internal static class TestAwait
         TimeSpan? timeout = null,
         TimeSpan? pollInterval = null,
         CancellationToken cancellationToken = default,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(condition);
 
@@ -174,7 +175,8 @@ internal static class TestAwait
             timeout,
             pollInterval,
             cancellationToken,
-            delayAsync);
+            delayAsync,
+            timeProvider);
     }
 
     /// <summary>
@@ -222,7 +224,8 @@ internal static class TestAwait
                 timeout,
                 pollInterval,
                 cancellationToken,
-                delayAsync: null).ConfigureAwait(false);
+                delayAsync: null,
+                timeProvider: null).ConfigureAwait(false);
             return true;
         }
         catch (TimeoutException)
@@ -237,7 +240,8 @@ internal static class TestAwait
         TimeSpan? timeout,
         TimeSpan? pollInterval,
         CancellationToken cancellationToken,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync,
+        TimeProvider? timeProvider)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(description);
 
@@ -249,7 +253,8 @@ internal static class TestAwait
             throw new ArgumentOutOfRangeException(nameof(pollInterval), "The poll interval must be positive.");
 
         delayAsync ??= static (delay, token) => Task.Delay(delay, token);
-        var stopwatch = Stopwatch.StartNew();
+        timeProvider ??= TimeProvider.System;
+        var started = timeProvider.GetTimestamp();
         var attempts = 0;
 
         while (true)
@@ -259,7 +264,10 @@ internal static class TestAwait
             if (await condition().ConfigureAwait(false))
                 return;
 
-            if (stopwatch.Elapsed >= observationWindow)
+            // Use one monotonic sample for both the deadline decision and delay budget.
+            // A second read can cross the deadline and produce a negative (even infinite) delay.
+            var elapsed = timeProvider.GetElapsedTime(started);
+            if (elapsed >= observationWindow)
             {
                 var attemptLabel = attempts == 1 ? "attempt" : "attempts";
                 throw new TimeoutException(
@@ -267,7 +275,7 @@ internal static class TestAwait
                     $"({attempts} {attemptLabel}).");
             }
 
-            var remaining = observationWindow - stopwatch.Elapsed;
+            var remaining = observationWindow - elapsed;
             await delayAsync(interval <= remaining ? interval : remaining, cancellationToken).ConfigureAwait(false);
         }
     }

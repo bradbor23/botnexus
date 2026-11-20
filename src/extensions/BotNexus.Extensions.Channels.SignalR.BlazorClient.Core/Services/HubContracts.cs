@@ -7,6 +7,12 @@ namespace BotNexus.Extensions.Channels.SignalR.BlazorClient.Services;
 
 // ── Server → Client payloads ────────────────────────────────────────────
 
+/// <summary>A durable cursor invalidation scoped by the server to the connected reader.</summary>
+public sealed record ConversationReadStateChangedPayload(
+    [property: JsonPropertyName("conversationId")] string ConversationId,
+    [property: JsonPropertyName("position")] long Position,
+    [property: JsonPropertyName("version")] long Version);
+
 /// <summary>Payload sent via the <c>Connected</c> client method on hub connect.</summary>
 public sealed record ConnectedPayload(
     [property: JsonPropertyName("connectionId")] string ConnectionId,
@@ -59,6 +65,12 @@ public sealed record ContentDeltaPayload(
 /// <summary>Agent stream event for MessageStart, ThinkingDelta, ToolStart, ToolEnd, MessageEnd, Error.</summary>
 public sealed record AgentStreamEvent
 {
+    [JsonPropertyName("agentRunId")]
+    public string? AgentRunId { get; init; }
+
+    [JsonPropertyName("completion")]
+    public RunCompletionPayload? Completion { get; init; }
+
     [JsonPropertyName("type")]
     public string? Type { get; init; }
 
@@ -106,6 +118,26 @@ public sealed record AgentStreamEvent
 
     [JsonPropertyName("userInputRequest")]
     public AskUserRequestPayload? UserInputRequest { get; init; }
+}
+
+/// <summary>Terminal evidence needed by the shared desktop/mobile projection.</summary>
+public sealed record RunCompletionPayload
+{
+    [JsonPropertyName("stopReason")]
+    public string? StopReason { get; init; }
+
+    [JsonPropertyName("toolResultBudget")]
+    public BotNexus.Gateway.Abstractions.Models.ToolResultBudgetSignal? ToolResultBudget { get; init; }
+
+    [JsonPropertyName("guardObservations")]
+    public IReadOnlyList<RunGuardPayload> GuardObservations { get; init; } = [];
+}
+
+/// <summary>Legacy absolute-fuse evidence, distinct from semantic nonprogress.</summary>
+public sealed record RunGuardPayload
+{
+    [JsonPropertyName("absoluteLimitReached")]
+    public bool AbsoluteLimitReached { get; init; }
 }
 
 /// <summary>Token usage emitted with MessageEnd events.</summary>

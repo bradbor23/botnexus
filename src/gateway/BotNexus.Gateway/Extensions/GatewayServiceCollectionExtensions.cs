@@ -242,7 +242,8 @@ public static class GatewayServiceCollectionExtensions
         // through this single implementation, so the audit guarantee no longer depends on which
         // transport the caller picked.
         services.TryAddSingleton<BotNexus.Gateway.Audit.IToolAuditSink>(
-            _ => BotNexus.Gateway.Audit.DefaultToolAuditSink.Instance);
+            sp => new BotNexus.Gateway.Audit.DefaultToolAuditSink(
+                new ToolInvocationRecordPolicy(redactor: sp.GetRequiredService<ISecretRedactor>())));
         services.AddSingleton<AgentExchangeBudgetTracker>();
         // #3494: per-agent inbound admission control. MUST be a singleton - a per-scope queue would
         // gate nothing, since two concurrent exchanges targeting one agent would each see their own
@@ -356,6 +357,7 @@ public static class GatewayServiceCollectionExtensions
         // instead of the process-global CompactionOptions.ContextWindowTokens.
         services.TryAddSingleton<ISessionContextWindowResolver, SessionContextWindowResolver>();
         services.TryAddSingleton<ISessionCompactionCeilingResolver, SessionCompactionCeilingResolver>();
+        services.TryAddSingleton<ISessionCompactionDiagnostics, SessionCompactionDiagnostics>();
         // #3535: turns a context-exhausted empty completion from a silent blank turn into an
         // explicit MessageRole.Notification, discriminated against the SAME scope-resolved window.
         services.TryAddSingleton<IContextExhaustionNotifier, ContextExhaustionNotifier>();
@@ -562,6 +564,11 @@ public static class GatewayServiceCollectionExtensions
         // Liveness watchdog: monitors gateway activity and logs warnings on stalls
         services.AddSingleton<IActivityTracker, ActivityTracker>();
         services.AddSingleton<IThreadPoolProbe, ThreadPoolProbe>();
+        // #4689: real dispatch evidence (due-but-unfired cron jobs), not another liveness proxy.
+        services.AddSingleton<IDispatchFreshnessProbe>(sp => new CronDispatchFreshnessProbe(
+            sp,
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<ILogger<CronDispatchFreshnessProbe>>()));
         services.AddHostedService<LivenessWatchdogService>();
 
         // Satellite registry and stale detection

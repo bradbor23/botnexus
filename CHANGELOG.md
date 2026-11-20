@@ -5,6 +5,200 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.0] - 2026-10-28
+
+### ✨ Features
+
+- **cron:** Probe for work before invoking an agent (#5008)
+- **plugins:** Select repository marketplace skills from cli (#5040)
+- **agents:** Bound tool-result budgets and finalize without tools (#5028)
+- **agents:** Persist bounded peer dialogue admission (#5052)
+- **sessions:** Preflight explicit legacy relationships (#5003)
+- **gateway:** Coordinate current-session conversation compaction (#5032)
+
+### 🐛 Bug Fixes
+
+- **exports:** Preserve legacy tool results through cleanup (#5006)
+- **agents:** Propagate cancellation before disposing tool link (#5009)
+- **config:** Recover malformed store-backed json projections (#5053)
+- **copilot:** Classify bounded oauth http rejections (#5039)
+- **plugins:** Reject unsafe git sources and withhold fetch diagnostics (#5017)
+- **portal:** Persist presence-aware agent policy edits (#4980)
+- **agents:** Retry in-band responses failures (#5023)
+- **sessions:** Propagate recovery save cancellation (#5001)
+- **agents:** Add bounded retained child inspection (#5024)
+- **sessions:** Bound tool transcript reads and enforce ownership (#5038)
+- **browser:** Align adapter with pinned cli command contract (#5013)
+- **sessions:** Exclude terminal recovery candidates (#5026)
+- **portal:** Hide unsupported mobile agent settings (#5022)
+- **tests:** Align fixtures with source and session contracts (#5076)
+- **agents:** Preserve queued provider recovery admission order (#4939)
+- **cron:** Retain interrupted trigger execution evidence (#5000)
+- **process:** Synchronize unresolved cleanup with validated main (#4968)
+- **tests:** Assert discarded context snapshots structurally (#5091)
+
+### 📖 Documentation
+
+- **agents:** Clarify shared conversation delivery boundaries (#5049)
+- **tests:** Reconcile test taxonomy contributor guidance (#5015)
+
+### 🔨 Refactor
+
+- **gateway:** Document residual core reference reasons (#5010)
+- **gateway:** Add gateway-owned tool contracts (#4999)
+
+### 🧪 Testing
+
+- **scenarios:** Capture concurrent inbound progress (#5042)
+- **config:** Cover collection reload and process restart (#5021)
+- **sessions:** Bound candidate query temporary write costs (#5027)
+- **channels:** Cover compaction sink failure isolation (#5030)
+
+### ⚙️ Miscellaneous
+
+- **repo:** Improve issue form evidence and context prompts (#5090)
+
+## [0.51.0] - 2026-10-24
+
+### ✨ Features
+
+- **cron:** Add an opt-in global scheduled model default (#4943)
+- **plugins:** Import conventional claude skills safely (#4956)
+- **api:** Expose conversation-bound current context (#4993)
+- **plugins:** Import named manifestless claude skills (#4987)
+- **sessions:** Inventory legacy persistence without mutation (#4969)
+- **plugins:** Import legacy skills with additive metadata (#5018)
+- **workflows:** Embed governed workflow core foundation (#5054)
+
+### 🐛 Bug Fixes
+
+- **mcp:** Retain redirect security fixture socket ownership (#4948)
+- **tests:** Bound telegram polling fixtures and ensure cleanup (#4947)
+- **testing:** Execute conversation seams on the candidate host (#4967)
+- **audit:** Make queued deadline observation deterministic (#4973)
+- **config:** Reject non-durable world identity bootstrap (#4977)
+- **config:** Preserve explicit empty collection shapes (#4979)
+- **skills:** Reconcile discovery and linked-file boundaries (#4963)
+- **cron:** Reject new runs during planned shutdown (#4953)
+- **providers:** Reconcile current catalogue across startup and reload (#4981)
+- **gateway:** Reconcile live context diagnostic breakdown (#4983)
+- **tests:** Capture legacy telegram dispatch timeout state (#4984)
+- **cron:** Reconcile cancellation after normal action returns (#4992)
+- **config:** Bind agent default collections once (#4986)
+- **cli:** Recover prior gateway after update build failure (#4994)
+- **agents:** Preserve interrupted blocking run evidence (#4995)
+- **sessions:** Isolate interrupted recovery scan failures (#4988)
+- **sessions:** Stop duplicate tool payload writes and idle locks (#4978)
+- **agents:** Persist enabled state and guard runtime admission (#4976)
+- **qmd:** Enforce allowed stores on unscoped searches (#5029)
+- **sessions:** Defer cleanup until application startup (#5019)
+
+### 📖 Documentation
+
+- **ci:** Define required-gate flake triage policy (#5020)
+
+### 🔨 Refactor
+
+- **history:** Share stored-entry visibility policy (#4944)
+- **gateway:** Publish rest pin update facts (#4949)
+- **gateway:** Publish binding move lifecycle facts (#4959)
+- **gateway:** Publish automatic title lifecycle facts (#4989)
+
+### 🧪 Testing
+
+- **providers:** Cover duplicate model id reload isolation (#4945)
+- **sessions:** Verify cleanup rollback and restart convergence (#4946)
+- **workspace:** Serialize refresh interactions on renderer (#4951)
+- **sessions:** Pin protected cleanup evidence dispositions (#4958)
+- **cron:** Stabilize missed-run scan windows (#4991)
+- **providers:** Cover sqlite activation with stale projections (#4990)
+- **mcp:** Assert owned socket closure without rebinding (#5004)
+- **portal:** Observe guide request cancellation at the held wait (#5033)
+
+### Build
+
+- **deps-dev:** Bump vite from 7.3.6 to 7.3.7 (#4997)
+
+## [0.50.1] - 2026-10-16
+
+### ✨ Features
+
+- **cron:** Add conversation-bound loop chat commands (#4838)
+- **sessions:** Add scoped compaction token ceilings (#4899)
+- **gateway:** Add bounded structured diagnostic previews (#4845)
+- **gateway:** Review and apply agent proposals (#4602)
+- **sessions:** Expose fresh compaction policy diagnostics (#4920)
+- **commands:** Show fresh compaction policy in context diagnostics (#4927)
+- **sessions:** Measure legacy payload cleanup batches (#4931)
+- **channels:** Notify readers after durable cursor advances (#4932)
+
+### 🐛 Bug Fixes
+
+- **gateway:** Make askuser timeout coverage deterministic (#4868)
+- **browser:** Fail closed without destination enforcement (#4832)
+- **tools:** Keep timeout fixtures alive until cancellation (#4872)
+- **agents:** Preserve progress from opaque success receipts (#4847)
+- **cron:** Terminate command processes on caller cancellation (#4844)
+- **agents:** Preserve unsuccessful terminal safety and block order (#4849)
+- **trailguide:** Bound atomic workspace refresh contention (#4887)
+- **portal:** Show complete activity titles and cron job names (#4890)
+- **anthropic:** Complete streams when cancelled before scheduling (#4894)
+- **cron:** Handle disappearing proc stat in stop fixture (#4896)
+- **conversations:** Acquire binding move locks by stripe (#4842)
+- **cron:** Stop one hung/slow agent turn starving every scheduled job (#4731)
+- **providers:** Complete canceled completions streams (#4904)
+- **providers:** Settle canceled responses producers (#4903)
+- **copilot:** Settle messages streams canceled before dispatch (#4906)
+- **providers:** Classify integration mock cancellation as aborted (#4905)
+- **sqlite:** Service pooled connection ownership in pr 4837 (#4837)
+- **gateway:** Sanitize auth-file staleness diagnostics (#4875)
+- **gateway:** Capture audit cancellation before deferred append (#4873)
+- **deps:** Patch pkcs and signalr security dependencies (#4912)
+- **extensions:** Reconcile generated guide asset inventory (#4877)
+- **gateway:** Report running binary provenance in version endpoint (#4869)
+- **cli:** Share active log reads and isolate file errors (#4870)
+- **sessions:** Report payload-free sqlite capacity observations (#4878)
+- **skills:** Publish shared prompts atomically (#4866)
+- **portal:** Verify conversation menu top-layer rendering (#4907)
+- **buildtest:** Preserve bounded test hang evidence (#4853)
+- **tooling:** Verify worktree prune before cleanup success (#4900)
+- **cli:** Reject config writes targeting missing agents (#4918)
+- **skills:** Publish example skill seeds atomically (#4914)
+- **gateway:** Watchdog must detect cron dispatch stalls (#4689) (#4732)
+- **build:** Await diagnostic ownership cleanup completion (#4935)
+- **cron:** Make heartbeat quiet-hours tests clock-independent (#4924)
+- **config:** Accept watcher reloads before notifying options (#4929)
+- **portal:** Repair copilot usage attribution and refresh (#4930)
+
+### 📖 Documentation
+
+- **extensions:** Correct repository lifecycle guidance (#4880)
+- **platform:** Reconcile heartbeat thinking and memory contracts (#4851)
+
+### ⚡ Performance
+
+- **sessions:** Retain ordering benchmark and non-adoption evidence (#4913)
+
+### 🔨 Refactor
+
+- **gateway:** Publish binding removal facts (#4874)
+- **streaming:** Make completions usage parsing an extension (#4871)
+- **gateway:** Publish rest override update facts (#4925)
+
+### 🧪 Testing
+
+- **webhooks:** Coordinate processor readiness and deadline dispatch (#4828)
+- **gateway:** Assert definitive locked audit failure (#4841)
+- **gateway:** Make audit telemetry success fixture deterministic (#4833)
+- **gateway:** Make post-run saturation assertions deterministic (#4830)
+- **portal:** Enforce shared icon asset ownership (#4834)
+- **config:** Pin dictionary schema metadata parity (#4835)
+- **webtools:** Coordinate dns cancellation deterministically (#4820)
+- **cli:** Control pid identity startup child lifetime (#4895)
+- **buildtest:** Prove child completion independently of startup (#4852)
+- **gateway:** Coordinate caller-abort cancellation deterministically (#4909)
+- **tests:** Isolate atomic publication fixture within existing guard (#4921)
+
 ## [0.50.0] - 2026-10-12
 
 ### ✨ Features
@@ -4846,6 +5040,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session log for loop alignment & UI fix
 - Log session-switching design review orchestration, decisions, and session metadata
 
+[0.52.0]: https://github.com/sytone/botnexus/compare/v0.51.0...v0.52.0
+[0.51.0]: https://github.com/sytone/botnexus/compare/v0.50.1...v0.51.0
+[0.50.1]: https://github.com/sytone/botnexus/compare/v0.50.0...v0.50.1
 [0.50.0]: https://github.com/sytone/botnexus/compare/v0.49.1...v0.50.0
 [0.49.1]: https://github.com/sytone/botnexus/compare/v0.49.0...v0.49.1
 [0.49.0]: https://github.com/sytone/botnexus/compare/v0.48.0...v0.49.0
