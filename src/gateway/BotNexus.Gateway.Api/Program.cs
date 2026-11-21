@@ -242,6 +242,7 @@ builder.Services.Configure<CronOptions>(options =>
     if (cron is null)
         return;
 
+    options.DefaultModel = cron.DefaultModel;
     options.Enabled = cron.Enabled;
     options.TickIntervalSeconds = cron.TickIntervalSeconds;
     // #3779: the operator-configured webhook blocked-host list must reach BOTH the API create/update
@@ -265,6 +266,7 @@ builder.Services.Configure<CronOptions>(options =>
                 Model = ResolveCronModel(pair.Value),
                 WebhookUrl = pair.Value.WebhookUrl,
                 ShellCommand = pair.Value.ShellCommand,
+                PreconditionCommand = pair.Value.PreconditionCommand,
                 Enabled = pair.Value.Enabled,
                 CreatedBy = pair.Value.CreatedBy,
                 Metadata = pair.Value.Metadata?.ToDictionary(entry => entry.Key, entry => (object?)entry.Value)

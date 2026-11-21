@@ -64,7 +64,10 @@ public sealed class CatalogInstalledByMistakeTests : IDisposable
         Assert.Equal(PluginOperationOutcome.Failed, result.Outcome);
         var message = string.Join(" ", result.Errors.Select(e => e.Message));
 
-        Assert.Contains(".botnexus-plugin/plugin.json", message);
+        // Upstream's importer treats a repository with no manifest as a manifestless candidate
+        // and reports the missing identity rather than naming the native manifest path; either
+        // way it is the ORDINARY error, which is what this test is protecting.
+        Assert.Contains("Plugin manifest field 'name' is invalid", message);
         Assert.DoesNotContain("marketplace catalog", message, StringComparison.OrdinalIgnoreCase);
     }
 

@@ -356,3 +356,63 @@ See [SessionWarmupService.cs](../../src/gateway/BotNexus.Gateway/Sessions/Sessio
 3. Index frequently queried fields (agent_id, status, session_type)
 4. Run cleanup service to prevent unbounded growth
 5. Use session warmup to avoid N+1 queries in UI
+
+### Single-copy tool arguments and results
+
+For SQLite contributors, the durable tool execution record is `tool_invocations`.
+`session_history` keeps conversation messages and ordered tool markers linked by
+`tool_invocation_id`. Normal tool arguments and result bodies belong on the invocation,
+not on both history markers. In-memory `SessionEntry` projections can still contain the
+arguments and results needed by providers, history views and exports.
+
+A result marker whose arguments were moved to its invocation records
+`tool_args_from_invocation = 1`. Reads reconstruct those arguments through the link.
+An unmarked historical result with `tool_args = NULL` continues to mean that the result
+projection had no arguments. These cases are different; do not infer argument presence
+from the invocation link alone. Arguments are execution input owned by the invocation; a result carrying different
+arguments is a producer defect, not independent post-execution evidence. The linked
+invocation's arguments are canonical. Unique historical result bodies remain intact
+when they cannot be reconstructed from the authoritative invocation.
+
+Append, retry and explicit history replacement must preserve this storage shape. Before
+changing a shared invocation, the store preserves older distinct result bodies; exact
+copies can then be reduced to references again in the same transaction.
+
+### Bulk historical migration
+
+After the startup delay, the SQLite worker performs a set-based SQL pass rather than
+restarting 100-row discovery batches. In one transaction it populates missing execution
+records, links history rows, clears redundant payloads, and records completion in
+`legacy_tool_bulk_migration`. Errors roll back the data and completion record together.
+Completion is versioned. Version 1 populates and links missing execution records.
+Version 2 also removes exact duplicate fields from already-linked legacy rows whose
+`message_kind` is NULL. A database with version 1 already complete runs only the cleanup
+upgrade: it does not repopulate executions, relink history, or replace the original
+completion record. Data changes and the version 2 record commit together. A failure
+rolls back both, and a later attempt can retry. Once version 2 completes, later
+restarts skip the pass. Manual bounded maintenance APIs remain available for
+compatibility; the automatic worker uses the bulk pass.
+
+Legacy arguments and content are checked independently against the linked invocation
+in the same session. Only exact copies are cleared. Distinct start arguments and
+result bodies remain in history. The `tool_args_from_invocation` and
+`tool_content_from_invocation` flags record which absent fields must be reconstructed.
+They preserve NULL message kinds and distinguish removed copies from historically
+absent fields. History reads, bounded scans, byte accounting, and later writes use
+these flags. The upgrade does not infer a start/result label from payload presence.
+
+SQL joins and byte equality protect unique result bodies. The pass does not hydrate
+payloads into managed objects or reread each row for a second verification. It covers
+successful, failed and interrupted executions, including rows whose result body was
+already moved but arguments remained in history. Run-scoped execution keys keep reused
+provider call IDs separate.
+
+The bulk transaction holds SQLite's writer slot until commit. On a large installation,
+allow time and storage for the write-ahead log and temporary rollup tables; other writers
+may wait. This is a one-time migration, not a periodic full-corpus audit. It does not
+remove messages or run a vacuum.
+
+Logical deduplication makes freed SQLite pages available for reuse. It does not promise
+that the database file shrinks immediately. Physical file reclamation is a separate
+maintenance operation requiring writer coordination, capacity checks and recovery
+protection. Do not run an uncoordinated full vacuum against a live gateway database.

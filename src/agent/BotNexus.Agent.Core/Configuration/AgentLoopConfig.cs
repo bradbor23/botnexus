@@ -131,10 +131,13 @@ namespace BotNexus.Agent.Core.Configuration;
 /// Used only when RecoveryCoordinator is set. Admission failures and cancellation propagate to the run.
 /// </param>
 /// <param name="ToolProgressPolicy">
-/// Optional policy invoked once per retained tool result. Null uses the core default policy.
+/// Optional policy invoked for retained tool results below the absolute budget. Null uses the core default policy.
 /// The loop owns run-local aggregation and applies warning or stop decisions. Policy exceptions
 /// and cancellation propagate; an unclassified result resets repeated non-progress tracking.
 /// </param>
+/// <param name="MaxToolResults">Executed-result budget per run, default 128. Values outside 1–1000000 are rejected. Checked after entire batches.</param>
+/// <param name="ProviderRequestContextProvider">Optional request-only dynamic context renderer; null uses the core live capacity section. Normal failures and cancellation propagate; finalizer failures preserve its parked outcome.</param>
+/// <param name="ToolCapacityObserver">Optional informational start/75%/90%/exhaustion sink, isolated per subscriber through the diagnostic dispatcher. No control authority.</param>
 /// <remarks>
 /// AgentLoopConfig is built from AgentOptions at the start of each run.
 /// It is immutable and passed through the loop to ensure consistent configuration.
@@ -172,8 +175,20 @@ public record AgentLoopConfig(
     CredentialInvalidationService? CredentialInvalidationService = null,
     IProviderRecoveryCoordinator? RecoveryCoordinator = null,
     TimeSpan? RecoveryAdmissionTimeout = null,
-    ToolProgressPolicy? ToolProgressPolicy = null)
+    ToolProgressPolicy? ToolProgressPolicy = null,
+    int MaxToolResults = 128,
+    ProviderRequestContextProvider? ProviderRequestContextProvider = null,
+    ToolCapacityObserver? ToolCapacityObserver = null)
 {
+    /// <summary>Largest supported executed-result budget; zero never means unlimited.</summary>
+    public const int MaximumToolResults = 1_000_000;
+
+    internal static void ValidateToolResultBudget(int value)
+    {
+        if (value is < 1 or > MaximumToolResults)
+            throw new ArgumentOutOfRangeException(nameof(MaxToolResults), value, "MaxToolResults must be between 1 and 1000000 executed results.");
+    }
+
     /// <summary>Admitted identity supplied by Agent; direct loop calls mint one when absent.</summary>
     public AgentRunId? AgentRunId { get; init; }
 

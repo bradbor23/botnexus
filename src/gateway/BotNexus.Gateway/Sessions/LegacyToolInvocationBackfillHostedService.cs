@@ -7,8 +7,8 @@ using Microsoft.Extensions.Logging;
 namespace BotNexus.Gateway.Sessions;
 
 /// <summary>
-/// Gradually normalizes legacy SQLite tool-call transcript rows after startup without delaying
-/// host readiness. Linked rows are the durable checkpoint, so restarts naturally resume the work.
+/// Normalizes legacy SQLite tool data in one set-based transaction after host readiness.
+/// A completion record commits with the data, so completed work is not rediscovered on restart.
 /// </summary>
 public sealed class LegacyToolInvocationBackfillHostedService : BackgroundService
 {
@@ -18,10 +18,12 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
     internal static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(5);
 
     private readonly SqliteSessionStore? _store;
+    private readonly Func<SqliteSessionStore, LegacyToolMigrationReport>? _runMigration;
     private readonly Func<SqliteSessionStore, int, LegacyToolInvocationBackfillReport> _runBatch;
     private readonly Func<SqliteSessionStore, int, long, LegacyToolPayloadCleanupReport> _runCleanupBatch;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly LegacyToolInvocationBackfillMetrics _metrics;
+    private readonly LegacyToolPayloadCleanupMetrics _cleanupMetrics;
     private readonly ILogger<LegacyToolInvocationBackfillHostedService> _logger;
 
     /// <summary>
@@ -39,6 +41,19 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
             metrics,
             logger)
     {
+        _runMigration = static store => store.MigrateLegacyToolData();
+    }
+
+    internal LegacyToolInvocationBackfillHostedService(
+        ISessionStore sessionStore,
+        Func<SqliteSessionStore, LegacyToolMigrationReport> runMigration,
+        Func<TimeSpan, CancellationToken, Task> delay,
+        IMetrics? metrics,
+        ILogger<LegacyToolInvocationBackfillHostedService> logger)
+        : this(sessionStore, static (_, _) => new(0,0,0,false,true),
+            static (_,_,_) => new(0,0,0,-1,-1,false), delay, metrics, logger)
+    {
+        _runMigration = runMigration;
     }
 
     internal LegacyToolInvocationBackfillHostedService(
@@ -54,6 +69,7 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
         _runCleanupBatch = runCleanupBatch;
         _delay = delay;
         _metrics = new LegacyToolInvocationBackfillMetrics(metrics);
+        _cleanupMetrics = new LegacyToolPayloadCleanupMetrics(metrics);
         _logger = logger;
     }
 
@@ -78,7 +94,32 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
             TimeSpan? nextDelay = null;
             try
             {
-                var report = _runBatch(_store, BatchSize);
+                if (_runMigration is not null)
+                {
+                    LegacyToolMigrationReport migration;
+                    try { migration = _runMigration(_store); }
+                    catch
+                    {
+                        _metrics.RecordFailure();
+                        _cleanupMetrics.RecordFailure();
+                        throw;
+                    }
+                    _metrics.RecordCommitted(migration.Backfill);
+                    _cleanupMetrics.RecordCommitted(migration.Cleanup);
+                    _logger.LogInformation("Legacy tool migration committed: {LinkedRows} linked history rows, {CleanedRows} cleaned rows, {ClearedBytes} duplicate bytes cleared.",
+                        migration.Backfill.LinkedRows, migration.Cleanup.CleanedRows, migration.Cleanup.ClearedBytes);
+                    return;
+                }
+                LegacyToolInvocationBackfillReport report;
+                try
+                {
+                    report = _runBatch(_store, BatchSize);
+                }
+                catch
+                {
+                    _metrics.RecordFailure();
+                    throw;
+                }
                 _metrics.RecordCommitted(report);
                 if (report.HasMore)
                 {
@@ -86,8 +127,18 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
                 }
                 else
                 {
-                    var cleanup = _runCleanupBatch(_store, BatchSize, cleanupCursor);
+                    LegacyToolPayloadCleanupReport cleanup;
+                    try
+                    {
+                        cleanup = _runCleanupBatch(_store, BatchSize, cleanupCursor);
+                    }
+                    catch
+                    {
+                        _cleanupMetrics.RecordFailure();
+                        throw;
+                    }
                     cleanupCursor = cleanup.LastScannedInvocationId;
+                    _cleanupMetrics.RecordCommitted(cleanup);
                     _logger.LogInformation(
                         "Legacy tool payload cleanup batch scanned {ScannedInvocations} invocation(s), cleaned {CleanedInvocations} invocation(s) and {CleanedRows} row(s), cleared {ClearedBytes} byte(s), and removed {OrphanedInvocationsDeleted} orphaned invocation(s); more candidate work: {HasMore}.",
                         cleanup.ScannedInvocations,
@@ -103,7 +154,7 @@ public sealed class LegacyToolInvocationBackfillHostedService : BackgroundServic
             }
             catch (Exception ex)
             {
-                _metrics.RecordFailure();
+
                 if (ex is SqliteException { SqliteErrorCode: 13 } full)
                 {
                     var capacity = SqliteCapacityObservation.FromFailure(full);

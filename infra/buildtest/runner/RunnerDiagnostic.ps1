@@ -266,10 +266,25 @@ function Get-DiagnosticOwnedMembers {
 }
 
 function Stop-DiagnosticOwnedProcess {
-    param($Owner)
+    param($Owner, [ValidateRange(0,2147483647)][int]$WaitTimeoutMilliseconds=0)
+    # Default is signal-only: the supervisor terminates every owner before waiting
+    # on its shared absolute deadline. Standalone callers may opt into completion.
+    $clock=[Diagnostics.Stopwatch]::StartNew()
     # Always terminate the ownership boundary, even if the command/launcher exited.
     if ($IsLinux) { [DiagnosticContainment]::KillGroup($Owner.GroupId) } else { $Owner.Job.Kill() }
     $Owner.Stopped=$true
+    if ($WaitTimeoutMilliseconds -eq 0) { return }
+    while ($true) {
+        # Anchor exit alone says nothing about descendants. Query the ownership
+        # boundary, not cached PIDs (which could already have been reused).
+        $remaining=if ($IsWindows) { $Owner.Job.Active } else { @(Get-DiagnosticOwnedMembers $Owner).Count }
+        # Linux excludes zombies from live membership before the parent has
+        # necessarily observed/reaped the anchor. Both completion proofs matter.
+        if ($remaining -eq 0 -and $Owner.Process.HasExited) { return }
+        $budget=$WaitTimeoutMilliseconds-$clock.Elapsed.TotalMilliseconds
+        if ($budget -le 0) { throw 'Owned processes still live at cleanup deadline.' }
+        Start-Sleep -Milliseconds ([int][Math]::Min(10,[Math]::Ceiling($budget)))
+    }
 }
 
 # Diagnostic-only supervisor. All starts, retries, ownership teardown and drains
@@ -381,7 +396,7 @@ function Invoke-DiagnosticProcess {
         # Reader disposal cancels blocked source reads. Never claim success on a
         # false Wait result, faulted copy or a destination closed while still copying.
         foreach ($pipe in $pipes) { if (-not $pipe.Copy.IsCompletedSuccessfully) { $drainComplete=$false }; $pipe.Destination.Dispose() }
-        foreach ($owned in $owners) { $owned.Process.Dispose(); if ($null -ne $owned.Job) { $owned.Job.Dispose() }; foreach ($suffix in @('.json','.release','.result','.identity','.error')) { Remove-Item -LiteralPath ($owned.Base+$suffix) -ErrorAction SilentlyContinue } }
+        foreach ($owned in $owners) { $owned.Process.Dispose(); if ($null -ne $owned.Job) { $owned.Job.Dispose() }; foreach ($suffix in @('.json','.release','.result','.result.tmp','.identity','.error')) { Remove-Item -LiteralPath ($owned.Base+$suffix) -ErrorAction SilentlyContinue } }
         $clock.Stop()
         $parts=@(); foreach ($part in @("$LogPath.stdout","$LogPath.stderr")) { if (Test-Path $part) { $parts+=Get-Content $part -Raw; Remove-Item $part } }; Set-Content $LogPath ($parts -join [Environment]::NewLine)
         if ($timedOut -and $captures.Count -eq 0) { $captures += [ordered]@{testHostProcessId=$null; startedSeconds=$null; exitCode=$null; timedOut=$false; error='No valid TestHostLaunched target was available before the absolute deadline.'; dumpPath=$null} }

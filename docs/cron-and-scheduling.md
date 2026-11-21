@@ -32,6 +32,29 @@
 
 BotNexus provides a **centralized cron service** (`CronScheduler`) that schedules and executes jobs on a fixed tick interval. Unlike per-agent scheduling (legacy `AgentConfig.CronJobs`), all jobs are registered in a single, global configuration section: the `cron` section of `config.json`.
 
+### Optional global model routing
+
+Configure `cron.defaultModel` through the installed CLI's canonical configuration writer, not by editing JSON files. It is absent/null by default; no model is chosen by price, speed, or name.
+
+**CLI:** In a terminal with the installed `botnexus` command, run:
+
+```shell
+botnexus config set cron.defaultModel openai/gpt-4.1-mini
+botnexus config get cron.defaultModel
+```
+
+Choose a model registered in your installation and permitted for the jobs' agents. Use your normal `--target` option when managing a non-default installation. The existing `config set` path type-checks the value and uses `CliConfigMutation` and the canonical writer factory; it preserves unrelated configuration. The change is durable configuration, not a live-runtime override.
+
+**UI:** The schema-driven Cron settings expose **Default cron model**. Save through the normal settings writer, then restart the gateway.
+
+To roll back, run `botnexus config set cron.defaultModel null` and restart. Existing job model pins remain intact; clear a job's `model` through its API/tool update only when you want it to inherit the global setting.
+
+For model-running actions (`agent-prompt`, `heartbeat`, `skill-review`, `memory-dreaming`, and `agent-converse`), each occurrence selects **explicit job model > global default > standing conversation model > agent fallback**. `command` and `webhook` ignore this setting. System-provisioned, declarative, API-authored, and tool-authored jobs use the same dispatch path.
+
+A selection is resolved against the registered models and agent model permissions before dispatch. An invalid or forbidden explicit/global model fails the run; it does not silently fall back. The selected model applies only to that occurrence and never changes the conversation's durable model override. Job JSON exposes `modelRoutingIndicator`; run history exposes `effectiveModel` with the requested token, resolved provider/model, and winning layer. Historical runs and deterministic actions retain null model audit values. Session metadata carries the same selection. Listings also expose `configuredDefaultModel` and distinguish `global-default` from `job-override`. Pinned heartbeats use a separate heartbeat execution session, including for soul-enabled agents, so an occurrence cannot leave its model or cached handle on the shared interactive soul session. With no explicit/global pin, heartbeats retain their actual execution conversation's inheritance and exchanges retain their participant-specific model defaults and remote target routing; their single-model audit remains unknown. A pinned exchange requires a local target so both participants' model permissions can be verified. Minimal hosts without a model registry retain legacy unset behavior; a configured global default requires registry validation.
+
+Cron options are captured from startup configuration. **Restart the gateway after changing `cron.defaultModel`**; the configuration file watcher alone does not refresh this startup snapshot. A change does not retarget an occurrence already dispatched. Unset or clear the setting to restore normal conversation/agent inheritance. Thinking and context-window parity are separate work (#4636).
+
 ### Key Characteristics
 
 - **Centralized**: All config-defined jobs in one place (`cron.jobs`), merged at runtime with jobs created through the `cron` tool and the REST API
@@ -1280,11 +1303,31 @@ Two conditions must both hold, and each guards a distinct way of getting this wr
 1. **The job is marked `executionClass`.** An unmarked job is untouched (a reporting job may
    legitimately make no tool call).
 2. **The action actually reported a tool count.** `command` and `webhook` actions have no tool
-   concept and report nothing; an interrupted turn already carries its own terminal outcome. That
-   silence means *not applicable*, and is never read as "zero tools" -- otherwise every shell job on
-   the platform would be classified as a do-nothing run.
+   concept and report nothing. That silence means *not applicable*, and is never read as "zero
+   tools" -- otherwise every shell job on the platform would be classified as a do-nothing run.
+   Interrupted agent turns can report partial counts, but retain their interruption outcome rather
+   than being classified by the zero-tool rule.
 
-A run that invokes one or more tools continues to record `ok` exactly as before.
+A genuinely completed run that invokes one or more tools can record `ok`; a tool invocation
+alone does not prove that the run completed successfully.
+
+### Interrupted runs and partial evidence
+
+Cancellation is not a completed zero-tool run. Operator cancellation records `aborted`; host
+cancellation records `error` and still propagates cancellation to the caller. A timeout records
+`timed_out`. If a returned agent response explicitly reports cancellation, failure, incomplete work,
+or a parked run, that disposition takes precedence over the zero-tool rule.
+
+Cron and soul-triggered runs retain the current run's partial tool timeline and measured usage.
+An unfinished tool is marked incomplete, not successful. Missing token measurements remain unknown
+(`null`), not zero; a missing final answer does not mean that no tools ran or that the run was free.
+Cancellation does **not** roll back tool side effects. Inspect the retained transcript and the target
+system before retrying work that could have changed external state.
+
+Disposable no-op cleanup applies only to an empty or `NO_REPLY` response with no tool calls and no
+explicit non-completed disposition. Interrupted cron sessions are retained rather than deleted as
+silent wakes. A genuinely completed silent no-tool run can still be cleaned up. This is separate
+from an explicitly configured `deleteAfterRun` retention policy.
 
 ## 11c. Delivery failure (`delivery_failed`)
 

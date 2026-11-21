@@ -176,6 +176,12 @@ internal static class AnthropicRequestBuilder
         // any tool-using request and the API rejects the whole thing. One pass, one budget.
         body["messages"] = ToNode(messages);
 
+        if (options?.ToolChoiceMode == BotNexus.Agent.Providers.Core.ToolChoice.None)
+        {
+            body.Remove("tools");
+            body["tool_choice"] = new JsonObject { ["type"] = "none" };
+        }
+
         return body;
     }
 

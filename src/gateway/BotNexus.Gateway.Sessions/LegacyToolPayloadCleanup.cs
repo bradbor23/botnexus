@@ -8,7 +8,80 @@ namespace BotNexus.Gateway.Sessions;
 /// <summary>Clears redundant legacy payload columns only after normalized evidence proves exact parity.</summary>
 public static class LegacyToolPayloadCleanup
 {
-    internal static LegacyToolPayloadCleanupReport RunConnectionString(string connectionString, int batchSize, long afterInvocationId = 0)
+    internal static (LegacyToolPayloadCleanupReport Report, IReadOnlyList<string> SessionIds) ClearAllInTransaction(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        bool populatedLegacyRows)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_history') WHERE name='tool_args_from_invocation')";
+        var hasArgumentsMarker = Convert.ToInt32(command.ExecuteScalar()) != 0;
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_history') WHERE name='tool_content_from_invocation')";
+        var hasContentMarker = Convert.ToInt32(command.ExecuteScalar()) != 0;
+        // Minimal operator-created/older schemas need the same durable reconstruction contract
+        // as a store initialized by the gateway. DDL and cleared data commit atomically.
+        if (!hasArgumentsMarker)
+        {
+            command.CommandText = "ALTER TABLE session_history ADD COLUMN tool_args_from_invocation INTEGER NOT NULL DEFAULT 0";
+            command.ExecuteNonQuery();
+        }
+        if (!hasContentMarker)
+        {
+            command.CommandText = "ALTER TABLE session_history ADD COLUMN tool_content_from_invocation INTEGER NOT NULL DEFAULT 0";
+            command.ExecuteNonQuery();
+        }
+        // Freeze per-field parity, not a guessed start/result classification. Legacy rows may
+        // hold both arguments and a result; NULL kind and historically absent values stay intact.
+        // Typed result arguments retain the existing canonical-execution contract.
+        command.CommandText = """
+            CREATE TEMP TABLE legacy_cleanup_rows AS
+            SELECT h.id,h.session_id,h.tool_invocation_id,
+                   h.tool_args IS NOT NULL AND
+                       (h.message_kind='tool-result' OR h.tool_args IS i.arguments_json) AS clear_args,
+                   h.content IS NOT NULL AND h.content IS i.result_content AND
+                       (h.message_kind='tool-result' OR h.message_kind IS NULL) AS clear_content,
+                   CASE WHEN h.tool_args IS NOT NULL AND
+                             (h.message_kind='tool-result' OR h.tool_args IS i.arguments_json)
+                        THEN length(CAST(h.tool_args AS BLOB)) ELSE 0 END
+                   + CASE WHEN h.content IS NOT NULL AND h.content IS i.result_content AND
+                               (h.message_kind='tool-result' OR h.message_kind IS NULL)
+                        THEN length(CAST(h.content AS BLOB)) ELSE 0 END AS bytes
+            FROM session_history h JOIN tool_invocations i ON i.id=h.tool_invocation_id AND i.session_id=h.session_id
+            WHERE (h.message_kind IN ('tool-start','tool-result') OR (h.message_kind IS NULL AND h.role='tool'))
+              AND ((h.tool_args IS NOT NULL AND (h.message_kind='tool-result' OR h.tool_args IS i.arguments_json))
+                OR (h.content IS NOT NULL AND h.content IS i.result_content AND
+                    (h.message_kind='tool-result' OR h.message_kind IS NULL)));
+            CREATE UNIQUE INDEX legacy_cleanup_rows_id ON legacy_cleanup_rows(id);
+            UPDATE session_history AS h
+            SET tool_args=CASE WHEN c.clear_args=1 THEN NULL ELSE h.tool_args END,
+                content=CASE WHEN c.clear_content=1 THEN NULL ELSE h.content END,
+                tool_args_from_invocation=CASE WHEN c.clear_args=1 THEN 1 ELSE h.tool_args_from_invocation END,
+                tool_content_from_invocation=CASE WHEN c.clear_content=1 THEN 1 ELSE h.tool_content_from_invocation END
+            FROM legacy_cleanup_rows c WHERE h.id=c.id;
+            """;
+        command.ExecuteNonQuery();
+        var sessions = new List<string>();
+        command.CommandText = populatedLegacyRows
+            ? "SELECT session_id FROM legacy_cleanup_rows UNION SELECT session_id FROM legacy_tool_rows"
+            : "SELECT DISTINCT session_id FROM legacy_cleanup_rows";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) sessions.Add(reader.GetString(0));
+        command.CommandText = "SELECT COUNT(DISTINCT tool_invocation_id),COUNT(*),COALESCE(SUM(bytes),0) FROM legacy_cleanup_rows";
+        LegacyToolPayloadCleanupReport report;
+        using (var reader = command.ExecuteReader())
+        {
+            reader.Read();
+            report = new(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt64(2), -1, -1, false);
+        }
+        command.CommandText = "DROP TABLE legacy_cleanup_rows";
+        if (populatedLegacyRows)
+            command.CommandText += "; DROP TABLE legacy_tool_rollup; DROP TABLE legacy_tool_evidence; DROP TABLE legacy_tool_affected; DROP TABLE legacy_tool_rows";
+        command.ExecuteNonQuery();
+        return (report, sessions);
+    }
+
+    internal static LegacyToolPayloadCleanupReport RunConnectionString(string connectionString, int batchSize, long afterInvocationId = 0, Action<string>? invalidateSession = null)
     {
         if (batchSize < 1)
             throw new ArgumentOutOfRangeException(nameof(batchSize), "Batch size must be positive.");
@@ -29,20 +102,45 @@ public static class LegacyToolPayloadCleanup
 
             long bytes = 0;
             var rows = 0;
+            var cleaned = 0;
+            var changedSessions = new HashSet<string>(StringComparer.Ordinal);
             if (eligible.Length > 0)
             {
+                // Discovery stays outside the writer lock. Re-read each bounded candidate in the
+                // transaction and compare its full evidence snapshot before changing history.
                 using var transaction = connection.BeginTransaction();
                 foreach (var candidate in eligible)
                 {
+                    var current = ReadCandidateWindowCore(connection, 1, candidate.Id - 1, candidate.Id, transaction)
+                        .FirstOrDefault(item => item.Id == candidate.Id);
+                    if (current is null || current != candidate || !IsEligible(current))
+                        continue;
+
                     using var update = connection.CreateCommand();
                     update.Transaction = transaction;
-                    update.CommandText = "UPDATE session_history SET tool_args=NULL, content=CASE WHEN message_kind='tool-result' THEN NULL ELSE content END WHERE tool_invocation_id=$id AND message_kind IN ('tool-start','tool-result')";
                     update.Parameters.AddWithValue("$id", candidate.Id);
-                    rows += update.ExecuteNonQuery();
-                    bytes += candidate.LegacyBytes;
+                    if (IsPartialDuplicate(current))
+                    {
+                        update.CommandText = "UPDATE session_history SET tool_args=NULL, tool_args_from_invocation=1 WHERE tool_invocation_id=$id AND message_kind='tool-result' AND tool_args=$arguments AND tool_args_from_invocation=0";
+                        update.Parameters.AddWithValue("$arguments", candidate.ArgumentsJson);
+                    }
+                    else
+                    {
+                        update.CommandText = "UPDATE session_history SET tool_args_from_invocation=CASE WHEN message_kind='tool-result' AND tool_args IS NOT NULL THEN 1 ELSE tool_args_from_invocation END, tool_args=NULL, content=CASE WHEN message_kind='tool-result' THEN NULL ELSE content END WHERE tool_invocation_id=$id AND message_kind IN ('tool-start','tool-result')";
+                    }
+
+                    var changed = update.ExecuteNonQuery();
+                    if (changed == 0)
+                        continue;
+                    cleaned++;
+                    rows += changed;
+                    bytes += IsPartialDuplicate(current) ? Encoding.UTF8.GetByteCount(candidate.ResultArguments!) : candidate.LegacyBytes;
+                    changedSessions.Add(candidate.SessionId);
                 }
 
                 transaction.Commit();
+                foreach (var sessionId in changedSessions)
+                    invalidateSession?.Invoke(sessionId);
             }
 
             // Progress is a bounded existence probe, not an exact whole-corpus count. Protected and
@@ -50,7 +148,7 @@ public static class LegacyToolPayloadCleanup
             // -1 explicitly reports "not counted" rather than disguising an estimate as a fact.
             var lastScannedId = candidates.Count == 0 ? afterInvocationId : candidates[^1].Id;
             var hasMore = HasAnotherCandidate(connection, lastScannedId) || HasOrphanedInvocation(connection);
-            return new(eligible.Length, rows, bytes, -1, -1, hasMore, lastScannedId, candidates.Count, orphanedInvocationsDeleted);
+            return new(cleaned, rows, bytes, -1, -1, hasMore, lastScannedId, candidates.Count, orphanedInvocationsDeleted);
         }
         catch (SqliteException ex) when (SqliteCapacityDiagnostics.ObserveFailure(connection, ex))
         {
@@ -60,21 +158,39 @@ public static class LegacyToolPayloadCleanup
 
     private static int DeleteOrphanedInvocations(SqliteConnection connection, int limit)
     {
+        // The absent-session scan may traverse the corpus. Never hold the writer slot
+        // during discovery, and never acquire it for an empty maintenance batch.
+        var ids = new List<long>();
+        using (var select = connection.CreateCommand())
+        {
+            select.CommandText = """
+                SELECT i.id FROM tool_invocations i
+                LEFT JOIN sessions s ON s.id=i.session_id
+                WHERE s.id IS NULL ORDER BY i.id LIMIT $limit
+                """;
+            select.Parameters.AddWithValue("$limit", limit);
+            using var reader = select.ExecuteReader();
+            while (reader.Read()) ids.Add(reader.GetInt64(0));
+        }
+        if (ids.Count == 0)
+            return 0;
+
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
+        // Revalidate each selected identity: a session may have appeared since discovery.
+        // One id per statement also avoids SQLite's parameter-count limit for large batches.
         command.CommandText = """
             DELETE FROM tool_invocations
-            WHERE id IN (
-                SELECT i.id
-                FROM tool_invocations i
-                LEFT JOIN sessions s ON s.id=i.session_id
-                WHERE s.id IS NULL
-                ORDER BY i.id
-                LIMIT $limit)
+            WHERE id=$id AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.id=tool_invocations.session_id)
             """;
-        command.Parameters.AddWithValue("$limit", limit);
-        var deleted = command.ExecuteNonQuery();
+        var idParameter = command.Parameters.AddWithValue("$id", 0L);
+        var deleted = 0;
+        foreach (var id in ids)
+        {
+            idParameter.Value = id;
+            deleted += command.ExecuteNonQuery();
+        }
         transaction.Commit();
         return deleted;
     }
@@ -93,16 +209,26 @@ public static class LegacyToolPayloadCleanup
         return Convert.ToInt32(command.ExecuteScalar()) != 0;
     }
 
-    private static List<Candidate> ReadCandidateWindow(SqliteConnection connection, int limit, long afterInvocationId)
+    private static List<Candidate> ReadCandidateWindow(SqliteConnection connection, int limit, long afterInvocationId) =>
+        ReadCandidateWindowCore(connection, limit, afterInvocationId, null, null);
+
+    private static List<Candidate> ReadCandidateWindowCore(
+        SqliteConnection connection,
+        int limit,
+        long afterInvocationId,
+        long? candidateId,
+        SqliteTransaction? transaction)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         // Materialize IDs only: LIMIT must run before payload-bearing joins/aggregation.
         // CROSS JOIN keeps the bounded window outermost even without planner statistics.
-        command.CommandText = """
+        var identityFilter = candidateId.HasValue ? "i.id=$candidateId" : "i.id > $afterInvocationId";
+        command.CommandText = $"""
             WITH candidate_ids AS MATERIALIZED (
                 SELECT i.id
                 FROM tool_invocations i
-                WHERE i.id > $afterInvocationId
+                WHERE {identityFilter}
                   AND i.status='success' AND i.is_error=0 AND i.retention_state='hot'
                   AND i.arguments_json IS NOT NULL AND i.result_content IS NOT NULL
                   AND EXISTS(
@@ -121,6 +247,8 @@ public static class LegacyToolPayloadCleanup
                    MAX(CASE WHEN h.message_kind='tool-start' THEN h.tool_call_id END) AS start_call_id,
                    MAX(CASE WHEN h.message_kind='tool-result' THEN h.tool_call_id END) AS result_call_id,
                    MAX(CASE WHEN h.message_kind='tool-start' THEN h.tool_args END) AS start_args,
+                   MAX(CASE WHEN h.message_kind='tool-result' THEN h.tool_args END) AS result_args,
+                   MAX(CASE WHEN h.message_kind='tool-result' THEN COALESCE(h.tool_args_from_invocation,0) END) AS result_args_from_invocation,
                    MAX(CASE WHEN h.message_kind='tool-start' THEN h.timestamp END) AS start_timestamp,
                    MAX(CASE WHEN h.message_kind='tool-result' THEN h.content END) AS result_content,
                    MAX(CASE WHEN h.message_kind='tool-result' THEN h.timestamp END) AS result_timestamp,
@@ -141,6 +269,7 @@ public static class LegacyToolPayloadCleanup
             ORDER BY i.id
             """;
         command.Parameters.AddWithValue("$afterInvocationId", afterInvocationId);
+        command.Parameters.AddWithValue("$candidateId", (object?)candidateId ?? DBNull.Value);
         command.Parameters.AddWithValue("$limit", limit);
 
         using var reader = command.ExecuteReader();
@@ -166,18 +295,35 @@ public static class LegacyToolPayloadCleanup
                 ReadNullable(reader, 15),
                 ReadNullable(reader, 16),
                 ReadNullable(reader, 17),
-                ReadNullable(reader, 18),
+                reader.IsDBNull(18) ? 0 : reader.GetInt64(18),
                 ReadNullable(reader, 19),
+                ReadNullable(reader, 20),
+                ReadNullable(reader, 21),
                 // No result row means unknown evidence, not a successful result flag.
-                reader.IsDBNull(20) ? null : reader.GetInt64(20),
-                reader.GetInt64(21),
-                reader.GetInt64(22) != 0));
+                reader.IsDBNull(22) ? null : reader.GetInt64(22),
+                reader.GetInt64(23),
+                reader.GetInt64(24) != 0));
         }
 
         return candidates;
     }
 
-    private static bool IsEligible(Candidate candidate)
+    private static bool IsEligible(Candidate candidate) =>
+        IsLegacyDuplicate(candidate) || IsPartialDuplicate(candidate);
+
+    private static bool IsLegacyDuplicate(Candidate candidate) =>
+        HasValidNormalizedEvidence(candidate)
+        && candidate.StartArguments == candidate.ArgumentsJson
+        && candidate.LegacyResultContent == candidate.ResultContent;
+
+    private static bool IsPartialDuplicate(Candidate candidate) =>
+        HasValidNormalizedEvidence(candidate)
+        && candidate.StartArguments is null
+        && candidate.LegacyResultContent is null
+        && candidate.ResultArguments == candidate.ArgumentsJson
+        && candidate.ResultArgumentsFromInvocation == 0;
+
+    private static bool HasValidNormalizedEvidence(Candidate candidate)
     {
         if (candidate.LinkedCount != 2 || candidate.StartCount != 1 || candidate.ResultCount != 1 || candidate.HasUnlinkedSibling)
             return false;
@@ -185,9 +331,7 @@ public static class LegacyToolPayloadCleanup
             return false;
         if (candidate.StartCallId != candidate.ToolCallId || candidate.ResultCallId != candidate.ToolCallId)
             return false;
-        if (candidate.StartArguments != candidate.ArgumentsJson || candidate.StartTimestamp != candidate.StartedAt)
-            return false;
-        if (candidate.LegacyResultContent != candidate.ResultContent || candidate.ResultTimestamp != candidate.CompletedAt || candidate.ResultIsError != 0)
+        if (candidate.StartTimestamp != candidate.StartedAt || candidate.ResultTimestamp != candidate.CompletedAt || candidate.ResultIsError != 0)
             return false;
 
         var resultBytes = Encoding.UTF8.GetByteCount(candidate.ResultContent);
@@ -236,6 +380,8 @@ public static class LegacyToolPayloadCleanup
         string? StartCallId,
         string? ResultCallId,
         string? StartArguments,
+        string? ResultArguments,
+        long ResultArgumentsFromInvocation,
         string? StartTimestamp,
         string? LegacyResultContent,
         string? ResultTimestamp,

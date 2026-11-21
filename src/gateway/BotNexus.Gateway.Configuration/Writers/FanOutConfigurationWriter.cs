@@ -44,6 +44,32 @@ public sealed class FanOutConfigurationWriter : IConfigurationWriter
         }
     }
 
+    // Only the canonical store-backed mutation boundary may omit an absent projection.
+    // Keep this internal: consumers must not choose their own persistence backend.
+    internal IReadOnlyList<ConfigurationBackendDescriptor> BackendsWithoutJsonProjection =>
+        ProjectionFreeWriters().SelectMany(writer => writer.Backends).ToArray();
+
+    internal Task ApplyChangeSetWithoutJsonProjectionAsync(
+        ConfigChangeSet changes,
+        JsonObject pristineDocument,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(pristineDocument);
+        // Reuse the registered backends and the same failure aggregation, even when only SQLite
+        // remains. No alternate writer composition or caller-controlled backend policy is created.
+        return ApplyChangeSetCoreAsync(changes, pristineDocument, reason, cancellationToken,
+            ProjectionFreeWriters());
+    }
+
+    private IReadOnlyList<IConfigurationWriter> ProjectionFreeWriters()
+    {
+        var writers = _writers.Where(writer => writer is not JsonConfigurationWriter).ToArray();
+        if (writers.Length == 0)
+            throw new InvalidOperationException("A store-backed mutation requires a non-projection backend.");
+        return writers;
+    }
+
     /// <inheritdoc />
     public string Name => string.Join('+', _writers.Select(w => w.Name));
 
@@ -98,21 +124,44 @@ public sealed class FanOutConfigurationWriter : IConfigurationWriter
     /// <see cref="WriteAsync"/> - all backends are attempted, and a partial application throws naming
     /// the ones that succeeded.
     /// </remarks>
-    public async Task ApplyChangeSetAsync(
+    public Task ApplyChangeSetAsync(
         ConfigChangeSet changes,
         string reason,
         CancellationToken cancellationToken = default)
+        => ApplyChangeSetCoreAsync(changes, null, reason, cancellationToken);
+
+    /// <inheritdoc />
+    public Task ApplyChangeSetAsync(
+        ConfigChangeSet changes,
+        JsonObject pristineDocument,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pristineDocument);
+        return ApplyChangeSetCoreAsync(changes, pristineDocument, reason, cancellationToken);
+    }
+
+    private async Task ApplyChangeSetCoreAsync(
+        ConfigChangeSet changes,
+        JsonObject? pristineDocument,
+        string reason,
+        CancellationToken cancellationToken,
+        IReadOnlyList<IConfigurationWriter>? mutationWriters = null)
     {
         ArgumentNullException.ThrowIfNull(changes);
 
+        var writers = mutationWriters ?? _writers;
         List<Exception>? failures = null;
-        var succeeded = new List<string>(_writers.Count);
+        var succeeded = new List<string>(writers.Count);
 
-        foreach (var writer in _writers)
+        foreach (var writer in writers)
         {
             try
             {
-                await writer.ApplyChangeSetAsync(changes, reason, cancellationToken).ConfigureAwait(false);
+                if (pristineDocument is null)
+                    await writer.ApplyChangeSetAsync(changes, reason, cancellationToken).ConfigureAwait(false);
+                else
+                    await writer.ApplyChangeSetAsync(changes, pristineDocument, reason, cancellationToken).ConfigureAwait(false);
                 succeeded.Add(writer.Name);
             }
             catch (OperationCanceledException)

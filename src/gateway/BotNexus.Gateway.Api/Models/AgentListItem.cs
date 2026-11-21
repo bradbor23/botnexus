@@ -70,6 +70,7 @@ using BotNexus.Gateway.Abstractions.Models;
 /// What the agent must not do. Named consumer: <c>AgentDetailPanel.razor</c>. Part of the persona
 /// the operator edits, so the panel cannot round-trip it without this field.
 /// </param>
+/// <param name="Enabled">Admission state shown in the agent-management grid.</param>
 public sealed record AgentListItem(
     string AgentId,
     string DisplayName,
@@ -101,7 +102,8 @@ public sealed record AgentListItem(
     string? Responsibility = null,
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? Boundaries = null)
+    string? Boundaries = null,
+    bool Enabled = true)
 {
     /// <summary>
     /// Projects a full <see cref="AgentDescriptor"/> down to its list-view fields.
@@ -122,5 +124,6 @@ public sealed record AgentListItem(
         descriptor.CanDelegate,
         descriptor.AvatarHue,
         descriptor.Responsibility,
-        descriptor.Boundaries);
+        descriptor.Boundaries,
+        descriptor.Enabled ?? true);
 }

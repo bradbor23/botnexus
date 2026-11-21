@@ -35,7 +35,7 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
 
     private readonly PluginStateStore _store;
     private readonly IPluginSourceFetcher _fetcher;
-    private readonly PluginManifestParser _parser;
+    private readonly PluginImportAdapter _importer;
     private readonly TimeProvider _timeProvider;
     private readonly IPluginInstallObserver? _installObserver;
     private readonly PluginExtensionDeployer _extensionDeployer;
@@ -73,7 +73,7 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _fetcher = fetcher ?? throw new ArgumentNullException(nameof(fetcher));
-        _parser = parser ?? new PluginManifestParser();
+        _importer = new PluginImportAdapter(parser ?? new PluginManifestParser());
         _timeProvider = timeProvider ?? TimeProvider.System;
         _installObserver = installObserver;
         _extensionsRoot = extensionsRoot;
@@ -120,7 +120,7 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
             return PluginOperationResult.Failure(request.Name ?? string.Empty, "source", "A plugin source is required.");
         }
 
-        var staged = await StageAsync(request.Source, request.Reference, request.Name, cancellationToken)
+        var staged = await StageAsync(request.Source, request.Reference, request.Name, request.MarketplacePluginName, cancellationToken)
             .ConfigureAwait(false);
         if (staged.Failure is not null)
         {
@@ -212,8 +212,14 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                 Name = manifest.Name,
                 Source = request.Source,
                 Reference = request.Reference,
+                MarketplacePluginName = request.MarketplacePluginName,
+                MarketplaceCatalogPath = staged.MarketplaceCatalogPath,
+                MarketplaceSourcePath = staged.MarketplaceSourcePath,
                 ResolvedVersion = staged.ResolvedVersion!,
                 ManifestVersion = manifest.Version,
+                ManifestFormat = staged.Format,
+                SkillsOnly = staged.SkillsOnly,
+                SkippedComponents = staged.SkippedComponents ?? [],
                 UpdatesEnabled = request.UpdatesEnabled,
                 InstalledAtUtc = _timeProvider.GetUtcNow(),
                 Files = files,
@@ -316,7 +322,7 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                 $"Plugin '{name}' carries deployed extension '{existing.DeployedExtensionId}', whose assemblies are loaded by the running gateway and cannot be replaced in place. Remove the plugin, restart the gateway, then install the new version.");
         }
 
-        var staged = await StageAsync(existing.Source, existing.Reference, existing.Name, cancellationToken)
+        var staged = await StageAsync(existing.Source, existing.Reference, existing.Name, existing.MarketplacePluginName, cancellationToken)
             .ConfigureAwait(false);
         if (staged.Failure is not null)
         {
@@ -349,6 +355,11 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
             {
                 ResolvedVersion = staged.ResolvedVersion!,
                 ManifestVersion = staged.Manifest!.Version,
+                MarketplaceCatalogPath = staged.MarketplaceCatalogPath,
+                MarketplaceSourcePath = staged.MarketplaceSourcePath,
+                ManifestFormat = staged.Format,
+                SkillsOnly = staged.SkillsOnly,
+                SkippedComponents = staged.SkippedComponents ?? [],
                 InstalledAtUtc = _timeProvider.GetUtcNow(),
                 Files = files,
             };
@@ -470,7 +481,12 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
         string? Directory,
         string? ResolvedVersion,
         PluginManifest? Manifest,
-        PluginOperationResult? Failure);
+        PluginOperationResult? Failure,
+        PluginManifestFormat Format = PluginManifestFormat.Native,
+        string? MarketplaceCatalogPath = null,
+        string? MarketplaceSourcePath = null,
+        bool SkillsOnly = false,
+        IReadOnlyList<string>? SkippedComponents = null);
 
     // Fetch and validate in a scratch directory under the OS temp root. Nothing here is inside
     // the plugin root, so a fault at any point in this method leaves the plugin root untouched -
@@ -479,8 +495,15 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
         string source,
         string? reference,
         string? expectedName,
+        string? marketplacePluginName,
         CancellationToken cancellationToken)
     {
+        if (!GitPluginSourcePolicy.IsSupported(source))
+        {
+            return new StagedPlugin(null, null, null, PluginOperationResult.Failure(
+                expectedName ?? string.Empty, "source", GitPluginSourcePolicy.RejectedSourceMessage));
+        }
+
         var staging = Path.Combine(
             Path.GetTempPath(),
             "botnexus-plugin-staging",
@@ -495,13 +518,17 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
             {
                 fetch = await _fetcher.FetchAsync(source, reference, staging, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            catch (Exception)
             {
                 TryDeleteDirectory(staging);
                 return new StagedPlugin(null, null, null, PluginOperationResult.Failure(
                     reportName,
                     "source",
-                    $"Failed to fetch plugin source '{source}': {ex.Message}"));
+                    GitPluginSourcePolicy.FetchFailureMessage));
             }
 
             if (string.IsNullOrWhiteSpace(fetch.ResolvedVersion))
@@ -510,10 +537,54 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                 return new StagedPlugin(null, null, null, PluginOperationResult.Failure(
                     reportName,
                     "resolvedVersion",
-                    $"Plugin source '{source}' did not report a resolved version."));
+                    "Plugin source did not report a resolved version."));
             }
 
-            var parse = _parser.ParsePluginDirectory(staging);
+            var rootMarketplaceSelected = false;
+            string? marketplaceCatalogPath = null;
+            string? marketplaceSourcePath = null;
+            if (marketplacePluginName is not null)
+            {
+                if (expectedName is not null && !string.Equals(expectedName, marketplacePluginName, StringComparison.Ordinal))
+                {
+                    TryDeleteDirectory(staging);
+                    return new StagedPlugin(null, null, null, PluginOperationResult.Failure(reportName,
+                        "name", "Requested identity must match the explicit marketplace selection."));
+                }
+                var selection = ClaudeMarketplaceSelection.Select(staging, marketplacePluginName, new PluginManifestParser());
+                if (!selection.IsValid)
+                {
+                    TryDeleteDirectory(staging);
+                    return new StagedPlugin(null, null, null, PluginOperationResult.Failure(reportName, selection.Errors));
+                }
+                expectedName = marketplacePluginName;
+                var selected = selection.Value!.Directory;
+                marketplaceCatalogPath = selection.Value.CatalogPath;
+                marketplaceSourcePath = selection.Value.SourcePath;
+                rootMarketplaceSelected = string.Equals(selected, staging, StringComparison.Ordinal);
+                if (!rootMarketplaceSelected)
+                {
+                    // Detach only the selected subtree, then retire the complete fetched source.
+                    // Both directories share a parent/volume; no sibling content reaches import.
+                    var detached = staging + "-selected";
+                    Directory.Move(selected, detached);
+                    TryDeleteDirectory(staging);
+                    staging = detached;
+                }
+            }
+
+            if (marketplacePluginName is not null)
+            {
+                // Re-root convention checks after detaching a nested source. Repository-level
+                // preflight cannot validate spelling of the selected plugin's own root names.
+                var safetyErrors = PluginImportAdapter.ValidateImportTree(staging);
+                if (safetyErrors.Count > 0)
+                {
+                    TryDeleteDirectory(staging);
+                    return new StagedPlugin(null, null, null, PluginOperationResult.Failure(reportName, safetyErrors));
+                }
+            }
+            var parse = _importer.ParseDirectory(staging, expectedName, rootMarketplaceSelected);
             if (!parse.IsValid)
             {
                 // A marketplace catalog is a repository of POINTERS to plugins, so it has no plugin
@@ -528,24 +599,45 @@ public sealed class PluginLifecycleManager : IPluginUpdateService
                     ? PluginOperationResult.Failure(
                         reportName,
                         MarketplaceCatalogFileName,
-                        $"'{source}' is a marketplace catalog, not a plugin - it carries "
+                        // Deliberately names no source: upstream's fetch-boundary fence allows only
+                        // fixed diagnostics here, and the caller already knows what it submitted.
+                        "This source is a marketplace catalog, not a plugin - it carries "
                         + $"{MarketplaceCatalogFileName} and lists plugins that live in other "
                         + "repositories. Add it under Repositories instead, then install the plugins "
                         + "it offers from the listing.")
                     : PluginOperationResult.Failure(reportName, parse.Errors));
             }
 
-            var manifest = parse.Value!;
+            var imported = parse.Value!;
+            var manifest = imported.Manifest;
+            if (marketplacePluginName is not null)
+            {
+                var errors = new List<PluginValidationError>();
+                imported = imported with
+                {
+                    SkillsOnly = true,
+                    SkippedComponents = PluginComponentPolicy.Normalize((imported.SkippedComponents ?? [])
+                        .Concat(PluginComponentPolicy.Discover(staging)).Concat(PluginComponentPolicy.Declared(manifest))),
+                };
+                if (manifest.Skills is { } skills && (skills.Count != 1 || skills[0] is not ("./skills" or "skills")))
+                    errors.Add(new("skills", "Marketplace selection requires conventional skills."));
+                if (errors.Count > 0)
+                {
+                    TryDeleteDirectory(staging);
+                    return new StagedPlugin(null, null, null, PluginOperationResult.Failure(reportName, errors));
+                }
+            }
             if (expectedName is not null && !string.Equals(expectedName, manifest.Name, StringComparison.Ordinal))
             {
                 TryDeleteDirectory(staging);
                 return new StagedPlugin(null, null, null, PluginOperationResult.Failure(
                     expectedName,
                     "name",
-                    $"Plugin source '{source}' declares name '{manifest.Name}', which does not match the requested '{expectedName}'."));
+                    $"Plugin manifest declares name '{manifest.Name}', which does not match the requested '{expectedName}'."));
             }
 
-            return new StagedPlugin(staging, fetch.ResolvedVersion, manifest, null);
+            return new StagedPlugin(staging, fetch.ResolvedVersion, manifest, null, imported.Format,
+                marketplaceCatalogPath, marketplaceSourcePath, imported.SkillsOnly, imported.SkippedComponents);
         }
         catch
         {

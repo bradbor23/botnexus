@@ -6,7 +6,47 @@
     Captures committed, staged, unstaged, and untracked worktree state without pushing it.
     The snapshot is uploaded with the signed-in Azure CLI identity. The remote job downloads
     it and uploads results using its user-assigned managed identity. No keys, SAS tokens, or
-    connection strings are used.
+    connection strings are used. Recovery context is persisted before waiting; use
+    Resume-AzureBuildTest.ps1 after interruption without starting another execution.
+    Requires current external qualification via BOTNEXUS_RUNNER_RELEASE_MANIFEST.
+    The trusted coordinator selects this profile outside the repository under ordinary
+    existing user-profile permissions. Trusts the coordinator and local shell; native
+    peer tool restrictions do not imply OS/shell isolation or operator-only ACL protection.
+    Resolves mutable Azure registry tags to a digest and pins that image before start;
+    checkout source tags are not approval. Compatible input changes may be requalified
+    against the same immutable image without automatically rebuilding or redeploying.
+.PARAMETER Mode
+    Validation scope. Diagnostic runs do not issue receipts.
+.PARAMETER DiagnosticProject
+    Repository-relative project for diagnostic mode only.
+.PARAMETER DiagnosticHangSeconds
+    Diagnostic synthetic hang duration in seconds.
+.PARAMETER ReplicaTimeoutMinutes
+    Deployed job replica timeout budget in minutes.
+.PARAMETER WorktreePath
+    Candidate Git worktree to snapshot.
+.PARAMETER SubscriptionId
+    Azure subscription containing the job.
+.PARAMETER ResourceGroup
+    Azure job resource group.
+.PARAMETER StorageAccount
+    Source and artifact blob storage account.
+.PARAMETER JobName
+    Existing Container Apps job name.
+.PARAMETER BaseRef
+    Git comparison base, included in the persisted fingerprint.
+.PARAMETER OutputPath
+    Local artifact destination; defaults to artifacts/azure-buildtest/<runId>.
+.PARAMETER KeepRemoteArtifacts
+    Retains remote source and artifacts after successful receipt creation.
+.PARAMETER NoWait
+    Returns execution identity and recovery context without waiting.
+.EXAMPLE
+    ./Invoke-AzureBuildTest.ps1 -Mode core -WorktreePath $worktree -NoWait
+    Starts validation and prints the context required for later receipt recovery.
+.OUTPUTS
+    System.Management.Automation.PSCustomObject. Execution and context identity with NoWait.
+    Otherwise None; progress is written to the information stream.
 #>
 [CmdletBinding()]
 param(
@@ -44,9 +84,23 @@ if ($missingSettings.Count -gt 0) {
 }
 
 function Invoke-AzJson {
+    <#
+    .SYNOPSIS
+    Runs Azure CLI and parses its JSON response.
+    .DESCRIPTION
+    Rejects nonzero Azure CLI exits before parsing provider data.
+    .PARAMETER Arguments
+    Azure CLI argument array.
+    .EXAMPLE
+    Invoke-AzJson -Arguments @('account', 'show', '-o', 'json')
+    .OUTPUTS
+    System.Object. Parsed Azure response.
+    #>
     param([string[]]$Arguments)
     $output = & az @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "az $($Arguments -join ' ') failed:`n$($output -join [Environment]::NewLine)" }
+    if ($LASTEXITCODE -ne 0) {
+        throw "az $($Arguments -join ' ') failed:`n$($output -join [Environment]::NewLine)"
+    }
     return ($output -join [Environment]::NewLine) | ConvertFrom-Json
 }
 
@@ -60,8 +114,12 @@ if ($Mode -eq 'diagnostic') {
     Resolve-DiagnosticProject -SourceRoot $repoRoot -Project $DiagnosticProject | Out-Null
     $KeepRemoteArtifacts = $true
 }
-elseif ($DiagnosticProject) { throw 'DiagnosticProject is only valid with -Mode diagnostic.' }
+elseif ($DiagnosticProject) {
+    throw 'DiagnosticProject is only valid with -Mode diagnostic.'
+}
 Import-Module (Join-Path $PSScriptRoot 'AzureBuildTestArtifacts.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'AzureBuildTestRecovery.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'RunnerReleaseCompatibility.psm1') -Force
 $fingerprintScript = Join-Path $PSScriptRoot 'Get-WorktreeValidationFingerprint.ps1'
 Import-Module (Join-Path $PSScriptRoot 'SourceSnapshot.psm1') -Force
 $runId = "{0}-{1}" -f ([DateTime]::UtcNow.ToString('yyyyMMddHHmmss')), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -83,18 +141,94 @@ New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
 try {
     $account = Invoke-AzJson @('account', 'show', '--subscription', $SubscriptionId, '-o', 'json')
-    Write-Host "Using Azure identity $($account.user.name) in subscription $($account.name)." -ForegroundColor Cyan
+    Write-Information -MessageData "Using Azure identity $($account.user.name) in subscription $($account.name)." -InformationAction Continue
+
+    # Resolve observed provider identity BEFORE payload capture/upload. Tags are only
+    # lookup keys; operator approval always binds the immutable full image digest.
+    if ($account.environmentName -cne 'AzureCloud') {
+        throw "Unsupported Azure environment: $($account.environmentName)"
+    }
+    $operatorManifestPath = $env:BOTNEXUS_RUNNER_RELEASE_MANIFEST
+    if ([string]::IsNullOrWhiteSpace($operatorManifestPath)) {
+        throw 'BOTNEXUS_RUNNER_RELEASE_MANIFEST must select current external operator approval.'
+    }
+    $jobUrl = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/jobs/$JobName"
+    $job = Invoke-AzJson @('rest', '--method', 'get', '--url', "${jobUrl}?api-version=2024-03-01")
+    $template = $job.properties.template
+    if (@($template.containers).Count -ne 1) {
+        throw 'Ambiguous provider job container identity.'
+    }
+    $container = $template.containers[0]
+    $observedImage = [string]$container.image
+    if ($observedImage -cmatch '^(?<repository>[^@]+)@(?<digest>sha256:[0-9a-f]{64})$') {
+        $immutableImage = $observedImage
+    }
+    elseif ($observedImage -cmatch '^(?<registry>[a-z0-9.-]+)\.azurecr\.io/(?<repository>[a-z0-9/._-]+):(?<tag>[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})$') {
+        $registryName = $Matches.registry
+        $repository = $Matches.repository
+        $tag = $Matches.tag
+        $metadata = Invoke-AzJson @('acr', 'manifest', 'show-metadata', '--registry', $registryName, '--name', "${repository}:$tag", '--only-show-errors', '-o', 'json')
+        if (-not $metadata.PSObject.Properties['digest'] -or $metadata.digest -isnot [string] -or $metadata.digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
+            throw 'Provider registry metadata did not resolve an immutable image digest.'
+        }
+        $immutableImage = "${registryName}.azurecr.io/${repository}@$($metadata.digest)"
+    }
+    else {
+        throw 'Provider job image must be immutable or an explicitly resolvable Azure registry tag.'
+    }
+    $runnerRelease = Assert-RunnerReleaseCompatibility -ManifestPath $operatorManifestPath -CandidateRoot $repoRoot -DeployedImage $immutableImage -Mode $Mode
+    # Validate a digest-pinned clone without admitting command/args overrides from the job.
+    $container.image = $immutableImage
+    $releaseParameters = @{
+        Binding = $runnerRelease
+        ManifestPath = $operatorManifestPath
+        CandidateRoot = $repoRoot
+        DeployedImage = $immutableImage
+        Mode = $Mode
+        ExecutionConfiguration = 'image-entrypoint-v1'
+        Container = $container
+    }
+    if ($Mode -eq 'diagnostic') {
+        Assert-RunnerReleaseExecution @releaseParameters | Out-Null
+    }
+    else {
+        Assert-RunnerReleaseBinding @releaseParameters | Out-Null
+    }
+
+    # Source drift remains advisory attribution only, never release approval.
+    try {
+        . (Join-Path $PSScriptRoot '../../infra/buildtest/RunnerImageProvenance.ps1')
+        $deployedIdentity = ($immutableImage -split '@', 2)[1]
+        $deployedAliases = @()
+        $registryName = ($immutableImage -split '[./]')[0]
+        $repositoryAndDigest = ($immutableImage -split '/', 2)[1]
+        $sourceMetadata = Invoke-AzJson @('acr', 'manifest', 'show-metadata', '--registry', $registryName, '--name', $repositoryAndDigest, '--only-show-errors', '-o', 'json')
+        if ($sourceMetadata.PSObject.Properties['tags']) {
+            $deployedAliases = @($sourceMetadata.tags)
+        }
+        $provenance = Test-RunnerImageMatchesSources -RunnerPath (Join-Path $PSScriptRoot '../../infra/buildtest/runner') -DeployedTag $deployedIdentity -DeployedAliases $deployedAliases
+        if ($provenance.Verdict -eq 'mismatch') {
+            Write-Warning 'Runner source tag differs from this checkout; current external execution-contract qualification governs compatibility. This diagnostic does not require automatic rebuild or redeployment.'
+        }
+    }
+    catch {
+        Write-Verbose "Advisory source provenance unavailable: $($_.Exception.Message)"
+    }
 
     # BEGIN EXACT SOURCE CAPTURE
     $fingerprint = & $fingerprintScript -WorktreePath $repoRoot -BaseRef $BaseRef
     $captureRoot = Join-Path $tempRoot 'captured-workspace'
     [IO.Directory]::CreateDirectory($captureRoot) | Out-Null
     $manifest = Get-SourceSnapshotManifest -RepoRoot $repoRoot -CaptureRoot $captureRoot
-    if ($manifest.digest -cne $fingerprint.sourceSnapshot.digest) { throw 'Source changed during capture.' }
+    if ($manifest.digest -cne $fingerprint.sourceSnapshot.digest) {
+        throw 'Source changed during capture.'
+    }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $tempRoot 'source-manifest.json') -Encoding utf8NoBOM
     Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $fingerprintScript) 'SourceSnapshot.psm1') -Destination (Join-Path $tempRoot 'SourceSnapshot.psm1')
     & git -C $repoRoot bundle create $bundlePath --all HEAD
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to create repository bundle.' }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to create repository bundle.'
+    }
     # ZIP is read entry-by-entry by the verifier: no tar list-file quoting/options or links.
     $workspaceArchive = Join-Path $tempRoot 'workspace.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($captureRoot, $workspaceArchive)
@@ -104,80 +238,34 @@ try {
     # fingerprint below rejects source changes before upload.
     New-SourcePayloadArchive -Root $tempRoot -Destination $payloadArchive | Out-Null
     $current = & $fingerprintScript -WorktreePath $repoRoot -BaseRef $BaseRef
-    if ($current.fingerprint -cne $fingerprint.fingerprint) { throw 'Source changed before upload.' }
+    if ($current.fingerprint -cne $fingerprint.fingerprint) {
+        throw 'Source changed before upload.'
+    }
     # END EXACT SOURCE CAPTURE
 
+    if ($Mode -eq 'diagnostic') {
+        Assert-RunnerReleaseExecution @releaseParameters | Out-Null
+    }
+    else {
+        Assert-RunnerReleaseBinding @releaseParameters | Out-Null
+    }
     $sourceBlob = "$runId/source.tar.gz"
     & az storage blob upload --subscription $SubscriptionId --account-name $StorageAccount --container-name sources --name $sourceBlob --file $payloadArchive --auth-mode login --overwrite true --only-show-errors
-    if ($LASTEXITCODE -ne 0) { throw 'Source upload failed.' }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Source upload failed.'
+    }
 
-    if ($account.environmentName -ne 'AzureCloud') { throw "Unsupported Azure environment: $($account.environmentName)" }
+    if ($account.environmentName -ne 'AzureCloud') {
+        throw "Unsupported Azure environment: $($account.environmentName)"
+    }
     $storageSuffix = 'core.windows.net'
     $sourceUrl = "https://$StorageAccount.blob.$storageSuffix/sources/$sourceBlob"
     $artifactUrl = "https://$StorageAccount.blob.$storageSuffix/artifacts/$runId"
 
-    $jobUrl = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/jobs/$JobName"
-    $job = Invoke-AzJson @('rest', '--method', 'get', '--url', "${jobUrl}?api-version=2024-03-01")
-    $template = $job.properties.template
-    $container = $template.containers[0]
-
-    # #3516: warn when the deployed runner image was not built from these sources.
-    #
-    # On 2026-08-21 the job was pointed at an image built from an unmerged branch. It contained a
-    # file main does not have, threw before build or test ran, and reported `tests: null` for three
-    # days - no branch could be validated, and nothing said why. The tag is content-addressed
-    # (#2900), so the comparison is exact and free: we already have the job here.
-    #
-    # WARN, never throw. A mismatch is legitimate while an infra change is being rolled out, and a
-    # hard failure would make the gate unusable during exactly the window an operator needs it. What
-    # matters is that a gate result can no longer be silently unattributable to a commit.
-    $provenance = $null
-    try {
-        . (Join-Path $PSScriptRoot '..' '..' 'infra' 'buildtest' 'RunnerImageProvenance.ps1')
-        $deployedIdentity = if ($container.image -match '@(?<digest>sha256:[0-9a-f]{64})$') {
-            $Matches.digest
-        }
-        else {
-            ($container.image -split ':')[-1]
-        }
-        $deployedAliases = @()
-        if ($deployedIdentity -like 'sha256:*') {
-            $registryName = ($container.image -split '[./]')[0]
-            $repositoryAndDigest = ($container.image -split '/', 2)[1]
-            $manifest = Invoke-AzJson @(
-                'acr', 'manifest', 'show-metadata',
-                '--registry', $registryName,
-                '--name', $repositoryAndDigest,
-                '--only-show-errors',
-                '-o', 'json')
-            $deployedAliases = @($manifest.tags)
-        }
-
-        $provenance = Test-RunnerImageMatchesSources `
-            -RunnerPath (Join-Path $PSScriptRoot '..' '..' 'infra' 'buildtest' 'runner') `
-            -DeployedTag $deployedIdentity `
-            -DeployedAliases $deployedAliases
-
-        if ($provenance.Verdict -eq 'mismatch') {
-            Write-Warning (
-                "Runner image provenance MISMATCH: the job runs '$($provenance.Deployed)' but these " +
-                "sources derive '$($provenance.Expected)'. The gate is executing runner code that is " +
-                "not in this worktree, so a failure here may not correspond to your change. " +
-                'Redeploy with infra/buildtest/Deploy-BuildTestInfrastructure.ps1 to realign.')
-        }
-    }
-    catch {
-        # Provenance is a diagnostic, not the subject of the gate. A check that could fail an
-        # otherwise-valid run would be worse than no check.
-        Write-Verbose "Runner image provenance check skipped: $($_.Exception.Message)"
-    }
-
-    if ($Mode -eq 'diagnostic' -and ($null -eq $provenance -or $provenance.Verdict -ne 'match')) {
-        throw 'Diagnostic requires a runner image matching these sources; an old image cannot prove this mode. No job was started.'
-    }
-
     $managedIdentityClientId = ($container.env | Where-Object name -eq 'AZURE_CLIENT_ID' | Select-Object -First 1).value
-    if ([string]::IsNullOrWhiteSpace($managedIdentityClientId)) { throw 'The job template does not expose its managed-identity client ID.' }
+    if ([string]::IsNullOrWhiteSpace($managedIdentityClientId)) {
+        throw 'The job template does not expose its managed-identity client ID.'
+    }
     $container.env = @(
         @{ name = 'AZURE_CLIENT_ID'; value = $managedIdentityClientId }
         @{ name = 'RUN_ID'; value = $runId }
@@ -197,12 +285,51 @@ try {
     $bodyPath = Join-Path $tempRoot 'start.json'
     Set-Content -Path $bodyPath -Value $startBody -Encoding utf8NoBOM
 
+    # Freeze the observed predecessor BEFORE the provider can start this execution.
+    $gitDirectory = (Invoke-SnapshotGit $repoRoot @('rev-parse', '--absolute-git-dir')).Trim()
+    $receiptPath = Join-Path $gitDirectory 'botnexus-validation/azure-buildtest.json'
+    $expectedPreviousReceipt = Get-AzureBuildTestReceiptToken -Path $receiptPath
+    $startContext = [ordered]@{
+        version = 2
+        runnerRelease = $runnerRelease
+        executionConfiguration = 'image-entrypoint-v1'
+        runId = $runId
+        fingerprint = $fingerprint
+        expectedPreviousReceipt = $expectedPreviousReceipt
+    }
+    Write-AzureBuildTestEvidence -Path (Join-Path $gitDirectory "botnexus-validation/runs/$runId-start.json") -Evidence $startContext | Out-Null
+
+    if ($Mode -eq 'diagnostic') {
+        Assert-RunnerReleaseExecution @releaseParameters | Out-Null
+    }
+    else {
+        Assert-RunnerReleaseBinding @releaseParameters | Out-Null
+    }
     $execution = Invoke-AzJson @('rest', '--method', 'post', '--url', "${jobUrl}/start?api-version=2024-03-01", '--body', "@$bodyPath")
     $executionName = ($execution.name ?? $execution.id.Split('/')[-1])
-    Write-Host "Started Azure build/test execution $executionName (run $runId)." -ForegroundColor Cyan
+    Write-Information -MessageData "Started Azure build/test execution $executionName (run $runId)." -InformationAction Continue
+    $recoveryContext = [ordered]@{
+        version = 2
+        runnerRelease = $runnerRelease
+        executionConfiguration = 'image-entrypoint-v1'
+        runId = $runId
+        mode = $Mode
+        executionName = $executionName
+        jobUrl = $jobUrl
+        subscriptionId = $SubscriptionId
+        resourceGroup = $ResourceGroup
+        storageAccount = $StorageAccount
+        jobName = $JobName
+        fingerprint = $fingerprint
+        expectedPreviousReceipt = $expectedPreviousReceipt
+    }
+    $gitDirectory = (Invoke-SnapshotGit $repoRoot @('rev-parse', '--absolute-git-dir')).Trim()
+    $contextPath = Join-Path $gitDirectory "botnexus-validation/runs/$runId.json"
+    Write-AzureBuildTestEvidence -Path $contextPath -Evidence $recoveryContext | Out-Null
+    Write-Information -MessageData "Recovery context: $contextPath" -InformationAction Continue
 
     if ($NoWait) {
-        [pscustomobject]@{ RunId = $runId; ExecutionName = $executionName; SourceBlob = $sourceBlob; ArtifactPrefix = $runId }
+        [pscustomobject]@{ RunId = $runId; ExecutionName = $executionName; SourceBlob = $sourceBlob; ArtifactPrefix = $runId; ContextPath = $contextPath }
         return
     }
 
@@ -211,7 +338,7 @@ try {
     do {
         Start-Sleep -Seconds 15
         $status = Invoke-AzJson @('rest', '--method', 'get', '--url', $executionUrl)
-        Write-Host "Execution status: $($status.properties.status)" -ForegroundColor DarkGray
+        Write-Information -MessageData "Execution status: $($status.properties.status)" -InformationAction Continue
     } while ($status.properties.status -in @('Running', 'Processing', 'Unknown'))
     $elapsed = ([DateTime]::UtcNow - $watchStarted).TotalMinutes
 
@@ -226,7 +353,7 @@ try {
         Write-Warning ("TIMEOUT BUDGET BREACHED: ran {0:N1} min against a {1} min budget. Either the run genuinely hung or the budget is now too small - investigate before raising it." -f $elapsed, $budgetMinutes)
     }
     else {
-        Write-Host ("Run took {0:N1} min of a {1} min budget ({2} min margin)." -f $elapsed, $budgetMinutes, $margin) -ForegroundColor DarkGray
+        Write-Information -MessageData ("Run took {0:N1} min of a {1} min budget ({2} min margin)." -f $elapsed, $budgetMinutes, $margin) -InformationAction Continue
     }
 
     # #3115: download-batch recreates the full blob NAME under --destination, and the blobs are
@@ -235,19 +362,33 @@ try {
     # the success and failure messages both report - is the directory that holds result.json.
     New-Item -ItemType Directory -Path $downloadStaging -Force | Out-Null
     & az storage blob download-batch --subscription $SubscriptionId --account-name $StorageAccount --source artifacts --destination $downloadStaging --pattern "$runId/*" --auth-mode login --overwrite true --only-show-errors
-    if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed.' }
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Artifact download failed.'
+    }
+    $freshRunArtifacts = Join-Path $downloadStaging $runId
+    Assert-AzureBuildTestArtifact -Mode $Mode -Path $freshRunArtifacts
     $OutputPath = Move-AzureBuildTestArtifacts -StagingRoot $downloadStaging -RunId $runId -Destination $OutputPath
     $artifactsPlaced = $true
 
     # Deliberately NOT recursive: the contract must be at the advertised path or the run is not
     # provably green (#3115). A nested copy is a regression, not an acceptable location.
     $resultFile = Get-ChildItem -Path $OutputPath -Filter result.json -File | Select-Object -First 1
-    $result = if ($resultFile) { Get-Content $resultFile.FullName -Raw | ConvertFrom-Json } else { $null }
+    $result = if ($resultFile) {
+        Get-Content $resultFile.FullName -Raw | ConvertFrom-Json
+    }
+    else {
+        $null
+    }
 
     # #3305: a run that overran its budget now says so IN the contract, and names the projects
     # that had not reported. Before this the only evidence was an empty directory, which cannot
     # distinguish a hang from a slow suite and attributes the cost to nothing at all.
-    $runnerTimeout = if ($result -and $result.PSObject.Properties['timeout']) { $result.timeout } else { $null }
+    $runnerTimeout = if ($result -and $result.PSObject.Properties['timeout']) {
+        $result.timeout
+    }
+    else {
+        $null
+    }
     if ($runnerTimeout) {
         Write-Warning ("Runner deadline expired after {0:N0}s of a {1}s test budget. {2}" -f $runnerTimeout.elapsedSeconds, $runnerTimeout.deadlineSeconds, $runnerTimeout.attribution)
     }
@@ -266,21 +407,48 @@ try {
     # a bare $null when the property is JSON null, and `.Count` on $null throws under StrictMode -
     # which is precisely the shape a BUILD failure produces (test phase skipped), so the failure
     # path was the only path that could hit it and the secondary error masked the real cause.
-    $projectCosts = ConvertTo-CountableArray ($(if ($result -and $result.PSObject.Properties['projectCosts']) { $result.projectCosts } else { $null }))
+    $projectCosts = ConvertTo-CountableArray ($(if ($result -and $result.PSObject.Properties['projectCosts']) {
+                $result.projectCosts
+            }
+            else {
+                $null
+            }))
     if ($projectCosts.Count -gt 0) {
         $topCosts = ($projectCosts | Select-Object -First 3 | ForEach-Object { "{0} {1:N1}s" -f $_.project, $_.seconds }) -join '; '
-        Write-Host "Most expensive projects: $topCosts (full table: runner-cost.log)." -ForegroundColor DarkGray
+        Write-Information -MessageData "Most expensive projects: $topCosts (full table: runner-cost.log)." -InformationAction Continue
     }
 
     $playwrightArtifact = Get-ChildItem -Path $OutputPath -Filter playwright.log -Recurse | Select-Object -First 1
     $requiredArtifactsPresent = $Mode -ne 'strict' -or $null -ne $playwrightArtifact
     if ($Mode -eq 'diagnostic') {
+        if ($status.name -cne $executionName -or
+            $status.id -ine "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/jobs/$JobName/executions/$executionName" -or
+            @($status.properties.template.containers).Count -ne 1) {
+            throw 'Diagnostic provider execution identity mismatch.'
+        }
+        $actualContainer = $status.properties.template.containers[0]
+        foreach ($identity in @(@{ name = 'RUN_ID'; value = $runId }, @{ name = 'TEST_MODE'; value = 'diagnostic' })) {
+            $entries = @($actualContainer.env | Where-Object name -CEQ $identity.name)
+            if ($entries.Count -ne 1 -or $entries[0].value -cne $identity.value) {
+                throw 'Diagnostic provider run/mode identity mismatch.'
+            }
+        }
+        $releaseParameters.Container = $actualContainer
+        $releaseParameters.DeployedImage = [string]$actualContainer.image
+        Assert-RunnerReleaseExecution @releaseParameters | Out-Null
         $evidencePath = Join-Path $OutputPath 'diagnostic-evidence.json'
-        $evidence = if (Test-Path -LiteralPath $evidencePath) { Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json } else { $null }
+        $evidence = if (Test-Path -LiteralPath $evidencePath) {
+            Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+        }
+        else {
+            $null
+        }
         $requiredArtifactsPresent = $null -ne $evidence -and $evidence.mode -eq 'diagnostic' -and
-            $evidence.eventEvidenceComplete -eq $true -and $evidence.hangEvidenceComplete -eq $true -and $evidence.project -ceq $DiagnosticProject -and
-            $evidence.runnerImage -ceq $container.image -and $evidence.qualifiesForCoreReceipt -eq $false
-        if ($null -ne $evidence -and $null -ne $result) { Assert-DiagnosticSourceProof -Result $result -Evidence $evidence -Digest $fingerprint.sourceSnapshot.digest -RunId $runId }
+        $evidence.eventEvidenceComplete -eq $true -and $evidence.hangEvidenceComplete -eq $true -and $evidence.project -ceq $DiagnosticProject -and
+        $evidence.runnerImage -ceq $container.image -and $evidence.qualifiesForCoreReceipt -eq $false
+        if ($null -ne $evidence -and $null -ne $result) {
+            Assert-DiagnosticSourceProof -Result $result -Evidence $evidence -Digest $fingerprint.sourceSnapshot.digest -RunId $runId
+        }
         Write-Warning "Private diagnostic artifacts retained at $OutputPath and remote prefix $runId. No validation receipt is issued. Do not publish raw dumps or traces."
     }
 
@@ -290,28 +458,15 @@ try {
     if ($Mode -ne 'diagnostic' -and $status.properties.status -eq 'Succeeded' -and $null -ne $result -and $result.exitCode -eq 0 -and $requiredArtifactsPresent) {
         Assert-SourceSnapshotResult -Result $result -Digest $fingerprint.sourceSnapshot.digest -RunId $runId -Mode $Mode
         $current = & $fingerprintScript -WorktreePath $repoRoot -BaseRef $BaseRef
-        if ($current.fingerprint -cne $fingerprint.fingerprint) { throw 'Source changed before receipt; validation cannot certify this worktree.' }
+        if ($current.fingerprint -cne $fingerprint.fingerprint) {
+            throw 'Source changed before receipt; validation cannot certify this worktree.'
+        }
     }
     # END EXACT SOURCE RECEIPT GUARD
 
     if ($Mode -ne 'diagnostic' -and $status.properties.status -eq 'Succeeded' -and $null -ne $result -and $result.exitCode -eq 0 -and $requiredArtifactsPresent) {
-        $gitDirectory = (& git -C $repoRoot rev-parse --git-dir).Trim()
-        if (-not [IO.Path]::IsPathRooted($gitDirectory)) { $gitDirectory = Join-Path $repoRoot $gitDirectory }
-        $receiptDirectory = Join-Path $gitDirectory 'botnexus-validation'
-        New-Item -ItemType Directory -Path $receiptDirectory -Force | Out-Null
-        @{
-            version = 1
-            sourceSnapshot = $result.sourceSnapshot
-            fingerprint = $fingerprint.fingerprint
-            head = $fingerprint.head
-            baseRef = $fingerprint.baseRef
-            baseCommit = $fingerprint.baseCommit
-            tree = $fingerprint.tree
-            mode = $Mode
-            runId = $runId
-            executionName = $executionName
-            completedUtc = $result.completedUtc
-        } | ConvertTo-Json | Set-Content -Path (Join-Path $receiptDirectory 'azure-buildtest.json') -Encoding utf8NoBOM
+        $persistedContext = Get-Content -LiteralPath $contextPath -Raw | ConvertFrom-Json
+        Complete-AzureBuildTestRecovery -Context $persistedContext -Provider $status -Result $result -WorktreePath $repoRoot -ArtifactPath $OutputPath | Out-Null
     }
 
     if (-not $KeepRemoteArtifacts) {
@@ -320,25 +475,42 @@ try {
     }
 
     if ($status.properties.status -ne 'Succeeded' -or $null -eq $result -or $result.exitCode -ne 0 -or -not $requiredArtifactsPresent) {
-        $artifactFailure = if ($requiredArtifactsPresent) { '' } else { ' The strict Playwright artifact is missing; the deployed runner does not prove strict mode.' }
+        $artifactFailure = if ($requiredArtifactsPresent) {
+            ''
+        }
+        else {
+            ' The strict Playwright artifact is missing; the deployed runner does not prove strict mode.'
+        }
         $timeoutNote = if ($runnerTimeout) {
             (' The runner stopped the test phase at its own {0}s deadline, inside the {1} min replica budget, so artifacts were still uploaded. {2}' -f $runnerTimeout.deadlineSeconds, $budgetMinutes, $runnerTimeout.attribution)
         }
         elseif ($timedOut) {
             (' The run reached the {0} min replica timeout, so it was killed rather than completing - treat this as a hang, not a test failure.' -f $budgetMinutes)
         }
-        else { '' }
+        else {
+            ''
+        }
         # #3805: name the test outcome as well as the execution status. A build failure reports
         # `tests: null`, and "Execution status: Failed" alone gave the caller no way to tell a
         # compile break from a red suite without re-reading result.json themselves.
-        $testSummary = if ($null -eq $result) { ' No result contract was produced.' }
-        elseif (-not $result.PSObject.Properties['tests'] -or $null -eq $result.tests) { ' The test phase did not report (tests: null) - read build.log; this is normally a build failure, not a test failure.' }
-        else { '' }
+        $testSummary = if ($null -eq $result) {
+            ' No result contract was produced.'
+        }
+        elseif (-not $result.PSObject.Properties['tests'] -or $null -eq $result.tests) {
+            ' The test phase did not report (tests: null) - read build.log; this is normally a build failure, not a test failure.'
+        }
+        else {
+            ''
+        }
         throw "Azure validation failed. Execution status: $($status.properties.status).$artifactFailure$timeoutNote$testSummary Artifacts: $OutputPath"
     }
 
-    if ($Mode -eq 'diagnostic') { Write-Host "Azure diagnostic completed (not CORE validation). Private artifacts: $OutputPath" }
-    else { Write-Host "Azure validation passed. Artifacts: $OutputPath" -ForegroundColor Green }
+    if ($Mode -eq 'diagnostic') {
+        Write-Information -MessageData "Azure diagnostic completed (not CORE validation). Private artifacts: $OutputPath" -InformationAction Continue
+    }
+    else {
+        Write-Information -MessageData "Azure validation passed. Artifacts: $OutputPath" -InformationAction Continue
+    }
 }
 finally {
     # #3805: a failing gate is the case where the artifacts matter MOST. If anything threw between
@@ -349,7 +521,9 @@ finally {
     if (-not $artifactsPlaced) {
         try {
             $rescued = Save-AzureBuildTestFailureArtifacts -StagingRoot $downloadStaging -RunId $runId -Destination $OutputPath
-            if ($rescued) { Write-Warning "Run did not complete cleanly. Downloaded artifacts were retained at: $rescued" }
+            if ($rescued) {
+                Write-Warning "Run did not complete cleanly. Downloaded artifacts were retained at: $rescued"
+            }
         }
         catch {
             # Retention is a diagnostic. It must never replace the original failure with its own.
@@ -357,5 +531,7 @@ finally {
         }
     }
 
-    if (Test-Path $tempRoot) { Remove-Item $tempRoot -Recurse -Force }
+    if (Test-Path $tempRoot) {
+        Remove-Item $tempRoot -Recurse -Force
+    }
 }

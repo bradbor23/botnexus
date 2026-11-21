@@ -92,10 +92,13 @@ namespace BotNexus.Agent.Core.Configuration;
 /// Used only when RecoveryCoordinator is set. Admission failures and cancellation propagate to the run.
 /// </param>
 /// <param name="ToolProgressPolicy">
-/// Optional policy that classifies completed tool results as progress, non-progress, or unclassified.
+/// Optional policy that classifies completed tool results below the absolute budget as progress, non-progress, or unclassified.
 /// Null uses the core default policy. The loop retains ownership of run-local counting, warning
 /// injection, and terminal disposition; policy exceptions and cancellation propagate.
 /// </param>
+/// <param name="MaxToolResults">Executed-result budget per run, default 128. Values outside 1–1000000 are rejected. Checked after entire batches.</param>
+/// <param name="ProviderRequestContextProvider">Optional request-only dynamic context renderer; null uses the core live capacity section. Normal failures and cancellation propagate; finalizer failures preserve its parked outcome.</param>
+/// <param name="ToolCapacityObserver">Optional informational start/75%/90%/exhaustion sink, isolated per subscriber through the diagnostic dispatcher. No control authority.</param>
 /// <remarks>
 /// AgentOptions is passed to the Agent constructor and frozen for the lifetime of the agent.
 /// InitialState is used to seed AgentState - changes to InitialState after construction have no effect.
@@ -133,4 +136,7 @@ public record AgentOptions(
     CredentialInvalidationService? CredentialInvalidationService = null,
     Loop.IProviderRecoveryCoordinator? RecoveryCoordinator = null,
     TimeSpan? RecoveryAdmissionTimeout = null,
-    ToolProgressPolicy? ToolProgressPolicy = null);
+    ToolProgressPolicy? ToolProgressPolicy = null,
+    int MaxToolResults = 128,
+    ProviderRequestContextProvider? ProviderRequestContextProvider = null,
+    ToolCapacityObserver? ToolCapacityObserver = null);

@@ -64,7 +64,8 @@ public sealed class SkillTool(
             // become visible without a restart.
             pluginSkillsDirs: PluginSkillRootResolver.Resolve(pluginRootDir, _fileSystem),
             // #3355: scoped operator acknowledgements let a skill that legitimately shells out load.
-            securityAcknowledgements: config?.SecurityAcknowledgements);
+            securityAcknowledgements: config?.SecurityAcknowledgements,
+            allowSymlinkedSkills: config?.AllowSymlinkedSkills ?? false);
 
     public IReadOnlyList<SkillDefinition> GetDiscoveredSkills() => DiscoverSkills();
 
@@ -561,6 +562,16 @@ public sealed class SkillTool(
             return TextResult($"Error: {reason}");
 
         var candidatePath = Path.Combine(skill.SourcePath, relPath);
+
+        // Static/cached discovery does not authorize a subsequently linked installation.
+        try
+        {
+            SkillInstallationValidator.CollectFiles(skill.SourcePath, _fileSystem);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return TextResult($"Error: skill installation could not be validated: {ex.Message}");
+        }
 
         // Reuse the shared symlink/boundary validator: resolved path must stay inside the skill dir.
         if (!SkillPathValidator.TryValidate(candidatePath, SkillPath.CreateRoot(skill.SourcePath, _fileSystem), _fileSystem, out var validated, out var symlinkError))

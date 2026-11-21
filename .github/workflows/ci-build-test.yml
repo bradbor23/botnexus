@@ -91,6 +91,11 @@ jobs:
       # FullyQualifiedName!~BotNexus.Integration.E2E&FullyQualifiedName!~BotNexus.E2E
       - name: Test (core)
         shell: pwsh
+        # Every test host registers AddJsonFile(reloadOnChange: true), one inotify instance each,
+        # and the runner's per-user ceiling is 128. Polling file watchers need no instance, so a
+        # full run cannot exhaust it (see infra/buildtest/runner/entrypoint.ps1, #2825).
+        env:
+          DOTNET_USE_POLLING_FILE_WATCHER: 'true'
         run: ./scripts/repo/Invoke-BoundedCoreTests.ps1 -ResultsDirectory '${{ github.workspace }}/artifacts/test-results' -CompletionPath '${{ github.workspace }}/artifacts/test-results/completion-core.json' -TimeoutSeconds 2100 -HangTimeoutMinutes 10
 
       # Judge the run by the same fail-closed contract the remote container gate uses (#3602).
